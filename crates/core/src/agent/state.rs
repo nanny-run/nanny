@@ -23,6 +23,10 @@ pub enum StopReason {
 
     /// Execution was stopped explicitly by the caller.
     ManualStop,
+
+    /// The agent declared itself complete within the allowed limits.
+    /// This is a successful, normal termination — not a constraint violation.
+    AgentCompleted,
 }
 
 /// The state machine for a single agent execution.
