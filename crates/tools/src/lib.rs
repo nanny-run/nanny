@@ -2,10 +2,14 @@
 //
 // This crate owns:
 // - ToolRegistry: a collection of registered tools, implements ToolExecutor
-// - Built-in tools: http_get (Day 9), and others as they are added
+// - Built-in tools: http_get, and others as they are added
 //
 // The executor in nanny-core programs against ToolExecutor (the trait).
 // ToolRegistry is the concrete implementation of that trait.
+
+pub mod http_get;
+
+pub use http_get::HttpGet;
 
 use nanny_core::tool::{Tool, ToolArgs, ToolCallError, ToolExecutor, ToolOutput};
 use std::collections::HashMap;
@@ -55,6 +59,19 @@ impl Default for ToolRegistry {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Create a registry pre-loaded with all built-in Nanny tools.
+///
+/// Currently includes:
+/// - `http_get` — makes a single HTTP GET request
+///
+/// This is the standard starting point for most executions.
+/// Register additional tools on top of this if needed.
+pub fn default_registry() -> ToolRegistry {
+    let mut registry = ToolRegistry::new();
+    registry.register(Box::new(HttpGet::new()));
+    registry
 }
 
 impl ToolExecutor for ToolRegistry {

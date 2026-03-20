@@ -12,3 +12,4 @@ nanny-core = { path = "../core" }
 thiserror  = { workspace = true }
 serde      = { workspace = true }
 serde_json = { workspace = true }
+ureq       = "2"
