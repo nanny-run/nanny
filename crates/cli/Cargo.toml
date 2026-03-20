@@ -14,3 +14,4 @@ path = "src/main.rs"
 nanny-core   = { path = "../core" }
 nanny-config = { path = "../config" }
 anyhow       = { workspace = true }
+clap         = { workspace = true }
