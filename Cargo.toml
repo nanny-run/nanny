@@ -24,4 +24,4 @@ toml         = "0.8"
 thiserror    = "1"
 anyhow       = "1"
 chrono       = { version = "0.4", features = ["serde"] }
-uuid         = { version = "1", features = ["v4"] }
+uuid         = { version = "1", features = ["v4", "serde"] }
