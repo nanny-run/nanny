@@ -9,7 +9,7 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // ── CLI shape ─────────────────────────────────────────────────────────────────
 
@@ -90,7 +90,7 @@ fn cmd_init() -> Result<()> {
 
 // ── nanny run ─────────────────────────────────────────────────────────────────
 
-fn cmd_run(config_path: &PathBuf, command: Vec<String>) -> Result<()> {
+fn cmd_run(config_path: &Path, command: Vec<String>) -> Result<()> {
     // Load and validate config — fail immediately if anything is wrong.
     let config = nanny_config::load(config_path)
         .with_context(|| format!("failed to load config from '{}'", config_path.display()))?;
@@ -106,10 +106,10 @@ fn cmd_run(config_path: &PathBuf, command: Vec<String>) -> Result<()> {
     println!("nanny: mode — {:?}", config.mode);
     println!();
 
-    // Execution loop is wired here on Day 4.
+    // Execution loop is wired here on Day 11.
     // For now we confirm the command that would be run under enforcement.
     println!("nanny: would run — {}", command.join(" "));
-    println!("nanny: execution loop not yet implemented (Day 4)");
+    println!("nanny: execution loop not yet implemented (Day 11)");
 
     Ok(())
 }
