@@ -14,6 +14,7 @@ use crate::agent::{
 use crate::events::event::{ExecutionEvent, ExecutionId};
 use crate::ledger::Ledger;
 use crate::policy::{Policy, PolicyContext, PolicyDecision};
+use crate::tool::{ToolArgs, ToolCallError, ToolExecutor};
 use chrono::Utc;
 use std::time::Instant;
 use uuid::Uuid;
@@ -37,6 +38,21 @@ pub enum StepOutcome {
 
     /// The agent has finished its task. The loop will stop cleanly.
     Done,
+
+    /// The agent wants to call a tool before the next step.
+    ///
+    /// The executor will:
+    /// 1. Check policy for tool permission
+    /// 2. If denied → stop with ToolDenied
+    /// 3. If allowed → execute the tool, charge its cost, emit ToolCalled event
+    /// 4. Then continue to the next step
+    CallTool {
+        /// Must match a registered tool name and be on the config allowlist.
+        tool_name: String,
+
+        /// Arguments passed directly to the tool's `execute()` method.
+        args: ToolArgs,
+    },
 }
 
 // ── ExecutionResult ───────────────────────────────────────────────────────────
@@ -114,10 +130,11 @@ impl Executor {
     ///
     /// Always returns an `ExecutionResult` with an explicit stop reason.
     /// The loop cannot be paused, retried, or soft-stopped.
-    pub fn run<P, L, F>(&mut self, policy: &P, ledger: &mut L, mut step_fn: F) -> ExecutionResult
+    pub fn run<P, L, T, F>(&mut self, policy: &P, ledger: &mut L, tools: &T, mut step_fn: F) -> ExecutionResult
     where
         P: Policy,
         L: Ledger,
+        T: ToolExecutor,
         F: FnMut(u32) -> StepOutcome,
     {
         // Record the wall-clock start time.
@@ -203,8 +220,84 @@ impl Executor {
             // ── Decide what happens next ──────────────────────────────────────
             match outcome {
                 StepOutcome::Continue => {}
+
                 StepOutcome::Done => {
                     break StopReason::AgentCompleted;
+                }
+
+                StepOutcome::CallTool { tool_name, args } => {
+                    // ── Check policy for tool permission ──────────────────────
+                    //
+                    // Rebuild context with the requested tool name so the policy
+                    // can check it against the allowlist.
+                    let tool_context = PolicyContext {
+                        step_count: self.step_count,
+                        elapsed_ms: start.elapsed().as_millis() as u64,
+                        requested_tool: Some(tool_name.clone()),
+                        cost_units_spent: ledger.total_debited(),
+                    };
+
+                    match policy.evaluate(&tool_context) {
+                        PolicyDecision::Allow => {}
+                        PolicyDecision::Deny { reason } => {
+                            break reason;
+                        }
+                    }
+
+                    // ── Execute the tool ──────────────────────────────────────
+                    match tools.call(&tool_name, &args) {
+                        Ok(output) => {
+                            // Tool succeeded — charge its declared cost.
+                            let tool_cost = tools.declared_cost(&tool_name).unwrap_or(0);
+
+                            self.emit(ExecutionEvent::ToolCalled {
+                                execution_id: self.execution_id,
+                                tool_name: tool_name.clone(),
+                                cost: tool_cost,
+                                timestamp: Utc::now(),
+                            });
+
+                            // Charge the tool cost to the ledger.
+                            if tool_cost > 0 {
+                                match ledger.debit(tool_cost) {
+                                    Ok(receipt) => {
+                                        self.emit(ExecutionEvent::CostDebited {
+                                            execution_id: self.execution_id,
+                                            amount: receipt.amount,
+                                            balance_remaining: receipt.balance_after,
+                                            timestamp: Utc::now(),
+                                        });
+                                    }
+                                    Err(_) => {
+                                        break StopReason::BudgetExhausted;
+                                    }
+                                }
+                            }
+
+                            // Suppress the unused variable warning.
+                            // The output is available here for future use when
+                            // the step function receives tool results (Day 11+).
+                            let _ = output;
+                        }
+
+                        Err(ToolCallError::NotFound { tool_name: name }) => {
+                            // Tool name not in registry — treat as ToolDenied.
+                            // Config allowed it but nothing was registered to handle it.
+                            break StopReason::ToolDenied { tool_name: name };
+                        }
+
+                        Err(ToolCallError::Execution { tool_name: name, source }) => {
+                            // Tool was called but failed. No cost charged.
+                            self.emit(ExecutionEvent::ToolFailed {
+                                execution_id: self.execution_id,
+                                tool_name: name,
+                                error: source.to_string(),
+                                timestamp: Utc::now(),
+                            });
+                            // Tool failure does not stop execution —
+                            // the agent can decide what to do next.
+                        }
+                    }
                 }
             }
         };
@@ -246,6 +339,7 @@ mod tests {
     use super::*;
     use crate::agent::limits::Limits;
     use crate::ledger::{LedgerDecision, LedgerError, Receipt};
+    use crate::tool::{ToolCallError, ToolOutput};
 
     // ── Test policies ─────────────────────────────────────────────────────────
 
@@ -311,6 +405,20 @@ mod tests {
         fn total_debited(&self) -> u64 { self.total_debited }
     }
 
+    // ── Test tool executor ────────────────────────────────────────────────────
+    //
+    // nanny-core cannot depend on nanny-tools (circular dependency).
+    // These test doubles stand in for ToolRegistry in unit tests.
+
+    /// A tool executor that has no tools registered. Always returns NotFound.
+    struct NoTools;
+    impl ToolExecutor for NoTools {
+        fn call(&self, name: &str, _: &ToolArgs) -> Result<ToolOutput, ToolCallError> {
+            Err(ToolCallError::NotFound { tool_name: name.to_string() })
+        }
+        fn declared_cost(&self, _: &str) -> Option<u64> { None }
+    }
+
     fn test_limits() -> Limits {
         Limits { max_steps: 5, max_cost_units: 1000, timeout_ms: 5000 }
     }
@@ -319,7 +427,7 @@ mod tests {
     fn stops_at_max_steps() {
         let mut executor = Executor::new(test_limits());
         let mut ledger = UnlimitedLedger::new();
-        let result = executor.run(&MaxStepsPolicy(5), &mut ledger, |_| StepOutcome::Continue);
+        let result = executor.run(&MaxStepsPolicy(5), &mut ledger, &NoTools, |_| StepOutcome::Continue);
 
         assert_eq!(result.stop_reason, StopReason::MaxStepsReached);
         assert_eq!(result.total_steps, 5);
@@ -329,7 +437,7 @@ mod tests {
     fn stops_when_agent_is_done() {
         let mut executor = Executor::new(test_limits());
         let mut ledger = UnlimitedLedger::new();
-        let result = executor.run(&AlwaysAllow, &mut ledger, |step| {
+        let result = executor.run(&AlwaysAllow, &mut ledger, &NoTools, |step| {
             if step == 2 { StepOutcome::Done } else { StepOutcome::Continue }
         });
 
@@ -341,7 +449,7 @@ mod tests {
     fn stops_on_timeout() {
         let mut executor = Executor::new(test_limits());
         let mut ledger = UnlimitedLedger::new();
-        let result = executor.run(&TimeoutPolicy(1), &mut ledger, |_| {
+        let result = executor.run(&TimeoutPolicy(1), &mut ledger, &NoTools, |_| {
             std::thread::sleep(std::time::Duration::from_millis(10));
             StepOutcome::Continue
         });
@@ -356,7 +464,7 @@ mod tests {
 
         // Budget policy stops when 3 units have been spent.
         // Each step costs COST_PER_STEP (1), so stop after 3 steps.
-        let result = executor.run(&BudgetPolicy(3), &mut ledger, |_| StepOutcome::Continue);
+        let result = executor.run(&BudgetPolicy(3), &mut ledger, &NoTools, |_| StepOutcome::Continue);
 
         assert_eq!(result.stop_reason, StopReason::BudgetExhausted);
         assert_eq!(result.total_steps, 3);
@@ -367,7 +475,7 @@ mod tests {
     fn ledger_is_debited_per_step() {
         let mut executor = Executor::new(test_limits());
         let mut ledger = UnlimitedLedger::new();
-        let result = executor.run(&MaxStepsPolicy(3), &mut ledger, |_| StepOutcome::Continue);
+        let result = executor.run(&MaxStepsPolicy(3), &mut ledger, &NoTools, |_| StepOutcome::Continue);
 
         assert_eq!(result.total_cost, 3); // 3 steps × 1 unit each
     }
@@ -376,7 +484,7 @@ mod tests {
     fn event_log_contains_cost_debited_events() {
         let mut executor = Executor::new(test_limits());
         let mut ledger = UnlimitedLedger::new();
-        let result = executor.run(&MaxStepsPolicy(3), &mut ledger, |_| StepOutcome::Continue);
+        let result = executor.run(&MaxStepsPolicy(3), &mut ledger, &NoTools, |_| StepOutcome::Continue);
 
         let debit_count = result.events.iter()
             .filter(|e| matches!(e, ExecutionEvent::CostDebited { .. }))
@@ -389,7 +497,7 @@ mod tests {
     fn event_log_starts_with_execution_started() {
         let mut executor = Executor::new(test_limits());
         let mut ledger = UnlimitedLedger::new();
-        let result = executor.run(&AlwaysAllow, &mut ledger, |_| StepOutcome::Done);
+        let result = executor.run(&AlwaysAllow, &mut ledger, &NoTools, |_| StepOutcome::Done);
 
         assert!(matches!(
             result.events.first(),
@@ -401,7 +509,7 @@ mod tests {
     fn event_log_ends_with_execution_stopped() {
         let mut executor = Executor::new(test_limits());
         let mut ledger = UnlimitedLedger::new();
-        let result = executor.run(&MaxStepsPolicy(5), &mut ledger, |_| StepOutcome::Continue);
+        let result = executor.run(&MaxStepsPolicy(5), &mut ledger, &NoTools, |_| StepOutcome::Continue);
 
         assert!(matches!(
             result.events.last(),
@@ -422,7 +530,7 @@ mod tests {
         let mut ledger = UnlimitedLedger::new();
         let mut step_was_called = false;
 
-        let result = executor.run(&DenyAll, &mut ledger, |_| {
+        let result = executor.run(&DenyAll, &mut ledger, &NoTools, |_| {
             step_was_called = true;
             StepOutcome::Continue
         });
@@ -431,5 +539,44 @@ mod tests {
         assert_eq!(result.stop_reason, StopReason::ManualStop);
         assert_eq!(result.total_steps, 0);
         assert_eq!(result.total_cost, 0);
+    }
+
+    #[test]
+    fn tool_denial_stops_execution() {
+        // A policy that denies any tool call.
+        struct DenyTools;
+        impl Policy for DenyTools {
+            fn evaluate(&self, ctx: &PolicyContext) -> PolicyDecision {
+                if ctx.requested_tool.is_some() {
+                    PolicyDecision::Deny {
+                        reason: StopReason::ToolDenied {
+                            tool_name: ctx.requested_tool.clone().unwrap(),
+                        },
+                    }
+                } else {
+                    PolicyDecision::Allow
+                }
+            }
+        }
+
+        let mut executor = Executor::new(test_limits());
+        let mut ledger = UnlimitedLedger::new();
+
+        let result = executor.run(&DenyTools, &mut ledger, &NoTools, |step| {
+            if step == 0 {
+                // On the first step, request a tool call.
+                StepOutcome::CallTool {
+                    tool_name: "http_get".to_string(),
+                    args: ToolArgs::new(),
+                }
+            } else {
+                StepOutcome::Continue
+            }
+        });
+
+        assert!(matches!(
+            result.stop_reason,
+            StopReason::ToolDenied { ref tool_name } if tool_name == "http_get"
+        ));
     }
 }

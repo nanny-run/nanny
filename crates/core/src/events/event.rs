@@ -65,6 +65,41 @@ pub enum ExecutionEvent {
         timestamp: DateTime<Utc>,
     },
 
+    /// Emitted when a tool is called and completes successfully.
+    ///
+    /// Cost is charged after this event is emitted — the charge only
+    /// happens when the tool actually did work.
+    ToolCalled {
+        execution_id: ExecutionId,
+
+        /// The name of the tool that was called.
+        tool_name: String,
+
+        /// Cost units charged for this tool call.
+        cost: u64,
+
+        #[serde(with = "chrono::serde::ts_milliseconds")]
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Emitted when a permitted tool fails during execution.
+    ///
+    /// Distinct from a policy denial — the tool was allowed but encountered
+    /// an error (network failure, bad args, timeout).
+    /// No cost is charged on tool failure.
+    ToolFailed {
+        execution_id: ExecutionId,
+
+        /// The name of the tool that failed.
+        tool_name: String,
+
+        /// Human-readable description of what went wrong.
+        error: String,
+
+        #[serde(with = "chrono::serde::ts_milliseconds")]
+        timestamp: DateTime<Utc>,
+    },
+
     /// Emitted when an internal, unrecoverable error terminates execution.
     /// Distinct from ExecutionStopped — this is abnormal termination, not a
     /// policy decision.
