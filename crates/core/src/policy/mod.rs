@@ -1,0 +1,58 @@
+// The policy contract.
+//
+// This module defines the shapes the policy engine works with.
+// Concrete implementations live in nanny-policy.
+//
+// The executor depends on this module — not on nanny-policy directly.
+// That separation prevents a circular dependency:
+//   nanny-core defines the contract
+//   nanny-policy implements it
+//   nanny-core's executor uses the contract
+
+use crate::agent::state::StopReason;
+
+// ── PolicyContext ─────────────────────────────────────────────────────────────
+
+/// Everything the policy engine knows about the current moment in execution.
+///
+/// The executor builds this before every step and hands it to the policy.
+/// The policy reads it and makes a decision. That is the entire interface.
+pub struct PolicyContext {
+    /// How many steps have completed so far.
+    pub step_count: u32,
+
+    /// How many milliseconds have elapsed since execution started.
+    pub elapsed_ms: u64,
+
+    /// The name of the tool being requested, if any.
+    /// `None` means no tool call is being made this step.
+    pub requested_tool: Option<String>,
+
+    /// Total cost units spent across all steps so far.
+    pub cost_units_spent: u64,
+}
+
+// ── PolicyDecision ────────────────────────────────────────────────────────────
+
+/// What the policy engine decides.
+///
+/// Two outcomes only. No "maybe". No "retry". No "warn".
+/// Either execution is allowed to continue, or it is stopped with a reason.
+pub enum PolicyDecision {
+    /// The step may proceed.
+    Allow,
+
+    /// The step must not proceed. Execution stops immediately.
+    Deny { reason: StopReason },
+}
+
+// ── Policy trait ──────────────────────────────────────────────────────────────
+
+/// The policy contract.
+///
+/// Any type that implements this trait can make execution decisions.
+/// Implementations must be pure — same context always produces same decision.
+/// No side effects. No network calls. No randomness.
+pub trait Policy {
+    fn evaluate(&self, context: &PolicyContext) -> PolicyDecision;
+}
