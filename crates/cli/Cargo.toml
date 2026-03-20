@@ -13,5 +13,8 @@ path = "src/main.rs"
 [dependencies]
 nanny-core   = { path = "../core" }
 nanny-config = { path = "../config" }
+nanny-policy = { path = "../policy" }
+nanny-ledger = { path = "../ledger" }
+nanny-tools  = { path = "../tools" }
 anyhow       = { workspace = true }
 clap         = { workspace = true }

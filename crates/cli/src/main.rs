@@ -1,4 +1,5 @@
 // Nanny CLI — the only surface humans touch.
+mod runtime;
 //
 // Two commands exist:
 //   nanny init          — write a starter nanny.toml in the current directory
@@ -9,6 +10,7 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use nanny_core::ledger::Ledger;
 use std::path::{Path, PathBuf};
 
 // ── CLI shape ─────────────────────────────────────────────────────────────────
@@ -106,10 +108,19 @@ fn cmd_run(config_path: &Path, command: Vec<String>) -> Result<()> {
     println!("nanny: mode — {:?}", config.mode);
     println!();
 
-    // Execution loop is wired here on Day 11.
-    // For now we confirm the command that would be run under enforcement.
+    // Build the wired runtime from config.
+    // Same config → same policy, same ledger, same registry. Always.
+    let components = runtime::build_from_config(&config);
+
+    let registered = components.registry.registered_names();
+    println!("nanny: runtime ready");
+    println!("       ledger:   {} units", components.ledger.balance());
+    println!("       registry: {} tool(s) — {:?}", registered.len(), registered);
+    println!();
+
+    // Process execution wired on Day 11.
     println!("nanny: would run — {}", command.join(" "));
-    println!("nanny: execution loop not yet implemented (Day 11)");
+    println!("nanny: process execution not yet implemented (Day 11)");
 
     Ok(())
 }
