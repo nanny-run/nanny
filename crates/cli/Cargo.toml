@@ -18,3 +18,5 @@ nanny-ledger = { path = "../ledger" }
 nanny-tools  = { path = "../tools" }
 anyhow       = { workspace = true }
 clap         = { workspace = true }
+serde        = { workspace = true }
+serde_json   = { workspace = true }

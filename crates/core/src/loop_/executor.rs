@@ -16,6 +16,7 @@ use crate::ledger::Ledger;
 use crate::policy::{Policy, PolicyContext, PolicyDecision};
 use crate::tool::{ToolArgs, ToolCallError, ToolExecutor};
 use chrono::Utc;
+use std::collections::HashMap;
 use std::time::Instant;
 use uuid::Uuid;
 
@@ -103,6 +104,14 @@ pub struct Executor {
 
     /// The append-only event log for this execution.
     events: Vec<ExecutionEvent>,
+
+    /// Running tally of how many times each tool has been called.
+    /// Populated into PolicyContext so RuleEvaluator can enforce max_calls.
+    tool_call_counts: HashMap<String, u32>,
+
+    /// Ordered history of tool calls.
+    /// Populated into PolicyContext for custom rule evaluation in v0.2.0.
+    tool_call_history: Vec<String>,
 }
 
 impl Executor {
@@ -117,6 +126,8 @@ impl Executor {
             state: ExecutionState::Initialized,
             step_count: 0,
             events: Vec::new(),
+            tool_call_counts: HashMap::new(),
+            tool_call_history: Vec::new(),
         }
     }
 
@@ -164,6 +175,8 @@ impl Executor {
                 elapsed_ms,
                 requested_tool: None,
                 cost_units_spent: ledger.total_debited(),
+                tool_call_counts: self.tool_call_counts.clone(),
+                tool_call_history: self.tool_call_history.clone(),
                 ..PolicyContext::default()
             };
 
@@ -236,6 +249,8 @@ impl Executor {
                         elapsed_ms: start.elapsed().as_millis() as u64,
                         requested_tool: Some(tool_name.clone()),
                         cost_units_spent: ledger.total_debited(),
+                        tool_call_counts: self.tool_call_counts.clone(),
+                        tool_call_history: self.tool_call_history.clone(),
                         ..PolicyContext::default()
                     };
 
@@ -249,6 +264,11 @@ impl Executor {
                     // ── Execute the tool ──────────────────────────────────────
                     match tools.call(&tool_name, &args) {
                         Ok(output) => {
+                            // Record the call before charging — counts are observable
+                            // in PolicyContext on the next tool check.
+                            *self.tool_call_counts.entry(tool_name.clone()).or_insert(0) += 1;
+                            self.tool_call_history.push(tool_name.clone());
+
                             // Tool succeeded — charge its declared cost.
                             let tool_cost = tools.declared_cost(&tool_name).unwrap_or(0);
 

@@ -498,6 +498,8 @@ dependencies = [
  "nanny-ledger",
  "nanny-policy",
  "nanny-tools",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

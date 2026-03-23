@@ -1,4 +1,5 @@
 // Nanny CLI — the only surface humans touch.
+mod events;
 mod runtime;
 //
 // Two commands exist:
@@ -12,6 +13,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use nanny_core::ledger::Ledger;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 // ── CLI shape ─────────────────────────────────────────────────────────────────
 
@@ -90,14 +92,11 @@ fn cmd_init() -> Result<()> {
 
     println!("Created nanny.toml — edit it to match your agent's requirements.");
     println!();
-    println!("Rust integration:");
-    println!("    let config = nanny_config::load(Path::new(\"nanny.toml\"))?;");
-    println!("    let components = runtime::build_from_config(&config);");
-    println!("    // wire components into your Executor");
-    println!();
-    println!("Then run:");
+    println!("Then run your agent under nanny enforcement:");
     println!("    nanny run system.py");
     println!("    nanny run --limits=researcher system.py");
+    println!();
+    println!("Works with any language — Python, Rust, Go, Node, or any compiled binary.");
 
     Ok(())
 }
@@ -134,9 +133,66 @@ fn cmd_run(config_path: &Path, limits_name: Option<&str>, command: Vec<String>) 
     println!("nanny: ledger — {} units", components.ledger.balance());
     println!();
 
-    // Process execution implemented on Day 12.
-    println!("nanny: would run — {}", command.join(" "));
-    println!("nanny: process execution not yet implemented (Day 12)");
+    let timeout = Duration::from_millis(components.limits.timeout_ms);
+    let started_at = Instant::now();
+
+    // ── Open event log ────────────────────────────────────────────────────
+    let mut log = events::EventWriter::from_config(&config.observability)?;
+
+    log.write(&events::Event::execution_started(
+        &components.limits,
+        active_set,
+        &command.join(" "),
+    ))?;
+
+    // ── Spawn child process ───────────────────────────────────────────────
+    let (program, args) = command.split_first()
+        .expect("command is non-empty — enforced by clap");
+
+    let mut child = match std::process::Command::new(program).args(args).spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            // ExecutionStarted was emitted — always pair it with ExecutionStopped.
+            let elapsed_ms = started_at.elapsed().as_millis() as u64;
+            let _ = log.write(&events::Event::execution_stopped("SpawnFailed", 0, 0, elapsed_ms));
+            return Err(e).with_context(|| format!("failed to spawn '{}'", program));
+        }
+    };
+
+    // ── Poll until exit or timeout ────────────────────────────────────────
+    //
+    // We poll every 50 ms. This is coarse enough to avoid busy-spinning
+    // and fine enough that a 30-second timeout fires within half a tick.
+    let poll_interval = Duration::from_millis(50);
+    let stop_reason = loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break "AgentCompleted",
+            Ok(None) => {
+                if started_at.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait(); // reap — avoid zombie
+                    break "TimeoutExpired";
+                }
+                std::thread::sleep(poll_interval);
+            }
+            Err(e) => {
+                // Polling failed — emit stopped before surfacing the error.
+                let elapsed_ms = started_at.elapsed().as_millis() as u64;
+                let _ = log.write(&events::Event::execution_stopped("InternalError", 0, 0, elapsed_ms));
+                return Err(e).context("failed to poll child process");
+            }
+        }
+    };
+
+    // ── ExecutionStopped event ────────────────────────────────────────────
+    let elapsed_ms = started_at.elapsed().as_millis() as u64;
+    log.write(&events::Event::execution_stopped(stop_reason, 0, 0, elapsed_ms))?;
+
+    // ── Exit code ─────────────────────────────────────────────────────────
+    if stop_reason != "AgentCompleted" {
+        eprintln!("nanny: stopped — {stop_reason}");
+        std::process::exit(1);
+    }
 
     Ok(())
 }
