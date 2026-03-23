@@ -10,6 +10,7 @@
 //   nanny-core's executor uses the contract
 
 use crate::agent::state::StopReason;
+use std::collections::HashMap;
 
 // ── PolicyContext ─────────────────────────────────────────────────────────────
 
@@ -17,6 +18,7 @@ use crate::agent::state::StopReason;
 ///
 /// The executor builds this before every step and hands it to the policy.
 /// The policy reads it and makes a decision. That is the entire interface.
+#[derive(Default)]
 pub struct PolicyContext {
     /// How many steps have completed so far.
     pub step_count: u32,
@@ -30,6 +32,16 @@ pub struct PolicyContext {
 
     /// Total cost units spent across all steps so far.
     pub cost_units_spent: u64,
+
+    /// How many times each tool has been called in this execution.
+    /// Key: tool name. Value: call count. Updated by the executor after each tool call.
+    /// Custom rules use this to detect spirals (e.g., same tool called 8 times in a row).
+    pub tool_call_counts: HashMap<String, u32>,
+
+    /// Ordered history of tool calls in this execution.
+    /// Each entry is a tool name. Appended by the executor after each tool call.
+    /// Custom rules use this to detect sequences and patterns.
+    pub tool_call_history: Vec<String>,
 }
 
 // ── PolicyDecision ────────────────────────────────────────────────────────────

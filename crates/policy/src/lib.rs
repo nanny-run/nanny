@@ -100,12 +100,7 @@ mod tests {
     }
 
     fn base_context() -> PolicyContext {
-        PolicyContext {
-            step_count: 0,
-            elapsed_ms: 0,
-            requested_tool: None,
-            cost_units_spent: 0,
-        }
+        PolicyContext::default()
     }
 
     fn policy() -> LimitsPolicy {

@@ -21,6 +21,10 @@ pub enum StopReason {
     /// Carries the name of the denied tool for audit purposes.
     ToolDenied { tool_name: String },
 
+    /// A custom rule returned a denial verdict.
+    /// Carries the rule name so the audit log identifies exactly which rule fired.
+    RuleDenied { rule_name: String },
+
     /// Execution was stopped explicitly by the caller.
     ManualStop,
 

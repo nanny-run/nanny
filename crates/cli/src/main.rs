@@ -2,8 +2,8 @@
 mod runtime;
 //
 // Two commands exist:
-//   nanny init          — write a starter nanny.toml in the current directory
-//   nanny run -- <cmd>  — run a command under nanny enforcement
+//   nanny init                        — write a starter nanny.toml in the current directory
+//   nanny run [--limits=<name>] <cmd> — run a command under nanny enforcement
 //
 // No logic lives here. The CLI loads config and hands off to the runtime.
 // All enforcement happens in nanny-core, not here.
@@ -35,15 +35,22 @@ struct Cli {
 enum Command {
     /// Initialize a nanny.toml in the current directory.
     ///
-    /// Creates a starter config with safe default limits.
-    /// Does not modify any existing files or source code.
+    /// Creates a starter config with safe default limits and prints
+    /// a code snippet showing how to integrate with your agent.
     Init,
 
     /// Run a command under nanny enforcement.
     ///
-    /// Example: nanny run -- python agent.py
-    /// Example: nanny run -- node index.js
+    /// Example: nanny run system.py
+    /// Example: nanny run --limits=researcher system.py
+    /// Example: nanny run -- python agent.py --verbose
     Run {
+        /// Named limits set to activate from nanny.toml [limits.<name>].
+        /// Inherits from [limits] defaults and overrides only declared fields.
+        /// Example: --limits=researcher activates [limits.researcher]
+        #[arg(long)]
+        limits: Option<String>,
+
         /// The command and arguments to execute under enforcement.
         #[arg(trailing_var_arg = true, required = true)]
         command: Vec<String>,
@@ -57,7 +64,7 @@ fn main() {
 
     let result = match cli.command {
         Command::Init => cmd_init(),
-        Command::Run { command } => cmd_run(&cli.config, command),
+        Command::Run { limits, command } => cmd_run(&cli.config, limits.as_deref(), command),
     };
 
     if let Err(e) = result {
@@ -81,46 +88,55 @@ fn cmd_init() -> Result<()> {
     std::fs::write(&dest, nanny_config::default_toml())
         .context("failed to write nanny.toml")?;
 
-    println!("Created nanny.toml with safe defaults.");
+    println!("Created nanny.toml — edit it to match your agent's requirements.");
     println!();
-    println!("Next steps:");
-    println!("  1. Edit nanny.toml to match your agent's requirements");
-    println!("  2. Run your agent:  nanny run -- <your command>");
+    println!("Rust integration:");
+    println!("    let config = nanny_config::load(Path::new(\"nanny.toml\"))?;");
+    println!("    let components = runtime::build_from_config(&config);");
+    println!("    // wire components into your Executor");
+    println!();
+    println!("Then run:");
+    println!("    nanny run system.py");
+    println!("    nanny run --limits=researcher system.py");
 
     Ok(())
 }
 
 // ── nanny run ─────────────────────────────────────────────────────────────────
 
-fn cmd_run(config_path: &Path, command: Vec<String>) -> Result<()> {
+fn cmd_run(config_path: &Path, limits_name: Option<&str>, command: Vec<String>) -> Result<()> {
     // Load and validate config — fail immediately if anything is wrong.
     let config = nanny_config::load(config_path)
         .with_context(|| format!("failed to load config from '{}'", config_path.display()))?;
 
-    // Confirm what limits are in effect before running anything.
-    println!("nanny: config loaded from '{}'", config_path.display());
-    println!("nanny: limits — max_steps={} max_cost_units={} timeout_ms={}",
-        config.limits.max_steps,
-        config.limits.max_cost_units,
-        config.limits.timeout_ms,
-    );
-    println!("nanny: tools allowed — {:?}", config.tools.allowed);
-    println!("nanny: mode — {:?}", config.mode);
-    println!();
-
     // Build the wired runtime from config.
-    // Same config → same policy, same ledger, same registry. Always.
-    let components = runtime::build_from_config(&config);
+    // If a named limits set was requested, resolve it with inheritance.
+    let components = if let Some(name) = limits_name {
+        runtime::build_from_config_named(&config, name)
+            .with_context(|| format!("failed to activate limits set '{name}'"))?
+    } else {
+        runtime::build_from_config(&config)
+    };
+
+    // Print what limits are active before running anything.
+    let active_set = limits_name.unwrap_or("[limits]");
+    println!("nanny: config loaded from '{}'", config_path.display());
+    println!("nanny: limits ({active_set}) — steps={} cost={} timeout={}ms",
+        components.limits.max_steps,
+        components.limits.max_cost_units,
+        components.limits.timeout_ms,
+    );
+    println!("nanny: mode — {:?}", config.runtime.mode);
+    println!("nanny: tools allowed — {:?}", config.tools.allowed);
 
     let registered = components.registry.registered_names();
-    println!("nanny: runtime ready");
-    println!("       ledger:   {} units", components.ledger.balance());
-    println!("       registry: {} tool(s) — {:?}", registered.len(), registered);
+    println!("nanny: registry — {} tool(s) registered: {:?}", registered.len(), registered);
+    println!("nanny: ledger — {} units", components.ledger.balance());
     println!();
 
-    // Process execution wired on Day 11.
+    // Process execution implemented on Day 12.
     println!("nanny: would run — {}", command.join(" "));
-    println!("nanny: process execution not yet implemented (Day 11)");
+    println!("nanny: process execution not yet implemented (Day 12)");
 
     Ok(())
 }

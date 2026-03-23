@@ -162,8 +162,9 @@ impl Executor {
             let context = PolicyContext {
                 step_count: self.step_count,
                 elapsed_ms,
-                requested_tool: None, // tool system wired on Day 8
+                requested_tool: None,
                 cost_units_spent: ledger.total_debited(),
+                ..PolicyContext::default()
             };
 
             // ── Ask the policy ────────────────────────────────────────────────
@@ -235,6 +236,7 @@ impl Executor {
                         elapsed_ms: start.elapsed().as_millis() as u64,
                         requested_tool: Some(tool_name.clone()),
                         cost_units_spent: ledger.total_debited(),
+                        ..PolicyContext::default()
                     };
 
                     match policy.evaluate(&tool_context) {
