@@ -13,7 +13,7 @@ members = [
 version     = "0.1.0"
 edition     = "2021"
 license     = "Apache-2.0"
-repository  = "https://github.com/nanny/nanny"
+repository  = "https://github.com/nanny-run/nanny"
 authors     = ["Evans Ibok <evansibok@gmail.com>"]
 
 # Shared dependency versions — pin once, inherit everywhere.

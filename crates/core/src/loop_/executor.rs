@@ -563,6 +563,63 @@ mod tests {
         assert_eq!(result.total_cost, 0);
     }
 
+    /// A tool executor that always succeeds and reports a fixed declared cost.
+    struct CostlyTool {
+        cost: u64,
+    }
+    impl ToolExecutor for CostlyTool {
+        fn call(&self, _name: &str, _args: &ToolArgs) -> Result<ToolOutput, ToolCallError> {
+            Ok(ToolOutput { content: "ok".to_string() })
+        }
+        fn declared_cost(&self, _name: &str) -> Option<u64> {
+            Some(self.cost)
+        }
+    }
+
+    /// End-to-end scenario: agent calls http_get on every step until budget exhausted.
+    ///
+    /// Budget policy: deny when cost_units_spent >= 8.
+    /// COST_PER_STEP = 1. http_get costs 3 units.
+    ///
+    /// Step 0: pre-check cost=0 → allow. Step debit 1 → cost=1. Tool check cost=1 → allow. Tool debit 3 → cost=4.
+    /// Step 1: pre-check cost=4 → allow. Step debit 1 → cost=5. Tool check cost=5 → allow. Tool debit 3 → cost=8.
+    /// Step 2: pre-check cost=8 >= 8 → deny BudgetExhausted.
+    ///
+    /// Expected: total_steps=2, stop=BudgetExhausted, two ToolCalled events.
+    #[test]
+    fn agent_calls_http_get_until_budget_exhausted() {
+        let mut executor = Executor::new(test_limits());
+        let mut ledger = UnlimitedLedger::new();
+        let tools = CostlyTool { cost: 3 };
+
+        let result = executor.run(&BudgetPolicy(8), &mut ledger, &tools, |_| {
+            StepOutcome::CallTool {
+                tool_name: "http_get".to_string(),
+                args: ToolArgs::new(),
+            }
+        });
+
+        assert_eq!(result.stop_reason, StopReason::BudgetExhausted);
+        assert_eq!(result.total_steps, 2);
+        assert_eq!(result.total_cost, 8);
+
+        // Event log bookends.
+        assert!(matches!(result.events.first(), Some(ExecutionEvent::ExecutionStarted { .. })));
+        assert!(matches!(result.events.last(), Some(ExecutionEvent::ExecutionStopped { .. })));
+
+        // Two ToolCalled events — one per completed step.
+        let tool_calls = result.events.iter()
+            .filter(|e| matches!(e, ExecutionEvent::ToolCalled { tool_name, .. } if tool_name == "http_get"))
+            .count();
+        assert_eq!(tool_calls, 2, "expected exactly two http_get calls before budget exhaustion");
+
+        // Final ExecutionStopped must carry the correct reason.
+        if let Some(ExecutionEvent::ExecutionStopped { reason, total_steps, .. }) = result.events.last() {
+            assert_eq!(*reason, StopReason::BudgetExhausted);
+            assert_eq!(*total_steps, 2);
+        }
+    }
+
     #[test]
     fn tool_denial_stops_execution() {
         // A policy that denies any tool call.
