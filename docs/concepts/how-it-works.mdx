@@ -1,0 +1,68 @@
+---
+title: How It Works
+description: What nanny actually does when you run a command under it.
+---
+
+## The execution boundary
+
+When you run `nanny run <cmd>`, nanny becomes the parent process of your agent.
+It owns the process lifecycle — it decides when the process lives and when it dies.
+
+```
+┌─────────────────────────────────────────┐
+│  nanny run python agent.py              │
+│                                         │
+│  ┌───────────────────────────────────┐  │
+│  │  python agent.py                  │  │
+│  │  (child process)                  │  │
+│  └───────────────────────────────────┘  │
+│                                         │
+│  Watching: steps · cost · timeout       │
+└─────────────────────────────────────────┘
+```
+
+The moment any limit is crossed, nanny sends `SIGKILL` to the child, reaps the process,
+emits an `ExecutionStopped` event with the reason, and exits with a non-zero status code.
+
+## What nanny enforces at v0.1.0
+
+At v0.1.0, the enforcement boundary is at the **process level**:
+
+| Limit | How it's enforced |
+|-------|------------------|
+| `timeout` | Polling loop — process killed at `timeout_ms` |
+| `steps` | Not yet wired (bridge required — v0.2.0) |
+| `cost` | Not yet wired (bridge required — v0.2.0) |
+
+Timeout enforcement is hard and immediate. It works for any process in any language
+with no code changes required.
+
+## The bridge (v0.2.0)
+
+Step and cost enforcement require cooperation from inside the process — the agent needs to
+report each tool call back to nanny so it can count and charge against the budget.
+
+In v0.2.0, nanny starts a local HTTP server (the **bridge**) alongside the child process and
+injects two environment variables:
+
+```
+NANNY_BRIDGE_PORT=<port>
+NANNY_SESSION_TOKEN=<token>
+```
+
+The Rust macros and Python SDK read these variables automatically. If they are not set,
+all macros and decorators are **no-ops** — your agent runs exactly as it would without nanny.
+
+## Passthrough mode
+
+Without `nanny run`, nothing changes in your code:
+
+```python
+@tool(cost=10)
+def search(query: str) -> str:
+    ...
+```
+
+If `NANNY_BRIDGE_PORT` is not set, `@tool` does nothing. The function runs normally.
+This means you can ship code with nanny instrumentation and it will behave identically
+in development, CI, and production — until you explicitly wrap it with `nanny run`.
