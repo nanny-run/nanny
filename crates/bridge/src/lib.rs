@@ -414,10 +414,28 @@ fn handle_tool_call(
             let result = registry.call(&call.tool, &call.args);
 
             match result {
-                Err(ToolCallError::NotFound { tool_name }) => {
-                    BridgeResp::json(404, format!(
-                        r#"{{"error":"tool not found","tool_name":"{}"}}"#, tool_name
-                    ))
+                Err(ToolCallError::NotFound { .. }) => {
+                    // User-defined tool — the function body runs in the child process.
+                    // The bridge just charges the declared cost and records the call.
+                    let cost = call.cost.unwrap_or(0);
+                    {
+                        let mut guard = shared.lock().unwrap();
+                        let _ = guard.ledger.debit(cost);
+                        guard.cost_units_spent += cost;
+                        *guard.tool_call_counts.entry(call.tool.clone()).or_insert(0) += 1;
+                        guard.tool_call_history.push(call.tool.clone());
+                        append_event(&mut guard, serde_json::json!({
+                            "event": "ToolAllowed",
+                            "ts": now_ms(),
+                            "tool": &call.tool
+                        }));
+                        if guard.cost_units_spent >= guard.current_limits.max_cost_units {
+                            mark_stopped(&mut guard, "BudgetExhausted");
+                        }
+                    }
+                    BridgeResp::json(200, serde_json::to_string(
+                        &ToolCallResponse::Allowed { result: String::new() }
+                    ).unwrap())
                 }
                 Err(ToolCallError::Execution { tool_name, source }) => {
                     BridgeResp::json(500, format!(
@@ -687,6 +705,10 @@ struct ToolCallRequest {
     tool: String,
     #[serde(default)]
     args: ToolArgs,
+    /// Cost declared by the macro at the call site.
+    /// Used when the tool is not registered in the bridge registry (user-defined tools).
+    #[serde(default)]
+    cost: Option<u64>,
 }
 
 #[derive(serde::Deserialize, Default)]

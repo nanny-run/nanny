@@ -7,6 +7,7 @@ members = [
     "crates/tools",
     "crates/config",
     "crates/bridge",
+    "crates/macros",
     "crates/cli",
 ]
 
