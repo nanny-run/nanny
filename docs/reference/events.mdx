@@ -1,0 +1,156 @@
+---
+title: Event Schema
+description: Every event type emitted by Nanny, with full field definitions.
+---
+
+## Format
+
+All events are JSON objects emitted one per line (NDJSON). Every event has:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `event` | string | Event type identifier (see below) |
+| `ts` | integer | Unix timestamp in milliseconds |
+
+---
+
+## ExecutionStarted
+
+Emitted immediately before the child process is spawned.
+Always the first event in any log.
+
+```json
+{
+  "event": "ExecutionStarted",
+  "ts": 1711234567000,
+  "limits_set": "[limits]",
+  "command": "python agent.py",
+  "limits": {
+    "steps": 100,
+    "cost": 1000,
+    "timeout": 30000
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `limits_set` | string | The active limit set name. `"[limits]"` = base defaults. |
+| `command` | string | The full command string as passed to `nanny run`. |
+| `limits.steps` | integer | Active step limit. |
+| `limits.cost` | integer | Active cost limit. |
+| `limits.timeout` | integer | Active timeout in milliseconds. |
+
+---
+
+## ExecutionStopped
+
+Emitted on every exit path — clean completion, limit breach, spawn failure, or internal error.
+Always the last event in any log.
+
+```json
+{
+  "event": "ExecutionStopped",
+  "ts": 1711234572000,
+  "reason": "AgentCompleted",
+  "steps": 42,
+  "cost_spent": 380,
+  "elapsed_ms": 4823
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `reason` | string | Why execution stopped. See reasons below. |
+| `steps` | integer | Total steps completed. |
+| `cost_spent` | integer | Total cost units spent. |
+| `elapsed_ms` | integer | Total wall-clock time in milliseconds. |
+
+### Stop reasons
+
+| Reason | Description |
+|--------|-------------|
+| `AgentCompleted` | Process exited cleanly on its own. |
+| `TimeoutExpired` | Wall-clock timeout was reached. Process was killed. |
+| `MaxStepsReached` | Step limit was reached. Process was killed. |
+| `BudgetExhausted` | Cost budget was exhausted. Process was killed. |
+| `ToolDenied` | A tool call was blocked by the allowlist or a rule. |
+| `RuleDenied` | A custom rule returned a denial. |
+| `ManualStop` | Execution was stopped programmatically. |
+| `SpawnFailed` | The child process could not be started. |
+
+---
+
+## StepCompleted
+
+Emitted after each agent step when using the Rust SDK or Python SDK.
+
+```json
+{
+  "event": "StepCompleted",
+  "ts": 1711234568000,
+  "step": 1
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `step` | integer | The step number, starting from 1. |
+
+---
+
+## ToolAllowed
+
+Emitted when Nanny permits a tool call to proceed.
+
+```json
+{
+  "event": "ToolAllowed",
+  "ts": 1711234568101,
+  "tool": "http_get"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `tool` | string | The name of the tool that was allowed. |
+
+---
+
+## ToolDenied
+
+Emitted when Nanny blocks a tool call — either the tool is not in the allowlist, or a rule returned a denial.
+
+```json
+{
+  "event": "ToolDenied",
+  "ts": 1711234568101,
+  "tool": "write_file",
+  "reason": "ToolDenied"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `tool` | string | The name of the tool that was blocked. |
+| `reason` | string | The stop reason that triggered the denial. |
+
+---
+
+## ToolFailed
+
+Emitted when a permitted tool fails at runtime. Distinct from `ToolDenied` — the tool was allowed but encountered an error (network failure, bad arguments, timeout). No cost is charged on failure.
+
+```json
+{
+  "event": "ToolFailed",
+  "ts": 1711234568200,
+  "tool": "http_get",
+  "error": "connection refused"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `tool` | string | The name of the tool that failed. |
+| `error` | string | A description of the error. |

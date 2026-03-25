@@ -17,6 +17,7 @@ Thank you for taking the time to contribute. Nanny is a small, focused primitive
     - [Stop reasons](#stop-reasons)
     - [Tests](#tests)
     - [Bug fixes](#bug-fixes)
+    - [Documentation](#documentation)
   - [What belongs elsewhere](#what-belongs-elsewhere)
   - [Codebase map](#codebase-map)
   - [Setting up locally](#setting-up-locally)
@@ -70,6 +71,25 @@ More coverage of edge cases in the policy engine, per-tool limit enforcement, an
 ### Bug fixes
 
 Check the [issue tracker](https://github.com/nanny-run/nanny/issues) for bugs labelled `good first issue` or `help wanted`.
+
+### Documentation
+
+The documentation lives in `docs/` in this repository. Doc contributions are welcome and do not require any Rust knowledge.
+
+Good candidates:
+
+- Typo or grammar fixes
+- Clarity improvements to confusing explanations
+- Missing examples for existing features
+- Broken links or stale references
+
+Not in scope for doc PRs:
+
+- Documenting features that do not exist in the current release
+- Speculative roadmap content
+- Adding new concepts not grounded in the codebase
+
+To preview doc changes locally, run `mint dev` from the `docs/` directory. If your code PR changes user-facing behaviour, config schema, or events, update the relevant `.mdx` files in the same PR.
 
 ---
 
@@ -158,7 +178,7 @@ All tests must pass before a PR can be merged. The CI matrix runs on `ubuntu-lat
 3. **Write tests.** PRs without tests for new behaviour will not be merged.
 4. **Run clippy before pushing.** `cargo clippy --workspace -- -D warnings` must be clean.
 5. **No `unwrap()` in non-test code.** Use `?` or explicit error handling.
-6. **Update the docs** if your change affects user-facing behaviour, config schema, or events. The documentation lives in a separate repository at [github.com/nanny-run/docs](https://github.com/nanny-run/docs). Open a follow-up PR there alongside your code PR.
+6. **Update the docs** if your change affects user-facing behaviour, config schema, or events. The documentation lives in the `docs/` directory of this repository — update the relevant `.mdx` files in the same PR.
 
 ---
 
