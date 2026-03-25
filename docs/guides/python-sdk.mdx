@@ -1,0 +1,55 @@
+---
+title: Python
+description: Per-function governance for Python agents using Nanny decorators.
+---
+
+<Note>
+  The Python SDK ships in **v0.2.0** — the public launch milestone. If you are on v0.1.0 today, you can still govern Python agents using `nanny run` with no code changes required. See the [Quickstart](/quickstart).
+</Note>
+
+The Python SDK brings the same enforcement model as the [Rust SDK](/guides/rust-sdk) to Python — `@tool`, `@rule`, and `@agent` decorators that connect to the bridge and enforce limits per function call.
+
+---
+
+## What's coming
+
+```python
+from nanny import tool, rule, agent, PolicyContext
+
+@tool(cost=10)
+def fetch_page(url: str) -> str:
+    import httpx
+    return httpx.get(url).text
+
+@rule("no_spiral")
+def check_spiral(ctx: PolicyContext) -> bool:
+    h = ctx.tool_call_history
+    return not (len(h) >= 3 and len(set(h[-3:])) == 1)
+
+@agent("researcher")
+def run_research(topic: str) -> list[str]:
+    # Runs under [limits.researcher] from nanny.toml
+    ...
+```
+
+Run it under enforcement exactly as you would any other process:
+
+```bash
+nanny run python agent.py
+```
+
+When running outside `nanny run`, all decorators are no-ops — the functions execute normally with zero overhead.
+
+---
+
+## Install *(v0.2.0)*
+
+```bash
+pip install nanny-sdk
+```
+
+---
+
+## Want to be notified?
+
+Watch the [GitHub repository](https://github.com/nanny-run/nanny) for the v0.2.0 release. The Python SDK is the public launch milestone for Nanny — Python is where the majority of agent development happens today.

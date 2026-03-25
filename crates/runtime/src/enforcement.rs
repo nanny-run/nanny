@@ -1,7 +1,7 @@
-// Policy engine — concrete implementations of the Policy trait.
+// enforcement.rs — Concrete policy implementations.
 //
-// This crate implements decisions. It does not define the contract.
-// The contract (Policy trait, PolicyContext, PolicyDecision) lives in nanny-core.
+// These are the enforcement decisions. The contract (Policy trait, PolicyContext,
+// PolicyDecision) lives in nanny-core.
 //
 // Rule: all implementations here are pure functions.
 // Same context in → same decision out. Always. No exceptions.
@@ -23,65 +23,34 @@ use std::collections::HashMap;
 /// Checks are evaluated in order. The first failing check stops execution.
 /// All checks are pure — no state is mutated, no network calls are made.
 pub struct LimitsPolicy {
-    /// The numeric limits from nanny.toml.
     limits: Limits,
-
-    /// The tools this execution is permitted to call.
-    /// Any tool not in this list is denied immediately.
     allowed_tools: Vec<String>,
 }
 
 impl LimitsPolicy {
-    /// Create a new LimitsPolicy.
-    ///
-    /// `limits` comes from nanny.toml → [limits]
-    /// `allowed_tools` comes from nanny.toml → [tools] allowed
     pub fn new(limits: Limits, allowed_tools: Vec<String>) -> Self {
-        Self {
-            limits,
-            allowed_tools,
-        }
+        Self { limits, allowed_tools }
     }
 }
 
 impl Policy for LimitsPolicy {
     fn evaluate(&self, ctx: &PolicyContext) -> PolicyDecision {
-        // ── Check 1: step count ───────────────────────────────────────────────
         if ctx.step_count >= self.limits.max_steps {
-            return PolicyDecision::Deny {
-                reason: StopReason::MaxStepsReached,
-            };
+            return PolicyDecision::Deny { reason: StopReason::MaxStepsReached };
         }
-
-        // ── Check 2: timeout ──────────────────────────────────────────────────
         if ctx.elapsed_ms >= self.limits.timeout_ms {
-            return PolicyDecision::Deny {
-                reason: StopReason::TimeoutExpired,
-            };
+            return PolicyDecision::Deny { reason: StopReason::TimeoutExpired };
         }
-
-        // ── Check 3: budget ───────────────────────────────────────────────────
         if ctx.cost_units_spent >= self.limits.max_cost_units {
-            return PolicyDecision::Deny {
-                reason: StopReason::BudgetExhausted,
-            };
+            return PolicyDecision::Deny { reason: StopReason::BudgetExhausted };
         }
-
-        // ── Check 4: tool allowlist ───────────────────────────────────────────
-        //
-        // If a tool is being requested, it must be on the allowlist.
-        // If it is not listed — deny immediately. Fail closed.
-        // An empty allowlist means no tools are permitted at all.
         if let Some(tool) = &ctx.requested_tool {
             if !self.allowed_tools.contains(tool) {
                 return PolicyDecision::Deny {
-                    reason: StopReason::ToolDenied {
-                        tool_name: tool.clone(),
-                    },
+                    reason: StopReason::ToolDenied { tool_name: tool.clone() },
                 };
             }
         }
-
         PolicyDecision::Allow
     }
 }
@@ -94,20 +63,11 @@ impl Policy for LimitsPolicy {
 ///   - `max_calls`: deny once a tool has been called max_calls times
 ///
 /// Always runs after LimitsPolicy — compose them with ChainPolicy.
-/// All checks are pure — same context in → same decision out.
 pub struct RuleEvaluator {
-    /// tool name → maximum number of calls allowed.
-    /// Tools not present here have no call limit.
     max_calls: HashMap<String, u32>,
 }
 
 impl RuleEvaluator {
-    /// Create a new RuleEvaluator from a pre-resolved max_calls map.
-    ///
-    /// Typically built in runtime.rs from config.tools.per_tool:
-    /// ```text
-    /// config.tools.per_tool["http_get"].max_calls → max_calls["http_get"]
-    /// ```
     pub fn new(max_calls: HashMap<String, u32>) -> Self {
         Self { max_calls }
     }
@@ -119,7 +79,6 @@ impl Policy for RuleEvaluator {
             Some(t) => t,
             None => return PolicyDecision::Allow,
         };
-
         if let Some(&max) = self.max_calls.get(tool) {
             let calls_so_far = ctx.tool_call_counts.get(tool).copied().unwrap_or(0);
             if calls_so_far >= max {
@@ -130,22 +89,13 @@ impl Policy for RuleEvaluator {
                 };
             }
         }
-
         PolicyDecision::Allow
     }
 }
 
 // ── ChainPolicy ───────────────────────────────────────────────────────────────
 
-/// Composes two policies in sequence.
-///
-/// Evaluates `first`. If it allows, evaluates `second`.
-/// The first denial wins — `second` is never consulted after a denial.
-///
-/// Usage:
-/// ```text
-/// ChainPolicy::new(LimitsPolicy::new(...), RuleEvaluator::new(...))
-/// ```
+/// Composes two policies in sequence. First denial wins.
 pub struct ChainPolicy<A, B> {
     first: A,
     second: B,
@@ -173,11 +123,7 @@ mod tests {
     use super::*;
 
     fn base_limits() -> Limits {
-        Limits {
-            max_steps: 10,
-            max_cost_units: 500,
-            timeout_ms: 10_000,
-        }
+        Limits { max_steps: 10, max_cost_units: 500, timeout_ms: 10_000 }
     }
 
     fn base_context() -> PolicyContext {
@@ -190,45 +136,32 @@ mod tests {
 
     #[test]
     fn allows_within_limits() {
-        let result = policy().evaluate(&base_context());
-        assert!(matches!(result, PolicyDecision::Allow));
+        assert!(matches!(policy().evaluate(&base_context()), PolicyDecision::Allow));
     }
 
     #[test]
     fn denies_at_max_steps() {
-        let ctx = PolicyContext {
-            step_count: 10,
-            ..base_context()
-        };
-        let result = policy().evaluate(&ctx);
+        let ctx = PolicyContext { step_count: 10, ..base_context() };
         assert!(matches!(
-            result,
+            policy().evaluate(&ctx),
             PolicyDecision::Deny { reason: StopReason::MaxStepsReached }
         ));
     }
 
     #[test]
     fn denies_on_timeout() {
-        let ctx = PolicyContext {
-            elapsed_ms: 10_001,
-            ..base_context()
-        };
-        let result = policy().evaluate(&ctx);
+        let ctx = PolicyContext { elapsed_ms: 10_001, ..base_context() };
         assert!(matches!(
-            result,
+            policy().evaluate(&ctx),
             PolicyDecision::Deny { reason: StopReason::TimeoutExpired }
         ));
     }
 
     #[test]
     fn denies_on_budget_exhausted() {
-        let ctx = PolicyContext {
-            cost_units_spent: 500,
-            ..base_context()
-        };
-        let result = policy().evaluate(&ctx);
+        let ctx = PolicyContext { cost_units_spent: 500, ..base_context() };
         assert!(matches!(
-            result,
+            policy().evaluate(&ctx),
             PolicyDecision::Deny { reason: StopReason::BudgetExhausted }
         ));
     }
@@ -239,12 +172,9 @@ mod tests {
             requested_tool: Some("write_file".to_string()),
             ..base_context()
         };
-        let result = policy().evaluate(&ctx);
         assert!(matches!(
-            result,
-            PolicyDecision::Deny {
-                reason: StopReason::ToolDenied { .. }
-            }
+            policy().evaluate(&ctx),
+            PolicyDecision::Deny { reason: StopReason::ToolDenied { .. } }
         ));
     }
 
@@ -254,27 +184,17 @@ mod tests {
             requested_tool: Some("http_get".to_string()),
             ..base_context()
         };
-        let result = policy().evaluate(&ctx);
-        assert!(matches!(result, PolicyDecision::Allow));
+        assert!(matches!(policy().evaluate(&ctx), PolicyDecision::Allow));
     }
 
     #[test]
     fn step_limit_checked_before_timeout() {
-        // Both limits exceeded simultaneously — step count wins because
-        // checks run in order. Order must be deterministic.
-        let ctx = PolicyContext {
-            step_count: 10,
-            elapsed_ms: 99_999,
-            ..base_context()
-        };
-        let result = policy().evaluate(&ctx);
+        let ctx = PolicyContext { step_count: 10, elapsed_ms: 99_999, ..base_context() };
         assert!(matches!(
-            result,
+            policy().evaluate(&ctx),
             PolicyDecision::Deny { reason: StopReason::MaxStepsReached }
         ));
     }
-
-    // ── RuleEvaluator tests ───────────────────────────────────────────────────
 
     fn rule_evaluator_with_http_get_limit(max: u32) -> RuleEvaluator {
         let mut map = HashMap::new();
@@ -299,7 +219,7 @@ mod tests {
     fn rule_evaluator_denies_at_max_calls() {
         let re = rule_evaluator_with_http_get_limit(3);
         let mut counts = HashMap::new();
-        counts.insert("http_get".to_string(), 3u32); // already called 3 times
+        counts.insert("http_get".to_string(), 3u32);
         let ctx = PolicyContext {
             requested_tool: Some("http_get".to_string()),
             tool_call_counts: counts,
@@ -316,7 +236,6 @@ mod tests {
     #[test]
     fn rule_evaluator_ignores_unconfigured_tools() {
         let re = rule_evaluator_with_http_get_limit(1);
-        // write_file has no max_calls configured — must always allow
         let ctx = PolicyContext {
             requested_tool: Some("write_file".to_string()),
             ..base_context()
@@ -330,8 +249,6 @@ mod tests {
         assert!(matches!(re.evaluate(&base_context()), PolicyDecision::Allow));
     }
 
-    // ── ChainPolicy tests ─────────────────────────────────────────────────────
-
     #[test]
     fn chain_allows_when_both_allow() {
         let chain = ChainPolicy::new(
@@ -343,25 +260,23 @@ mod tests {
 
     #[test]
     fn chain_denies_when_first_denies() {
-        // First policy denies at step 0, second would allow.
         let first = LimitsPolicy::new(
             Limits { max_steps: 0, max_cost_units: 999, timeout_ms: 99_999 },
             vec![],
         );
-        let second = RuleEvaluator::new(HashMap::new()); // always allows
+        let second = RuleEvaluator::new(HashMap::new());
         let chain = ChainPolicy::new(first, second);
-
-        let result = chain.evaluate(&base_context());
-        assert!(matches!(result, PolicyDecision::Deny { reason: StopReason::MaxStepsReached }));
+        assert!(matches!(
+            chain.evaluate(&base_context()),
+            PolicyDecision::Deny { reason: StopReason::MaxStepsReached }
+        ));
     }
 
     #[test]
     fn chain_denies_when_second_denies() {
-        // First policy allows, second denies on tool call count.
-        let first = RuleEvaluator::new(HashMap::new()); // always allows
+        let first = RuleEvaluator::new(HashMap::new());
         let re = rule_evaluator_with_http_get_limit(1);
         let chain = ChainPolicy::new(first, re);
-
         let mut counts = HashMap::new();
         counts.insert("http_get".to_string(), 1u32);
         let ctx = PolicyContext {
@@ -377,7 +292,6 @@ mod tests {
 
     #[test]
     fn chain_first_denial_wins_over_second() {
-        // Both would deny — first denial must be the one that surfaces.
         let first = LimitsPolicy::new(
             Limits { max_steps: 0, max_cost_units: 999, timeout_ms: 99_999 },
             vec![],
@@ -386,12 +300,10 @@ mod tests {
         max_calls.insert("http_get".to_string(), 0u32);
         let second = RuleEvaluator::new(max_calls);
         let chain = ChainPolicy::new(first, second);
-
         let ctx = PolicyContext {
             requested_tool: Some("http_get".to_string()),
             ..base_context()
         };
-        // MaxStepsReached (from first) must win, not RuleDenied (from second).
         assert!(matches!(
             chain.evaluate(&ctx),
             PolicyDecision::Deny { reason: StopReason::MaxStepsReached }

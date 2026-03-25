@@ -1,22 +1,33 @@
 [package]
 name        = "nanny"
-description = "Nanny CLI — nanny run and nanny init"
+description = "Nanny — execution boundary for AI agents. CLI (nanny run) and Rust SDK (#[tool], #[rule], #[agent])."
 version.workspace    = true
 edition.workspace    = true
 license.workspace    = true
 repository.workspace = true
+authors.workspace    = true
 
 [[bin]]
 name = "nanny"
 path = "src/main.rs"
 
+[lib]
+name = "nanny"
+path = "src/lib.rs"
+
 [dependencies]
-nanny-core   = { path = "../core" }
-nanny-config = { path = "../config" }
-nanny-policy = { path = "../policy" }
-nanny-ledger = { path = "../ledger" }
-nanny-tools  = { path = "../tools" }
+nanny-core    = { path = "../core" }
+nanny-config  = { path = "../config" }
+nanny-runtime = { path = "../runtime" }
+nanny-bridge  = { path = "../bridge" }
+nanny-macros  = { path = "../macros" }
+inventory    = "0.3"
 anyhow       = { workspace = true }
 clap         = { workspace = true }
 serde        = { workspace = true }
 serde_json   = { workspace = true }
+
+[dev-dependencies]
+nanny-bridge   = { path = "../bridge" }
+nanny-core     = { path = "../core" }
+nanny-runtime  = { path = "../runtime" }

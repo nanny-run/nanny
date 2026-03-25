@@ -1,0 +1,122 @@
+---
+title: nanny.toml Reference
+description: Complete schema for the nanny.toml configuration file.
+---
+
+## Full schema
+
+```toml
+# ── Runtime ─────────────────────────────────────────────────────────────────────────────
+
+[runtime]
+mode = "local"   # "local" | "managed"
+
+# ── Limits ────────────────────────────────────────────────────────────────────
+
+[limits]
+steps   = 100        # Maximum agent steps (tool calls). 0 = unlimited.
+cost    = 1000       # Maximum cost units. 0 = unlimited.
+timeout = 30000      # Wall-clock timeout in milliseconds. 0 = unlimited.
+
+# Named limit sets — inherit from [limits], override only declared fields.
+[limits.researcher]
+steps   = 200
+cost    = 5000
+timeout = 120000
+
+[limits.quick]
+timeout = 5000
+
+# ── Tools ─────────────────────────────────────────────────────────────────────
+
+[tools]
+allowed = ["http_get", "read_file"]   # Allowlist. Empty = all tools allowed.
+
+# Per-tool config.
+[tools.http_get]
+max_calls     = 20
+cost_per_call = 10
+
+[tools.write_file]
+max_calls     = 5
+cost_per_call = 50
+
+# ── Observability ─────────────────────────────────────────────────────────────
+
+[observability]
+log      = "stdout"          # "stdout" | "file"
+log_file = "nanny.log"       # Required when log = "file"
+
+# ── Managed (Cloud) ───────────────────────────────────────────────────────────
+
+[managed]
+endpoint = "https://api.nanny.run"
+org_id   = "org_xxxxxxxxxxxx"
+api_key  = "nanny_live_xxxxxxxxxxxx"
+```
+
+---
+
+## [runtime]
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `mode` | string | `"local"` | `"local"` enforces limits locally, without external services. `"managed"` additionally forwards execution data to Nanny Cloud. |
+
+---
+
+## [limits]
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `steps` | integer | `100` | Maximum steps. `0` = unlimited. |
+| `cost` | integer | `1000` | Maximum cost units. `0` = unlimited. |
+| `timeout` | integer | `30000` | Timeout in milliseconds. `0` = unlimited. |
+
+### Named limit sets
+
+Any table nested under `[limits]` is a named set:
+
+```toml
+[limits.researcher]
+steps = 200
+```
+
+Named sets inherit all unset fields from `[limits]`. Activate with `--limits=researcher`.
+
+---
+
+## [tools]
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `allowed` | string array | `[]` | Tool allowlist. Empty array means all tools are allowed. |
+
+### Per-tool config
+
+```toml
+[tools.<name>]
+max_calls     = 20    # Maximum calls for this tool per execution.
+cost_per_call = 10    # Cost units charged per call.
+```
+
+---
+
+## [observability]
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `log` | string | `"stdout"` | `"stdout"` writes events to stdout. `"file"` appends to `log_file`. |
+| `log_file` | path | — | Required when `log = "file"`. Relative to working directory. |
+
+---
+
+## [managed]
+
+Required when `[runtime] mode = "managed"`. Connects Nanny to Nanny Cloud for durable audit logs and team dashboards. All three fields are required.
+
+| Field | Type | Description |
+|-------|------|-----------|
+| `endpoint` | string | Cloud API endpoint (`https://api.nanny.run`). |
+| `org_id` | string | Your organisation ID from the Nanny Cloud dashboard. |
+| `api_key` | string | Your API key. **Never commit this to version control.** Use an environment variable or secrets manager. |

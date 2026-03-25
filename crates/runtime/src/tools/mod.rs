@@ -1,6 +1,6 @@
-// nanny-tools — Tool registry and built-in tool implementations.
+// nanny-runtime tools — Tool registry and built-in tool implementations.
 //
-// This crate owns:
+// This module owns:
 // - ToolRegistry: a collection of registered tools, implements ToolExecutor
 // - Built-in tools: http_get, and others as they are added
 //
