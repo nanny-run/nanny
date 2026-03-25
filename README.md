@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <strong>Execution boundary for autonomous systems.</strong><br/>
+  <strong>Open-source execution boundary for autonomous systems.</strong><br/>
   Hard limits. Deterministic stops. Structured audit trail. No code changes required.
 </p>
 
@@ -55,6 +55,8 @@ It is a good fit if you:
 - Are building with **CrewAI, LangChain, or any Python or Rust agent framework**
 - Want enforcement that is **decoupled from your agent code** — no lock-in, no wrapper framework
 
+Nanny is fully open source under the Apache 2.0 licence. The runtime is the OSS primitive — Cloud is the managed layer above it.
+
 Nanny may not be what you need if you're running simple scripts, batch jobs, or anything without autonomous tool-calling behaviour.
 
 ---
@@ -63,7 +65,7 @@ Nanny may not be what you need if you're running simple scripts, batch jobs, or 
 
 Nanny is designed to meet you where you are and grow with you.
 
-**nanny CLI** — The universal starting point. Wraps any agent process in any language. Zero code changes required.
+**Nanny CLI** — The universal starting point. Wraps any agent process in any language. Zero code changes required.
 
 ```sh
 # Python agent
@@ -93,7 +95,7 @@ fn run_research(topic: &str) { ... }
 
 ## Install
 
-The nanny CLI is a **system tool** — install it once globally and use `nanny run` from any project that has a `nanny.toml`.
+The Nanny CLI is a **system tool** — install it once globally and use `nanny run` from any project that has a `nanny.toml`.
 
 **macOS**
 
