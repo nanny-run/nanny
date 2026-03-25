@@ -4,6 +4,7 @@
 // NannyConfig is the source of truth. Every runtime piece is built from it.
 // Same config in → same components out. Always. No hidden state.
 
+use nanny_bridge::BridgeComponents;
 use nanny_config::{resolve_named_limits, ConfigError, NannyConfig};
 use nanny_core::agent::limits::Limits;
 use nanny_ledger::FakeLedger;
@@ -118,6 +119,53 @@ fn build_components(config: &NannyConfig, limits: Limits) -> RuntimeComponents {
         policy,
         ledger,
         registry,
+    }
+}
+
+// ── build_bridge_components ───────────────────────────────────────────────────
+
+/// Build the `BridgeComponents` the bridge server needs to start.
+///
+/// Resolves every named limits set with full inheritance so `/agent/enter`
+/// can switch contexts without re-reading config.
+pub fn build_bridge_components(config: &NannyConfig, limits: Limits) -> BridgeComponents {
+    // Resolve every named set once, up front.
+    let named_limits: HashMap<String, Limits> = config
+        .limits
+        .named
+        .keys()
+        .filter_map(|name| {
+            resolve_named_limits(config, name).ok().map(|partial| {
+                let l = Limits {
+                    max_steps: partial.max_steps,
+                    max_cost_units: partial.max_cost_units,
+                    timeout_ms: partial.timeout_ms,
+                };
+                (name.clone(), l)
+            })
+        })
+        .collect();
+
+    let per_tool_max_calls: HashMap<String, u32> = config
+        .tools
+        .per_tool
+        .iter()
+        .filter_map(|(name, cfg)| cfg.max_calls.map(|n| (name.clone(), n)))
+        .collect();
+
+    let mut registry = nanny_tools::default_registry();
+    for (tool_name, tool_cfg) in &config.tools.per_tool {
+        if let Some(cost) = tool_cfg.cost_per_call {
+            registry.set_cost_override(tool_name, cost);
+        }
+    }
+
+    BridgeComponents {
+        registry,
+        limits,
+        named_limits,
+        allowed_tools: config.tools.allowed.clone(),
+        per_tool_max_calls,
     }
 }
 

@@ -6,6 +6,7 @@ members = [
     "crates/ledger",
     "crates/tools",
     "crates/config",
+    "crates/bridge",
     "crates/cli",
 ]
 

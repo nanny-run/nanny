@@ -11,6 +11,7 @@ mod runtime;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use nanny_bridge::{Bridge, ExecutionState};
 use nanny_core::ledger::Ledger;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -145,11 +146,21 @@ fn cmd_run(config_path: &Path, limits_name: Option<&str>, command: Vec<String>) 
         &command.join(" "),
     ))?;
 
+    // ── Start bridge ──────────────────────────────────────────────────────
+    let bridge_components = runtime::build_bridge_components(&config, components.limits.clone());
+    let bridge = Bridge::start(bridge_components)
+        .context("failed to start bridge")?;
+
     // ── Spawn child process ───────────────────────────────────────────────
     let (program, args) = command.split_first()
         .expect("command is non-empty — enforced by clap");
 
-    let mut child = match std::process::Command::new(program).args(args).spawn() {
+    let mut child = match std::process::Command::new(program)
+        .args(args)
+        .env("NANNY_BRIDGE_PORT", bridge.port.to_string())
+        .env("NANNY_SESSION_TOKEN", &bridge.session_token)
+        .spawn()
+    {
         Ok(c) => c,
         Err(e) => {
             // ExecutionStarted was emitted — always pair it with ExecutionStopped.
@@ -159,19 +170,32 @@ fn cmd_run(config_path: &Path, limits_name: Option<&str>, command: Vec<String>) 
         }
     };
 
-    // ── Poll until exit or timeout ────────────────────────────────────────
+    // ── Poll until exit, timeout, or bridge-signaled stop ────────────────
     //
-    // We poll every 50 ms. This is coarse enough to avoid busy-spinning
-    // and fine enough that a 30-second timeout fires within half a tick.
+    // We poll every 50 ms. Coarse enough to avoid busy-spinning;
+    // fine enough that a 30-second timeout fires within half a tick.
+    // The bridge signals stop (budget, rules, max-steps) independently
+    // of the child's own exit — we must check both.
     let poll_interval = Duration::from_millis(50);
-    let stop_reason = loop {
+    let stop_reason: String = loop {
+        // Check bridge first — it may have stopped execution (budget, rules, etc.)
+        if let ExecutionState::Stopped { reason } = bridge.execution_state() {
+            let _ = child.kill();
+            let _ = child.wait(); // reap — avoid zombie
+            break reason;
+        }
+
         match child.try_wait() {
-            Ok(Some(_)) => break "AgentCompleted",
+            Ok(Some(_)) => {
+                bridge.stop("AgentCompleted");
+                break "AgentCompleted".to_string();
+            }
             Ok(None) => {
                 if started_at.elapsed() >= timeout {
                     let _ = child.kill();
                     let _ = child.wait(); // reap — avoid zombie
-                    break "TimeoutExpired";
+                    bridge.stop("TimeoutExpired");
+                    break "TimeoutExpired".to_string();
                 }
                 std::thread::sleep(poll_interval);
             }
@@ -186,7 +210,7 @@ fn cmd_run(config_path: &Path, limits_name: Option<&str>, command: Vec<String>) 
 
     // ── ExecutionStopped event ────────────────────────────────────────────
     let elapsed_ms = started_at.elapsed().as_millis() as u64;
-    log.write(&events::Event::execution_stopped(stop_reason, 0, 0, elapsed_ms))?;
+    log.write(&events::Event::execution_stopped(&stop_reason, 0, 0, elapsed_ms))?;
 
     // ── Exit code ─────────────────────────────────────────────────────────
     if stop_reason != "AgentCompleted" {

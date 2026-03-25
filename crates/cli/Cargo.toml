@@ -16,6 +16,7 @@ nanny-config = { path = "../config" }
 nanny-policy = { path = "../policy" }
 nanny-ledger = { path = "../ledger" }
 nanny-tools  = { path = "../tools" }
+nanny-bridge = { path = "../bridge" }
 anyhow       = { workspace = true }
 clap         = { workspace = true }
 serde        = { workspace = true }
