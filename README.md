@@ -1,266 +1,206 @@
-# nanny
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/nanny-logo-dark.svg" />
+    <source media="(prefers-color-scheme: light)" srcset="assets/nanny-logo-light.svg" />
+    <img src="assets/nanny-logo-light.svg" alt="Nanny" height="80" />
+  </picture>
+</p>
 
-**Execution boundary for autonomous systems.**
+<p align="center">
+  <strong>Execution boundary for autonomous systems.</strong><br/>
+  Hard limits. Deterministic stops. Structured audit trail. No code changes required.
+</p>
 
-Nanny enforces hard limits on agents and long-running processes. It deterministically stops execution when a limit is reached — no intelligence, no exceptions, no recovery logic inside the engine.
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="Apache 2.0" /></a>
+  <a href="https://crates.io/crates/nannyd"><img src="https://img.shields.io/crates/v/nannyd?logo=rust&label=crates.io" alt="crates.io" /></a>
+  <a href="https://pypi.org/project/nanny-sdk/"><img src="https://img.shields.io/pypi/v/nanny-sdk?logo=python&label=pypi" alt="PyPI" /></a>
+  <a href="https://github.com/nanny-run/nanny/releases"><img src="https://img.shields.io/github/v/release/nanny-run/nanny?logo=github&label=release" alt="GitHub Release" /></a>
+  <!-- <a href="https://github.com/nanny-run/nanny/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/nanny-run/nanny/ci.yml?logo=github&label=CI" alt="CI" /></a> -->
+  <a href="https://github.com/nanny-run/nanny/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs Welcome" /></a>
+  <!-- <a href="https://x.com/nanny_run"><img src="https://img.shields.io/twitter/follow/nanny_run?logo=x&color=%23000000" alt="X" /></a> -->
+</p>
 
-Think of it like a circuit breaker. You tell it "this agent is allowed 100 steps, 1000 cost units, and 30 seconds." The moment any limit is crossed, the process is killed and a structured log says exactly why.
+<p align="center">
+  <a href="https://docs.nanny.run">Documentation</a> ·
+  <a href="https://docs.nanny.run/quickstart">Quickstart</a> ·
+  <a href="CHANGELOG.md">Changelog</a> ·
+  <a href="https://github.com/nanny-run/nanny/issues">Report a Bug</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a>
+</p>
 
-```
+---
+
+## What is Nanny?
+
+Agents spend money. They call tools in loops. They run forever. They go over budget.
+
+Nanny is the thing that stops them.
+
+You tell nanny "this agent is allowed 100 steps, 1000 cost units, and 30 seconds." The moment any limit is crossed, nanny kills the process immediately, emits a structured event log saying exactly why it stopped, and exits. No grace period. No recovery logic. No second chances.
+
+Think of it as a circuit breaker for autonomous systems — deterministic, auditable, and completely decoupled from the agent itself.
+
+---
+
+## Who is it for?
+
+Nanny is for developers and teams running agents in production — or preparing to.
+
+It is a good fit if you:
+
+- Are running **autonomous agents** that call external tools, browse the web, or write to APIs
+- Need hard guarantees that an agent **cannot exceed a cost budget or run indefinitely**
+- Want a **structured audit trail** of every tool call and stop reason for every execution
+- Are building with **CrewAI, LangChain, or any Python or Rust agent framework**
+- Want enforcement that is **decoupled from your agent code** — no lock-in, no wrapper framework
+
+Nanny may not be what you need if you're running simple scripts, batch jobs, or anything without autonomous tool-calling behaviour.
+
+---
+
+## The Nanny ecosystem
+
+Nanny is designed to meet you where you are and grow with you.
+
+**nanny CLI** — The universal starting point. Wraps any agent process in any language. Zero code changes required.
+
+```sh
+# Python agent
 nanny run python agent.py
-nanny run node agent.js
+
+# Rust agent
 nanny run ./my-agent
 ```
 
-Any language. Any binary. Zero code changes required.
+**Rust SDK** — For Rust agents, go deeper. Annotate individual functions to get per-function cost accounting, allowlist enforcement, and custom rules — all in-process, all with zero overhead when running outside `nanny run`.
+
+```rust
+use nanny::{tool, rule, agent};
+
+#[tool(cost = 10)]
+fn search_web(query: &str) -> String { ... }
+
+#[agent("researcher")]
+fn run_research(topic: &str) { ... }
+```
+
+**Python SDK** _(coming v0.2.0)_ — The same `#[tool]`, `#[rule]`, `#[agent]` model, as Python decorators. This is the public launch milestone — Python is where the majority of agent development happens.
+
+**Nanny Cloud** _(coming v0.3.0)_ — Durable audit logs, team dashboards, org-level budget aggregation, and managed enforcement across all your agents. The OSS runtime stays unchanged — Cloud is the layer above it.
 
 ---
 
 ## Install
 
+The nanny CLI is a **system tool** — install it once globally and use `nanny run` from any project that has a `nanny.toml`.
+
+**macOS**
+
 ```sh
-cargo install nanny
+brew install nannyd
+```
+
+**Linux**
+
+```sh
+curl -fsSL https://install.nanny.run | sh
+```
+
+**All platforms — via Rust toolchain**
+
+```sh
+cargo install nannyd
+```
+
+Or download a pre-built binary directly from [GitHub Releases](https://github.com/nanny-run/nanny/releases).
+
+> **Windows note:** Process enforcement (hard kill on limit breach) requires Unix signal support and is not yet implemented on Windows. The CLI and SDK bridge otherwise work correctly.
+
+---
+
+## SDK installation
+
+SDKs are **project dependencies** — add them per project, not globally.
+
+**Rust**
+
+```sh
+cargo add nannyd
+```
+
+**Python** _(v0.2.0 — coming soon)_
+
+```sh
+pip install nanny-sdk
 ```
 
 ---
 
-## Two modes of use
-
-### Mode 1 — Zero code changes (CLI wrapper)
-
-Nanny wraps any binary in any language. The child process is spawned, a bridge sidecar runs alongside it, and when a limit is hit the child is killed. Structured events go to stdout as NDJSON.
+## 60-second quickstart
 
 ```sh
+# 1. Scaffold a nanny.toml in your project root
 nanny init
+
+# 2. Run your agent under enforcement
 nanny run python agent.py
-nanny run --limits=researcher python researcher.py
+
+# 3. Use a named limit set for specific workloads
+nanny run --limits=researcher python agent.py
 ```
 
-### Mode 2 — Rust SDK (in-process, fine-grained)
-
-Annotate your Rust functions directly with proc-macro attributes:
-
-```rust
-use nanny::{tool, rule, agent, PolicyContext};
-
-// Declare a tool — the bridge charges 10 cost units and checks the allowlist.
-#[tool(cost = 10)]
-fn search_web(query: &str) -> String {
-    // your implementation
-}
-
-// Register a local rule — fires before every tool call.
-#[rule("no_spiral")]
-fn check_spiral(ctx: &PolicyContext) -> bool {
-    let h = &ctx.tool_call_history;
-    !(h.len() >= 3 && h[h.len()-3..].iter().all(|t| *t == h[h.len()-1]))
-}
-
-// Activate named limits for a scope — auto-reverted on drop/panic.
-#[agent("researcher")]
-fn run_research(topic: &str) {
-    // [limits.researcher] is active for the duration of this function
-}
-```
-
-**Key property:** when `NANNY_BRIDGE_SOCKET` / `NANNY_BRIDGE_PORT` env vars are absent, all three macros are pure no-ops. Zero overhead, zero behavior change. They only activate when running under `nanny run`.
-
----
-
-## Quickstart
-
-**1. Initialize config in your project:**
-
-```sh
-nanny init
-```
-
-This writes a `nanny.toml` with safe default limits.
-
-**2. Run your agent under enforcement:**
-
-```sh
-nanny run python agent.py
-nanny run --limits=researcher python researcher.py
-```
-
-Nanny wraps the process, enforces limits, and emits a structured event log. When a limit is hit, the process is killed and nanny exits non-zero.
-
----
-
-## nanny.toml
+**nanny.toml:**
 
 ```toml
 [runtime]
-mode = "local"       # "local" (process enforcement) or "managed" (cloud-connected)
+mode = "local"
 
 [limits]
-steps   = 100        # max steps before forced stop
-cost    = 1000       # max cost units before forced stop
-timeout = 30000      # ms — wall-clock timeout, regardless of activity
-
-[tools]
-allowed = ["http_get", "write_file"]   # allowlist — anything else is denied
-
-[observability]
-log = "stdout"       # "stdout" or "file"
-# log_file = "nanny.ndjson"   # required when log = "file"
-```
-
----
-
-## Named limits
-
-Define multiple limit sets in one file and activate by name at runtime:
-
-```toml
-[limits]
-steps   = 50
-cost    = 500
-timeout = 15000
+steps   = 100     # max tool calls
+cost    = 1000    # max cost units
+timeout = 30000   # wall-clock ms
 
 [limits.researcher]
-steps = 200
-cost  = 2000
-# timeout not set — inherits 15000 from [limits]
+steps   = 200
+cost    = 5000
+timeout = 120000
 
-[limits.fast]
-timeout = 5000
-# steps and cost inherit from [limits]
+[tools]
+allowed = ["http_get", "read_file"]   # anything not listed is denied
 ```
-
-```sh
-nanny run --limits=researcher python researcher.py
-nanny run --limits=fast       python quick_task.py
-```
-
-Named limit sets inherit all fields from `[limits]` and override only what they declare. No surprises.
 
 ---
 
 ## Event log
 
-Every execution emits NDJSON to stdout (or a file). One JSON object per line.
+Every run emits NDJSON to stdout. One event per line. Always starts with `ExecutionStarted`, always ends with `ExecutionStopped`.
 
 ```json
 {"event":"ExecutionStarted","ts":1711234567000,"limits":{"steps":100,"cost":1000,"timeout":30000},"limits_set":"[limits]","command":"python agent.py"}
 {"event":"ToolAllowed","ts":1711234567120,"tool":"http_get"}
 {"event":"StepCompleted","ts":1711234567800,"step":1}
-{"event":"ExecutionStopped","ts":1711234568432,"reason":"AgentCompleted","steps":7,"cost_spent":7,"elapsed_ms":1432}
+{"event":"ExecutionStopped","ts":1711234572000,"reason":"BudgetExhausted","steps":12,"cost_spent":1000,"elapsed_ms":5000}
 ```
 
-`ExecutionStarted` is always the first line. `ExecutionStopped` is always the last.
-
-**Stop reasons:**
-
-| Reason            | Meaning                                       |
-| ----------------- | --------------------------------------------- |
-| `AgentCompleted`  | Process exited cleanly on its own             |
-| `TimeoutExpired`  | Wall-clock timeout reached — process killed   |
-| `MaxStepsReached` | Step limit reached                            |
-| `BudgetExhausted` | Cost unit budget spent                        |
-| `ToolDenied`      | Tool call not on the allowlist                |
-| `RuleDenied`      | Per-tool rule fired (e.g. max calls exceeded) |
-| `ManualStop`      | Stopped programmatically                      |
-
----
-
-## Per-tool config
-
-Override cost or call limits per tool:
-
-```toml
-[tools.http_get]
-cost_per_call = 5     # override declared cost for this tool
-max_calls     = 20    # deny after 20 calls in one execution
-```
-
----
-
-## Pipe the log
+Pipe it to a file, stream it to your log aggregator, or query it inline:
 
 ```sh
-# stream events to a file while watching the agent run
-nanny run python agent.py | tee agent.ndjson
-
-# write events directly to a file
-# set log = "file" and log_file = "nanny.ndjson" in nanny.toml
-nanny run python agent.py
+nanny run python agent.py > nanny.log
+nanny run python agent.py | tee nanny.log
 ```
 
 ---
 
-## Exit codes
+## Documentation
 
-| Code | Meaning                                                       |
-| ---- | ------------------------------------------------------------- |
-| `0`  | Process exited cleanly (`AgentCompleted`)                     |
-| `1`  | Any enforced stop (`TimeoutExpired`, `BudgetExhausted`, etc.) |
-| `1`  | Config error or spawn failure                                 |
-
----
-
-## Architecture
-
-```
-nanny run python agent.py
-    │
-    ├── spawns child process (agent.py)
-    │       └── env: NANNY_BRIDGE_SOCKET + NANNY_SESSION_TOKEN
-    │
-    └── runs Bridge (Unix socket / TCP sidecar)
-            │
-            ├── POST /tool/call      ← #[nanny::tool] calls this per invocation
-            ├── POST /step           ← increments step counter
-            ├── POST /agent/enter    ← #[nanny::agent] swaps to named limits
-            ├── POST /agent/exit     ← reverts to global limits
-            ├── GET  /status         ← read tool counts, cost, steps
-            └── GET  /events         ← NDJSON stream drained by CLI to stdout
-```
-
-**Crate map:**
-
-| Crate           | Job                                                                                           |
-| --------------- | --------------------------------------------------------------------------------------------- |
-| `nanny-core`    | Traits (`Policy`, `Ledger`, `ToolExecutor`); the `ExecutionEvent` type                        |
-| `nanny-runtime` | Concrete impls: `FakeLedger`, `LimitsPolicy`, `RuleEvaluator`, `ToolRegistry`, built-in tools |
-| `nanny-bridge`  | HTTP sidecar (Unix socket / TCP); holds all execution state                                   |
-| `nanny-config`  | Parses `nanny.toml`; owns the `NannyConfig` schema                                            |
-| `nanny-macros`  | The `#[tool]`, `#[rule]`, `#[agent]` proc-macros                                              |
-| `nanny` (CLI)   | `nanny run` / `nanny init`; spawns bridge + child; writes event log                           |
+Full reference at **[docs.nanny.run](https://docs.nanny.run)** — quickstart, concepts, CLI reference, `nanny.toml` schema, event log, and Rust SDK guide.
 
 ---
 
 ## Contributing
 
-The codebase is structured to make contributions straightforward.
-
-**Easy wins:**
-
-- **New built-in tools** — add a file under `crates/runtime/src/tools/`, register it in `default_registry()` in `tools/mod.rs`. Use `http_get.rs` as a template.
-- **New stop reasons** — add a variant to `StopReason` in `crates/core/src/agent/state.rs` and update `stop_reason_name()` in the bridge.
-- **Config validation** — `crates/config/src/lib.rs` accepts values like `steps = 0` without complaint; adding range checks with clear error messages would be useful.
-
-**Medium complexity:**
-
-- **Python SDK (v0.2.0)** — the bridge is language-agnostic plain HTTP. A Python client implementing `@tool`, `@rule`, `@agent` decorators is the next major milestone.
-- **`--dry-run` flag** — simulate enforcement and print what _would_ have been stopped, without killing anything.
-- **`nanny status` command** — query a running bridge's `/status` while an agent is executing.
-
-**Core fixes:**
-
-- **`steps` and `cost_spent` in `ExecutionStopped`** — the CLI currently emits `0` for both because it doesn't call `GET /status` before writing the final event. Fix is a single status fetch at the end of `cmd_run` in `crates/cli/src/main.rs`.
-- **Managed mode** — `[runtime] mode = "managed"` is parsed and validated but not yet wired into any runtime behavior.
-
----
-
-## Roadmap
-
-| Version    | Scope                                                                                      |
-| ---------- | ------------------------------------------------------------------------------------------ |
-| **v0.1.0** | Runtime + Rust Macros: `nanny run` + `#[nanny::tool]`, `#[nanny::rule]`, `#[nanny::agent]` |
-| **v0.2.0** | Python SDK: `@tool`, `@rule`, `@agent` — public launch                                     |
-| **v0.3.0** | Cloud: managed enforcement, durable audit log, dashboard                                   |
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
