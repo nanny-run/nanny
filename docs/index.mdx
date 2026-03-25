@@ -1,0 +1,96 @@
+---
+title: Introduction
+description: What Nanny is, what it is not, and when to use it.
+---
+
+Agents spend money. They call tools in loops. They run forever. They go over budget.
+
+**Nanny is the thing that stops them.**
+
+Nanny is an open-source, deterministic execution boundary for autonomous agents and long-running processes. You tell it how far an agent is allowed to go — in steps, cost units, and wall-clock time — and the moment any limit is crossed, nanny kills the process immediately and emits a structured log saying exactly why.
+
+No grace period. No soft warnings. No recovery logic. No negotiation.
+
+Think of it as a **circuit breaker for autonomous systems** — deterministic, auditable, and completely decoupled from the agent itself.
+
+---
+
+## What nanny guarantees
+
+When you run an agent under nanny, these three things are true:
+
+- It **will not** take more steps than you allow.
+- It **will not** spend more than your cost budget.
+- It **will not** run longer than your timeout.
+
+If any limit is breached, Nanny kills the process immediately — the agent cannot catch, delay, or prevent the stop. An `ExecutionStopped` event is emitted with the exact reason, and Nanny exits with a non-zero status code.
+
+---
+
+## What nanny is not
+
+Nanny is not intelligent. It does not understand what your agent is doing, why it is doing it, or whether the result is good.
+
+It does not suggest better limits, summarise results, adapt based on context, or retry on failure.
+
+It is a **primitive** — a hard boundary you configure once and trust completely. This is intentional. The value comes from the guarantee: if you set a limit, it holds.
+
+---
+
+## Who it is for
+
+Nanny is for developers and teams running agents in production — or preparing to.
+
+It is a good fit if you:
+
+- Are running **autonomous agents** that call external tools, browse the web, or write to APIs
+- Need hard guarantees that an agent **cannot exceed a cost budget or run indefinitely**
+- Want a **structured audit trail** of every tool call and stop reason for every execution
+- Are building with **CrewAI, LangChain, or any Python or Rust agent framework**
+- Want enforcement that is **decoupled from your agent code** — no lock-in, no wrapper framework
+
+---
+
+## The nanny ecosystem
+
+Nanny is designed to meet you where you are and grow with you.
+
+**Nanny CLI** — The universal entry point. Wraps any agent process in any language with zero code changes. Install it once as a system tool and use `nanny run` from any project.
+
+```bash
+nanny run python agent.py    # Python agent
+nanny run ./my-agent         # Compiled Rust agent
+```
+
+**Rust SDK** — For Rust agents, go deeper. Annotate individual functions with `#[nanny::tool]`, `#[nanny::rule]`, and `#[nanny::agent]` to get per-function cost accounting, allowlist enforcement, and custom rules. See the [Rust SDK guide](/guides/rust-sdk).
+
+**Python SDK** *(coming v0.2.0)* — The same model as the Rust SDK, as Python decorators. `@tool`, `@rule`, `@agent`. This is the public launch milestone. See [Python SDK](/guides/python-sdk).
+
+**Nanny Cloud** *(coming v0.3.0)* — Durable audit logs, team dashboards, org-level budget aggregation, and managed enforcement across all your agents. The OSS runtime stays unchanged — Cloud is the observability and coordination layer above it.
+
+---
+
+## Open source
+
+The Nanny runtime is fully open source under the **Apache 2.0 licence**.
+
+Source code, issues, and contributions live at [github.com/nanny-run/nanny](https://github.com/nanny-run/nanny). Cloud is the managed layer above the OSS primitive — not a replacement for it.
+
+---
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="bolt" href="/quickstart">
+    Install nanny and run your first governed agent in under five minutes.
+  </Card>
+  <Card title="How it works" icon="cpu" href="/concepts/how-it-works">
+    Understand the enforcement boundary, the bridge, and passthrough mode.
+  </Card>
+  <Card title="nanny.toml reference" icon="file-text" href="/reference/nanny-toml">
+    Full schema for the configuration file.
+  </Card>
+  <Card title="Rust SDK guide" icon="code" href="/guides/rust-sdk">
+    Per-function governance with `#[nanny::tool]`, `#[nanny::rule]`, `#[nanny::agent]`.
+  </Card>
+</CardGroup>

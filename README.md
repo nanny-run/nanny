@@ -41,6 +41,33 @@ You tell nanny "this agent is allowed 100 steps, 1000 cost units, and 30 seconds
 
 Think of it as a circuit breaker for autonomous systems — deterministic, auditable, and completely decoupled from the agent itself.
 
+```mermaid
+flowchart TD
+    CMD(["nanny run python agent.py"])
+    CMD --> NANNY
+
+    subgraph NANNY["Nanny — parent process"]
+        direction LR
+
+        subgraph CHILD["Child process"]
+            AGENT["python agent.py"]
+        end
+
+        subgraph ENFORCE[" "]
+            direction TB
+            STEPS["steps"]
+            COST["cost"]
+            TIMER["timeout"]
+        end
+
+        AGENT -- "tool call" --> ENFORCE
+        ENFORCE -- "✓  allowed" --> AGENT
+    end
+
+    ENFORCE -- "✗  limit reached → killed" --> DEAD(["process exits"])
+    DEAD --> LOG["ExecutionStopped\nreason · steps · cost_spent\n→ stdout"]
+```
+
 ---
 
 ## Who is it for?

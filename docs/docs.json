@@ -1,0 +1,92 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "aspen",
+  "name": "Nanny",
+  "colors": {
+    "primary": "#ff8800",
+    "light": "#ff8800",
+    "dark": "#a64f00"
+  },
+  "favicon": "/favicon.svg",
+  "logo": {
+    "light": "/logo/light.svg",
+    "dark": "/logo/dark.svg"
+  },
+  "appearance": {
+    "default": "dark"
+  },
+  "fonts": {
+    "family": "IBM Plex Mono"
+  },
+  "icons": {
+    "library": "lucide"
+  },
+  "navbar": {
+    "links": [
+      {
+        "type": "github",
+        "href": "https://github.com/nanny-run/nanny"
+      }
+    ],
+    "primary": {
+      "type": "button",
+      "label": "Get Started",
+      "href": "/quickstart"
+    }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Getting Started",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": ["index", "quickstart"]
+          },
+          {
+            "group": "Concepts",
+            "pages": [
+              "concepts/how-it-works",
+              "concepts/limits",
+              "concepts/event-log"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "CLI",
+        "groups": [
+          {
+            "group": "Commands",
+            "pages": ["init", "run"]
+          },
+          {
+            "group": "Reference",
+            "pages": ["reference/nanny-toml", "reference/events"]
+          }
+        ]
+      },
+      {
+        "tab": "Guides",
+        "groups": [
+          {
+            "group": "SDKs",
+            "pages": ["guides/rust-sdk", "guides/python-sdk"]
+          }
+        ]
+      }
+    ],
+    "global": {
+      "anchors": []
+    }
+  },
+  "contextual": {
+    "options": ["copy", "view", "claude"]
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/nanny-run/nanny",
+      "x": "https://x.com/nanny_run"
+    }
+  }
+}
