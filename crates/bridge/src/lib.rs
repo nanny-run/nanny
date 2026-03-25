@@ -14,14 +14,13 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
+use nanny_core::events::event::ExecutionEvent;
 use nanny_core::agent::limits::Limits;
 use nanny_core::agent::state::StopReason;
 use nanny_core::ledger::Ledger;
 use nanny_core::policy::{Policy, PolicyContext, PolicyDecision};
 use nanny_core::tool::{ToolArgs, ToolCallError, ToolExecutor};
-use nanny_ledger::FakeLedger;
-use nanny_policy::{LimitsPolicy, RuleEvaluator};
-use nanny_tools::ToolRegistry;
+use nanny_runtime::{FakeLedger, LimitsPolicy, RuleEvaluator, ToolRegistry};
 
 // ── Error ─────────────────────────────────────────────────────────────────────
 
@@ -116,10 +115,6 @@ struct BridgeState {
 /// `NANNY_BRIDGE_PORT`. Always set `NANNY_SESSION_TOKEN`.
 pub struct Bridge {
     shared: Arc<Mutex<BridgeState>>,
-    // ToolRegistry is read-only after start — kept outside the Mutex so tool
-    // execution never blocks state mutations (e.g. CLI calling stop()).
-    #[allow(dead_code)]
-    registry: Arc<ToolRegistry>,
     /// How the child process connects to the bridge.
     pub address: BridgeAddress,
     /// Session token the child process must present on every request.
@@ -198,7 +193,6 @@ fn start_transport(
 
     Ok(Bridge {
         shared,
-        registry,
         address: BridgeAddress::Unix(socket_path),
         session_token: token,
     })
@@ -221,7 +215,6 @@ fn start_transport(
 
     Ok(Bridge {
         shared,
-        registry,
         address: BridgeAddress::Tcp(47374),
         session_token: token,
     })
@@ -241,6 +234,18 @@ impl Bridge {
         let reason: String = reason.into();
         let mut guard = self.shared.lock().unwrap();
         mark_stopped(&mut guard, &reason);
+    }
+
+    /// Drain all accumulated event lines from the bridge.
+    ///
+    /// Returns the raw NDJSON lines (one serialised JSON object each) in the
+    /// order they were appended and clears the internal buffer.  The CLI calls
+    /// this after execution ends and writes the lines to the event log before
+    /// emitting `ExecutionStopped`, preserving the invariant that
+    /// `ExecutionStopped` is always the final event.
+    pub fn drain_events(&self) -> Vec<String> {
+        let mut guard = self.shared.lock().unwrap();
+        std::mem::take(&mut guard.events)
     }
 }
 
@@ -345,14 +350,16 @@ fn handle_health(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
 fn handle_status(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
     let guard = shared.lock().unwrap();
     let elapsed_ms = guard.start_time.elapsed().as_millis() as u64;
+    let counts_json = serde_json::to_string(&guard.tool_call_counts).unwrap_or_else(|_| "{}".to_string());
+    let history_json = serde_json::to_string(&guard.tool_call_history).unwrap_or_else(|_| "[]".to_string());
     let body = match &guard.execution {
         ExecutionState::Running => format!(
-            r#"{{"state":"running","step":{},"cost_spent":{},"elapsed_ms":{}}}"#,
-            guard.step_count, guard.cost_units_spent, elapsed_ms
+            r#"{{"state":"running","step":{},"cost_spent":{},"elapsed_ms":{},"tool_call_counts":{},"tool_call_history":{}}}"#,
+            guard.step_count, guard.cost_units_spent, elapsed_ms, counts_json, history_json
         ),
         ExecutionState::Stopped { reason } => format!(
-            r#"{{"state":"stopped","reason":"{}","step":{},"cost_spent":{},"elapsed_ms":{}}}"#,
-            reason, guard.step_count, guard.cost_units_spent, elapsed_ms
+            r#"{{"state":"stopped","reason":"{}","step":{},"cost_spent":{},"elapsed_ms":{},"tool_call_counts":{},"tool_call_history":{}}}"#,
+            reason, guard.step_count, guard.cost_units_spent, elapsed_ms, counts_json, history_json
         ),
     };
     BridgeResp::json(200, body)
@@ -397,12 +404,11 @@ fn handle_tool_call(
             let reason_name = stop_reason_name(reason).to_string();
             {
                 let mut guard = shared.lock().unwrap();
-                append_event(&mut guard, serde_json::json!({
-                    "event": "ToolDenied",
-                    "ts": now_ms(),
-                    "tool": &call.tool,
-                    "reason": &reason_name
-                }));
+                append_event(&mut guard, ExecutionEvent::ToolDenied {
+                    ts: now_ms(),
+                    tool: call.tool.clone(),
+                    reason: reason_name.clone(),
+                });
                 mark_stopped(&mut guard, &reason_name);
             }
             BridgeResp::json(200, serde_json::to_string(&denial_from(reason)).unwrap())
@@ -424,11 +430,10 @@ fn handle_tool_call(
                         guard.cost_units_spent += cost;
                         *guard.tool_call_counts.entry(call.tool.clone()).or_insert(0) += 1;
                         guard.tool_call_history.push(call.tool.clone());
-                        append_event(&mut guard, serde_json::json!({
-                            "event": "ToolAllowed",
-                            "ts": now_ms(),
-                            "tool": &call.tool
-                        }));
+                        append_event(&mut guard, ExecutionEvent::ToolAllowed {
+                            ts: now_ms(),
+                            tool: call.tool.clone(),
+                        });
                         if guard.cost_units_spent >= guard.current_limits.max_cost_units {
                             mark_stopped(&mut guard, "BudgetExhausted");
                         }
@@ -450,11 +455,10 @@ fn handle_tool_call(
                         guard.cost_units_spent += cost;
                         *guard.tool_call_counts.entry(call.tool.clone()).or_insert(0) += 1;
                         guard.tool_call_history.push(call.tool.clone());
-                        append_event(&mut guard, serde_json::json!({
-                            "event": "ToolAllowed",
-                            "ts": now_ms(),
-                            "tool": &call.tool
-                        }));
+                        append_event(&mut guard, ExecutionEvent::ToolAllowed {
+                            ts: now_ms(),
+                            tool: call.tool.clone(),
+                        });
                     }
                     BridgeResp::json(200, serde_json::to_string(
                         &ToolCallResponse::Allowed { result: output.content }
@@ -555,11 +559,10 @@ fn handle_step(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
     };
 
     let step_now = guard.step_count;
-    append_event(&mut guard, serde_json::json!({
-        "event": "StepCompleted",
-        "ts": now_ms(),
-        "step": step_now
-    }));
+    append_event(&mut guard, ExecutionEvent::StepCompleted {
+        ts: now_ms(),
+        step: step_now,
+    });
 
     match guard.limits_policy.evaluate(&ctx) {
         PolicyDecision::Deny { reason } => {
@@ -775,28 +778,18 @@ fn stop_reason_name(reason: &StopReason) -> &'static str {
 
 // ── State helpers ─────────────────────────────────────────────────────────────
 
-/// Mark execution as stopped and emit an `ExecutionStopped` event.
+/// Mark execution as stopped.
 /// Idempotent — does nothing if already stopped.
+/// ExecutionStopped is emitted by the CLI, not the bridge.
 fn mark_stopped(state: &mut BridgeState, reason: &str) {
     if matches!(state.execution, ExecutionState::Stopped { .. }) {
         return;
     }
-    let elapsed_ms = state.start_time.elapsed().as_millis() as u64;
     state.execution = ExecutionState::Stopped { reason: reason.to_string() };
-    append_event(state, serde_json::json!({
-        "event": "ExecutionStopped",
-        "ts": now_ms(),
-        "reason": reason,
-        "steps": state.step_count,
-        "cost_spent": state.cost_units_spent,
-        "elapsed_ms": elapsed_ms
-    }));
 }
 
-fn append_event(state: &mut BridgeState, event: serde_json::Value) {
-    if let Ok(s) = serde_json::to_string(&event) {
-        state.events.push(s);
-    }
+fn append_event(state: &mut BridgeState, event: ExecutionEvent) {
+    state.events.push(serde_json::to_string(&event).unwrap());
 }
 
 fn now_ms() -> u64 {
@@ -844,6 +837,21 @@ mod tests {
     fn started(max_cost: u64) -> Bridge {
         let b = Bridge::start(echo_components(max_cost)).unwrap();
         // Small pause to let the server thread reach accept().
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        b
+    }
+
+    /// Bridge with custom allowed tools and an empty registry — exercises
+    /// the user-defined tool path (NotFound → charge cost → return allowed).
+    fn started_with_tools(allowed_tools: Vec<String>, max_cost: u64) -> Bridge {
+        let components = BridgeComponents {
+            registry: ToolRegistry::new(),
+            limits: Limits { max_steps: 100, max_cost_units: max_cost, timeout_ms: 30_000 },
+            named_limits: Default::default(),
+            allowed_tools,
+            per_tool_max_calls: Default::default(),
+        };
+        let b = Bridge::start(components).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
         b
     }
@@ -1327,15 +1335,17 @@ mod tests {
     }
 
     #[test]
-    fn events_contains_execution_stopped_after_stop() {
+    fn events_do_not_contain_execution_stopped_from_bridge() {
+        // ExecutionStopped is emitted by the CLI, not the bridge.
+        // The bridge's event stream must never contain it.
         let b = started(1000);
         b.stop("ManualStop");
         std::thread::sleep(std::time::Duration::from_millis(10));
         let (_, body) = get(&b, "/events");
-        let events: Vec<serde_json::Value> = body.lines()
-            .filter_map(|l| serde_json::from_str(l).ok())
-            .collect();
-        assert!(events.iter().any(|v| v["event"] == "ExecutionStopped"));
+        let has_stopped = body.lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .any(|v| v["event"] == "ExecutionStopped");
+        assert!(!has_stopped, "bridge must not emit ExecutionStopped — that is the CLI's job");
     }
 
     #[test]
@@ -1351,13 +1361,6 @@ mod tests {
         let b = started(1000);
         b.stop("TimeoutExpired");
         b.stop("ManualStop"); // second call is ignored
-        // Events should have exactly one ExecutionStopped
-        let (_, body) = get(&b, "/events");
-        let count = body.lines()
-            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
-            .filter(|v| v["event"] == "ExecutionStopped")
-            .count();
-        assert_eq!(count, 1);
         // Reason is from the first stop, not the second
         assert_eq!(
             json_val(&get(&b, "/health").1)["reason"],
@@ -1436,5 +1439,47 @@ mod tests {
         b.stop("AgentCompleted");
         let (status, _) = http_get(&b.address, "wrong-token", "/health");
         assert_eq!(status, 401);
+    }
+
+    // ── drain_events ──────────────────────────────────────────────────────────
+
+    /// drain_events returns accumulated lines and clears the internal buffer.
+    #[test]
+    fn drain_events_returns_and_clears_events() {
+        let b = started(1000);
+
+        // Trigger a step to produce a StepCompleted event.
+        post(&b, "/step", "{}");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        let lines = b.drain_events();
+        assert!(!lines.is_empty(), "drain must return at least one event after a step");
+
+        // Every line must be valid JSON with an "event" field.
+        for line in &lines {
+            let v: serde_json::Value = serde_json::from_str(line)
+                .unwrap_or_else(|_| panic!("drain_events line is not valid JSON: {line}"));
+            assert!(v.get("event").is_some(), "every drained line must have an 'event' field");
+        }
+
+        // Buffer is now empty.
+        let lines2 = b.drain_events();
+        assert!(lines2.is_empty(), "second drain must return nothing");
+    }
+
+    /// drain_events after a tool call contains a ToolAllowed event.
+    #[test]
+    fn drain_events_contains_tool_allowed_after_call() {
+        let b = started_with_tools(vec!["search_web".to_string()], 1000);
+        post(&b, "/tool/call", r#"{"tool":"search_web","cost":10}"#);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        let lines = b.drain_events();
+        let has_tool_allowed = lines.iter().any(|l| {
+            serde_json::from_str::<serde_json::Value>(l)
+                .map(|v| v["event"] == "ToolAllowed")
+                .unwrap_or(false)
+        });
+        assert!(has_tool_allowed, "drain must contain ToolAllowed after an allowed tool call");
     }
 }

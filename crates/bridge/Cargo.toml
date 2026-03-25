@@ -8,10 +8,8 @@ authors.workspace   = true
 publish     = false   # internal — never published to crates.io
 
 [dependencies]
-nanny-core   = { path = "../core" }
-nanny-policy = { path = "../policy" }
-nanny-ledger = { path = "../ledger" }
-nanny-tools  = { path = "../tools" }
+nanny-core    = { path = "../core" }
+nanny-runtime = { path = "../runtime" }
 uuid         = { workspace = true }
 thiserror    = { workspace = true }
 serde        = { workspace = true }

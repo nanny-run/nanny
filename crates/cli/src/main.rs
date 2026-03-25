@@ -12,6 +12,8 @@ mod runtime;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use nanny_bridge::{Bridge, BridgeAddress, ExecutionState};
+use nanny_core::agent::limits::Limits;
+use nanny_core::events::event::{ExecutionEvent, LimitsSnapshot, now_ms};
 use nanny_core::ledger::Ledger;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -140,11 +142,7 @@ fn cmd_run(config_path: &Path, limits_name: Option<&str>, command: Vec<String>) 
     // ── Open event log ────────────────────────────────────────────────────
     let mut log = events::EventWriter::from_config(&config.observability)?;
 
-    log.write(&events::Event::execution_started(
-        &components.limits,
-        active_set,
-        &command.join(" "),
-    ))?;
+    log.write(&execution_started_event(&components.limits, active_set, &command.join(" ")))?;
 
     // ── Start bridge ──────────────────────────────────────────────────────
     let bridge_components = runtime::build_bridge_components(&config, components.limits.clone());
@@ -170,7 +168,7 @@ fn cmd_run(config_path: &Path, limits_name: Option<&str>, command: Vec<String>) 
         Err(e) => {
             // ExecutionStarted was emitted — always pair it with ExecutionStopped.
             let elapsed_ms = started_at.elapsed().as_millis() as u64;
-            let _ = log.write(&events::Event::execution_stopped("SpawnFailed", 0, 0, elapsed_ms));
+            let _ = log.write(&execution_stopped_event("SpawnFailed", 0, 0, elapsed_ms));
             return Err(e).with_context(|| format!("failed to spawn '{}'", program));
         }
     };
@@ -181,8 +179,17 @@ fn cmd_run(config_path: &Path, limits_name: Option<&str>, command: Vec<String>) 
     // fine enough that a 30-second timeout fires within half a tick.
     // The bridge signals stop (budget, rules, max-steps) independently
     // of the child's own exit — we must check both.
+    //
+    // Bridge events (ToolCalled, ToolAllowed, …) are drained on every tick
+    // so the NDJSON stream is written in near-real-time — `tail -f` on the
+    // log file shows events as they happen, not just at execution end.
     let poll_interval = Duration::from_millis(50);
     let stop_reason: String = loop {
+        // Drain any bridge events accumulated since the last tick.
+        for line in bridge.drain_events() {
+            let _ = log.write_raw(&line);
+        }
+
         // Check bridge first — it may have stopped execution (budget, rules, etc.)
         if let ExecutionState::Stopped { reason } = bridge.execution_state() {
             let _ = child.kill();
@@ -207,15 +214,22 @@ fn cmd_run(config_path: &Path, limits_name: Option<&str>, command: Vec<String>) 
             Err(e) => {
                 // Polling failed — emit stopped before surfacing the error.
                 let elapsed_ms = started_at.elapsed().as_millis() as u64;
-                let _ = log.write(&events::Event::execution_stopped("InternalError", 0, 0, elapsed_ms));
+                let _ = log.write(&execution_stopped_event("InternalError", 0, 0, elapsed_ms));
                 return Err(e).context("failed to poll child process");
             }
         }
     };
 
+    // ── Final event drain ─────────────────────────────────────────────────
+    // Catch any events generated during the stop transition itself (e.g. a
+    // ToolDenied that caused budget exhaustion on the very last bridge call).
+    for line in bridge.drain_events() {
+        let _ = log.write_raw(&line);
+    }
+
     // ── ExecutionStopped event ────────────────────────────────────────────
     let elapsed_ms = started_at.elapsed().as_millis() as u64;
-    log.write(&events::Event::execution_stopped(&stop_reason, 0, 0, elapsed_ms))?;
+    log.write(&execution_stopped_event(&stop_reason, 0, 0, elapsed_ms))?;
 
     // ── Exit code ─────────────────────────────────────────────────────────
     if stop_reason != "AgentCompleted" {
@@ -224,4 +238,29 @@ fn cmd_run(config_path: &Path, limits_name: Option<&str>, command: Vec<String>) 
     }
 
     Ok(())
+}
+
+// ── Event constructors ────────────────────────────────────────────────────────
+
+fn execution_started_event(limits: &Limits, limits_set: &str, command: &str) -> ExecutionEvent {
+    ExecutionEvent::ExecutionStarted {
+        ts: now_ms(),
+        limits: LimitsSnapshot {
+            steps: limits.max_steps,
+            cost: limits.max_cost_units,
+            timeout: limits.timeout_ms,
+        },
+        limits_set: limits_set.to_string(),
+        command: command.to_string(),
+    }
+}
+
+fn execution_stopped_event(reason: &str, steps: u32, cost_spent: u64, elapsed_ms: u64) -> ExecutionEvent {
+    ExecutionEvent::ExecutionStopped {
+        ts: now_ms(),
+        reason: reason.to_string(),
+        steps,
+        cost_spent,
+        elapsed_ms,
+    }
 }

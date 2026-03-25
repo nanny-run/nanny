@@ -64,6 +64,7 @@ mod runtime {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
     use std::time::Instant;
+    use serde_json;
 
     // ── Rule registry ─────────────────────────────────────────────────────────
 
@@ -78,18 +79,12 @@ mod runtime {
     // ── Client-side state ──────────────────────────────────────────────────────
 
     struct ClientState {
-        tool_call_counts:  HashMap<String, u32>,
-        tool_call_history: Vec<String>,
-        start:             Instant,
+        start: Instant,
     }
 
     impl ClientState {
         fn new() -> Self {
-            Self {
-                tool_call_counts:  HashMap::new(),
-                tool_call_history: Vec::new(),
-                start:             Instant::now(),
-            }
+            Self { start: Instant::now() }
         }
     }
 
@@ -128,6 +123,40 @@ mod runtime {
     struct BridgeResponse {
         status: u16,
         body:   String,
+    }
+
+    fn http_get(path: &str) -> Option<BridgeResponse> {
+        let token = session_token();
+        let req = format!(
+            "GET {path} HTTP/1.1\r\n\
+             Host: localhost\r\n\
+             X-Nanny-Session-Token: {token}\r\n\
+             Connection: close\r\n\
+             \r\n"
+        );
+
+        #[cfg(unix)]
+        if let Some(sock) = bridge_socket_path() {
+            use std::io::{Read, Write};
+            use std::os::unix::net::UnixStream;
+            let mut stream = UnixStream::connect(&sock).ok()?;
+            stream.write_all(req.as_bytes()).ok()?;
+            let mut raw = String::new();
+            stream.read_to_string(&mut raw).ok()?;
+            return parse_http_response(&raw);
+        }
+
+        if let Some(port) = bridge_tcp_port() {
+            use std::io::{Read, Write};
+            use std::net::TcpStream;
+            let mut stream = TcpStream::connect(("127.0.0.1", port)).ok()?;
+            stream.write_all(req.as_bytes()).ok()?;
+            let mut raw = String::new();
+            stream.read_to_string(&mut raw).ok()?;
+            return parse_http_response(&raw);
+        }
+
+        None
     }
 
     fn http_post(path: &str, body: &str) -> Option<BridgeResponse> {
@@ -179,16 +208,22 @@ mod runtime {
 
     /// Evaluate all locally-registered rules for `tool_name`.
     /// Returns the name of the first denying rule, or `None` if all allowed.
+    ///
+    /// Fetches `tool_call_counts` and `tool_call_history` from the bridge
+    /// `/status` endpoint — `BridgeState` is the single source of truth.
     pub fn evaluate_local_rules(tool_name: &str) -> Option<&'static str> {
-        let state = client_state().lock().unwrap();
+        let elapsed_ms = client_state().lock().unwrap().start.elapsed().as_millis() as u64;
+
+        // Fetch tracked counts from the bridge (authoritative state).
+        let (tool_call_counts, tool_call_history) = fetch_bridge_counts();
+
         let ctx = PolicyContext {
             requested_tool:    Some(tool_name.to_string()),
-            tool_call_counts:  state.tool_call_counts.clone(),
-            tool_call_history: state.tool_call_history.clone(),
-            elapsed_ms:        state.start.elapsed().as_millis() as u64,
+            tool_call_counts,
+            tool_call_history,
+            elapsed_ms,
             ..PolicyContext::default()
         };
-        drop(state);
 
         for rule in inventory::iter::<Rule> {
             if !(rule.func)(&ctx) {
@@ -198,9 +233,30 @@ mod runtime {
         None
     }
 
+    /// Fetch tool_call_counts and tool_call_history from the bridge /status endpoint.
+    /// Returns empty defaults if the bridge is unreachable or returns unexpected data.
+    fn fetch_bridge_counts() -> (HashMap<String, u32>, Vec<String>) {
+        let resp = match http_get("/status") {
+            Some(r) if r.status == 200 => r,
+            _ => return (HashMap::new(), Vec::new()),
+        };
+        let v: serde_json::Value = match serde_json::from_str(&resp.body) {
+            Ok(v) => v,
+            Err(_) => return (HashMap::new(), Vec::new()),
+        };
+        let counts = v.get("tool_call_counts")
+            .and_then(|c| serde_json::from_value(c.clone()).ok())
+            .unwrap_or_default();
+        let history = v.get("tool_call_history")
+            .and_then(|h| serde_json::from_value(h.clone()).ok())
+            .unwrap_or_default();
+        (counts, history)
+    }
+
     // ── Tool call ─────────────────────────────────────────────────────────────
 
     /// What the bridge decided about a tool call.
+    #[derive(Debug)]
     pub enum ToolVerdict {
         /// Allowed — run the original function body.
         Run,
@@ -213,9 +269,6 @@ mod runtime {
         let body = format!(r#"{{"tool":"{tool_name}","cost":{cost}}}"#);
         match http_post("/tool/call", &body) {
             Some(resp) if resp.status == 200 && resp.body.contains("\"allowed\"") => {
-                let mut state = client_state().lock().unwrap();
-                *state.tool_call_counts.entry(tool_name.to_string()).or_insert(0) += 1;
-                state.tool_call_history.push(tool_name.to_string());
                 ToolVerdict::Run
             }
             Some(resp) if resp.status == 200 => {
