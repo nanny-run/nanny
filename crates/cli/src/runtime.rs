@@ -4,28 +4,22 @@
 // NannyConfig is the source of truth. Every runtime piece is built from it.
 // Same config in → same components out. Always. No hidden state.
 
+use nanny_bridge::BridgeComponents;
 use nanny_config::{resolve_named_limits, ConfigError, NannyConfig};
 use nanny_core::agent::limits::Limits;
-use nanny_ledger::FakeLedger;
-use nanny_policy::{ChainPolicy, LimitsPolicy, RuleEvaluator};
-use nanny_tools::ToolRegistry;
+use nanny_runtime::{FakeLedger, ToolRegistry};
 use std::collections::HashMap;
 
 // ── RuntimeComponents ─────────────────────────────────────────────────────────
 
-/// The fully wired runtime — policy, ledger, and tool registry — ready to run.
+/// The fully wired runtime — limits, ledger, and tool registry — ready to run.
 ///
 /// Every field is derived directly from `NannyConfig`.
 /// Nothing is hardcoded. Nothing comes from ambient state.
+/// Policy enforcement is owned by the bridge (`BridgeComponents`).
 pub struct RuntimeComponents {
     /// Hard limits passed to the Executor.
     pub limits: Limits,
-
-    /// Evaluates every step and tool call.
-    /// LimitsPolicy (hard limits) chained with RuleEvaluator (per-tool rules).
-    /// Transferred to the bridge in v0.2.0.
-    #[allow(dead_code)]
-    pub policy: ChainPolicy<LimitsPolicy, RuleEvaluator>,
 
     /// In-memory budget ledger. Starts at `max_cost_units` and counts down.
     pub ledger: FakeLedger,
@@ -44,11 +38,9 @@ pub struct RuntimeComponents {
 /// The mapping is intentionally explicit — every field traces back to config:
 ///
 /// ```text
-/// config.limits.max_steps      → Limits  → LimitsPolicy (step check)
-/// config.limits.timeout_ms     → Limits  → LimitsPolicy (timeout check)
-/// config.limits.max_cost_units → Limits  → LimitsPolicy (budget check)
-///                                        → FakeLedger   (starting balance)
-/// config.tools.allowed         →           LimitsPolicy (allowlist check)
+/// config.limits.*      → Limits     (passed to bridge for enforcement)
+/// config.limits.*      → FakeLedger (starting balance)
+/// config.tools.*       → ToolRegistry (built-in tool set + cost overrides)
 /// ```
 pub fn build_from_config(config: &NannyConfig) -> RuntimeComponents {
     let limits = Limits {
@@ -88,36 +80,64 @@ pub fn build_from_config_named(
 /// Construct components from a resolved Limits value.
 /// Shared by both build_from_config and build_from_config_named.
 fn build_components(config: &NannyConfig, limits: Limits) -> RuntimeComponents {
-    // LimitsPolicy: hard limits — steps, timeout, budget, tool allowlist.
-    let limits_policy = LimitsPolicy::new(limits.clone(), config.tools.allowed.clone());
-
-    // RuleEvaluator: per-tool rules from [tools.<name>] — currently max_calls.
-    let max_calls: HashMap<String, u32> = config.tools.per_tool
-        .iter()
-        .filter_map(|(name, cfg)| cfg.max_calls.map(|n| (name.clone(), n)))
-        .collect();
-    let rule_evaluator = RuleEvaluator::new(max_calls);
-
-    // Chain: LimitsPolicy runs first; RuleEvaluator only consulted if it allows.
-    let policy = ChainPolicy::new(limits_policy, rule_evaluator);
-
-    // Ledger starts at the full budget. The policy stops execution when
-    // cost_units_spent >= max_cost_units — so the two must be in sync.
+    // Ledger starts at the full budget.
     let ledger = FakeLedger::new(limits.max_cost_units);
 
     // Registry with cost_per_call overrides from [tools.<name>].
-    let mut registry = nanny_tools::default_registry();
+    let mut registry = nanny_runtime::default_registry();
     for (tool_name, tool_cfg) in &config.tools.per_tool {
         if let Some(cost) = tool_cfg.cost_per_call {
             registry.set_cost_override(tool_name, cost);
         }
     }
 
-    RuntimeComponents {
-        limits,
-        policy,
-        ledger,
+    RuntimeComponents { limits, ledger, registry }
+}
+
+// ── build_bridge_components ───────────────────────────────────────────────────
+
+/// Build the `BridgeComponents` the bridge server needs to start.
+///
+/// Resolves every named limits set with full inheritance so `/agent/enter`
+/// can switch contexts without re-reading config.
+pub fn build_bridge_components(config: &NannyConfig, limits: Limits) -> BridgeComponents {
+    // Resolve every named set once, up front.
+    let named_limits: HashMap<String, Limits> = config
+        .limits
+        .named
+        .keys()
+        .filter_map(|name| {
+            resolve_named_limits(config, name).ok().map(|partial| {
+                let l = Limits {
+                    max_steps: partial.max_steps,
+                    max_cost_units: partial.max_cost_units,
+                    timeout_ms: partial.timeout_ms,
+                };
+                (name.clone(), l)
+            })
+        })
+        .collect();
+
+    let per_tool_max_calls: HashMap<String, u32> = config
+        .tools
+        .per_tool
+        .iter()
+        .filter_map(|(name, cfg)| cfg.max_calls.map(|n| (name.clone(), n)))
+        .collect();
+
+    let mut registry = nanny_runtime::default_registry();
+    for (tool_name, tool_cfg) in &config.tools.per_tool {
+        if let Some(cost) = tool_cfg.cost_per_call {
+            registry.set_cost_override(tool_name, cost);
+        }
+    }
+
+    BridgeComponents {
         registry,
+        limits,
+        named_limits,
+        allowed_tools: config.tools.allowed.clone(),
+        per_tool_max_calls,
     }
 }
 
@@ -328,52 +348,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn max_calls_config_wired_into_policy() {
-        use nanny_config::ToolConfig;
-        use nanny_core::policy::{Policy, PolicyContext, PolicyDecision};
-        use nanny_core::agent::state::StopReason;
-
-        let mut per_tool = HashMap::new();
-        per_tool.insert(
-            "http_get".to_string(),
-            ToolConfig { max_calls: Some(2), cost_per_call: None },
-        );
-        let config = NannyConfig {
-            runtime: RuntimeConfig::default(),
-            limits: LimitsConfig {
-                max_steps: 100,
-                max_cost_units: 1000,
-                timeout_ms: 30_000,
-                named: HashMap::new(),
-            },
-            tools: ToolsConfig {
-                allowed: vec!["http_get".to_string()],
-                per_tool,
-            },
-            observability: ObservabilityConfig::default(),
-            managed: None,
-        };
-
-        let components = build_from_config(&config);
-
-        // Two calls already made — third must be denied.
-        let mut counts = HashMap::new();
-        counts.insert("http_get".to_string(), 2u32);
-        let ctx = PolicyContext {
-            requested_tool: Some("http_get".to_string()),
-            tool_call_counts: counts,
-            ..PolicyContext::default()
-        };
-
-        assert!(
-            matches!(
-                components.policy.evaluate(&ctx),
-                PolicyDecision::Deny {
-                    reason: StopReason::RuleDenied { ref rule_name }
-                } if rule_name == "http_get.max_calls"
-            ),
-            "policy must deny when tool_call_counts >= max_calls"
-        );
-    }
 }

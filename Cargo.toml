@@ -2,10 +2,10 @@
 resolver = "2"
 members = [
     "crates/core",
-    "crates/policy",
-    "crates/ledger",
-    "crates/tools",
+    "crates/runtime",
     "crates/config",
+    "crates/bridge",
+    "crates/macros",
     "crates/cli",
 ]
 
@@ -23,6 +23,5 @@ serde_json   = "1"
 toml         = "0.8"
 thiserror    = "1"
 anyhow       = "1"
-chrono       = { version = "0.4", features = ["serde"] }
 uuid         = { version = "1", features = ["v4", "serde"] }
 clap         = { version = "4", features = ["derive"] }

@@ -1,6 +1,6 @@
 [package]
-name        = "nanny-tools"
-description = "Nanny tool trait and built-in tool implementations"
+name        = "nanny-runtime"
+description = "Nanny local runtime — concrete implementations of the nanny-core contracts"
 version.workspace    = true
 edition.workspace    = true
 license.workspace    = true
