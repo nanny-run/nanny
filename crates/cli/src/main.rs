@@ -11,7 +11,7 @@ mod runtime;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use nanny_bridge::{Bridge, ExecutionState};
+use nanny_bridge::{Bridge, BridgeAddress, ExecutionState};
 use nanny_core::ledger::Ledger;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -155,11 +155,16 @@ fn cmd_run(config_path: &Path, limits_name: Option<&str>, command: Vec<String>) 
     let (program, args) = command.split_first()
         .expect("command is non-empty — enforced by clap");
 
-    let mut child = match std::process::Command::new(program)
-        .args(args)
-        .env("NANNY_BRIDGE_PORT", bridge.port.to_string())
-        .env("NANNY_SESSION_TOKEN", &bridge.session_token)
-        .spawn()
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(args);
+    match &bridge.address {
+        #[cfg(unix)]
+        BridgeAddress::Unix(path) => { cmd.env("NANNY_BRIDGE_SOCKET", path); }
+        BridgeAddress::Tcp(port) => { cmd.env("NANNY_BRIDGE_PORT", port.to_string()); }
+    }
+    cmd.env("NANNY_SESSION_TOKEN", &bridge.session_token);
+
+    let mut child = match cmd.spawn()
     {
         Ok(c) => c,
         Err(e) => {

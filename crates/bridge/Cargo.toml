@@ -16,4 +16,8 @@ uuid         = { workspace = true }
 thiserror    = { workspace = true }
 serde        = { workspace = true }
 serde_json   = { workspace = true }
-tiny_http    = "0.12"
+
+# TCP transport — only needed on Windows (non-Unix). On macOS/Linux we use
+# a Unix domain socket, which requires no external crate.
+[target.'cfg(not(unix))'.dependencies]
+tiny_http = "0.12"

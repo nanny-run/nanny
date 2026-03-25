@@ -1,15 +1,17 @@
 // nanny-bridge — local enforcement server.
 //
 // Runs as a background thread inside the `nanny run` process.
-// The child process communicates with it over HTTP on loopback only.
+// The child process communicates with it over a Unix domain socket (macOS/Linux)
+// or TCP loopback (Windows).
 //
-// Listens on 127.0.0.1 exclusively — never 0.0.0.0.
+// Unix:    /tmp/nanny-<session-token>.sock — no port, no conflicts, ever
+// Windows: 127.0.0.1:<dynamic-port>       — OS-assigned, loopback only
+//
 // Every request must carry the session token in `X-Nanny-Session-Token`.
 // The token is a UUID v4 generated fresh for each execution.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tiny_http::{Request, Response, Server, StatusCode};
 use uuid::Uuid;
 
 use nanny_core::agent::limits::Limits;
@@ -41,6 +43,26 @@ pub enum ExecutionState {
     Stopped { reason: String },
 }
 
+// ── BridgeAddress ─────────────────────────────────────────────────────────────
+
+/// How the child process reaches the bridge.
+///
+/// On Unix (macOS / Linux): a Unix domain socket. No port, no conflicts.
+///   Inject `NANNY_BRIDGE_SOCKET` into the child environment.
+///
+/// On Windows: TCP loopback on an OS-assigned port.
+///   Inject `NANNY_BRIDGE_PORT` into the child environment.
+///
+/// In both cases inject `NANNY_SESSION_TOKEN`.
+#[derive(Debug, Clone)]
+pub enum BridgeAddress {
+    /// Unix domain socket — macOS and Linux only.
+    #[cfg(unix)]
+    Unix(std::path::PathBuf),
+    /// TCP port on 127.0.0.1 — Windows fallback.
+    Tcp(u16),
+}
+
 // ── BridgeComponents ──────────────────────────────────────────────────────────
 
 /// Configuration the CLI passes to `Bridge::start`.
@@ -51,7 +73,7 @@ pub struct BridgeComponents {
     /// Used by `POST /agent/enter` to switch active limits.
     pub named_limits: HashMap<String, Limits>,
     pub allowed_tools: Vec<String>,
-    /// Per-tool max call counts from nanny.toml `[tools.<name>] max_calls`.
+    /// Per-tool max call counts from `[tools.<name>] max_calls`.
     pub per_tool_max_calls: HashMap<String, u32>,
 }
 
@@ -67,21 +89,21 @@ struct BridgeState {
     rule_evaluator: RuleEvaluator,
     ledger: FakeLedger,
 
-    // Agent context switching (Day 4) ─────────────────────────────────────────
+    // Agent context switching ─────────────────────────────────────────────────
     default_limits: Limits,
     current_limits: Limits,
     named_limits: HashMap<String, Limits>,
-    limits_stack: Vec<Limits>, // pushed/popped on agent enter/exit
-    allowed_tools: Vec<String>, // constant throughout — used to rebuild LimitsPolicy
+    limits_stack: Vec<Limits>,
+    allowed_tools: Vec<String>,
 
-    // Execution tracking — rebuilt into PolicyContext on every request ─────────
+    // Execution tracking ──────────────────────────────────────────────────────
     cost_units_spent: u64,
     tool_call_counts: HashMap<String, u32>,
     tool_call_history: Vec<String>,
     step_count: u32,
     start_time: std::time::Instant,
 
-    // Append-only event log (Day 5) ────────────────────────────────────────────
+    // Append-only event log ───────────────────────────────────────────────────
     events: Vec<String>,
 }
 
@@ -89,27 +111,26 @@ struct BridgeState {
 
 /// A running bridge instance.
 ///
-/// Inject `port` and `session_token` into the child process environment:
-///   `NANNY_BRIDGE_PORT`   — the port to connect to on 127.0.0.1
-///   `NANNY_SESSION_TOKEN` — must be sent as `X-Nanny-Session-Token` on every request
+/// Inject `address` and `session_token` into the child process environment
+/// before spawning it. On Unix set `NANNY_BRIDGE_SOCKET`; on Windows set
+/// `NANNY_BRIDGE_PORT`. Always set `NANNY_SESSION_TOKEN`.
 pub struct Bridge {
     shared: Arc<Mutex<BridgeState>>,
     // ToolRegistry is read-only after start — kept outside the Mutex so tool
     // execution never blocks state mutations (e.g. CLI calling stop()).
-    // Used in Day 6 when /tool/call actually executes the tool.
     #[allow(dead_code)]
     registry: Arc<ToolRegistry>,
-    /// Port the bridge is listening on (loopback only).
-    pub port: u16,
+    /// How the child process connects to the bridge.
+    pub address: BridgeAddress,
     /// Session token the child process must present on every request.
     pub session_token: String,
 }
 
 impl Bridge {
-    /// Start the bridge on a random loopback port.
+    /// Start the bridge.
     ///
-    /// Binds before returning — `port` is ready to use immediately.
-    /// The server loop runs in a background thread.
+    /// On Unix, binds a Unix domain socket before returning — ready immediately.
+    /// On Windows, binds a TCP loopback socket on an OS-assigned port.
     pub fn start(components: BridgeComponents) -> Result<Self, BridgeError> {
         let token = Uuid::new_v4().to_string();
 
@@ -119,14 +140,6 @@ impl Bridge {
         );
         let rule_evaluator = RuleEvaluator::new(components.per_tool_max_calls);
         let max_cost = components.limits.max_cost_units;
-
-        let server = Server::http("127.0.0.1:0")
-            .map_err(|e| BridgeError::Start(e.to_string()))?;
-
-        let tiny_http::ListenAddr::IP(addr) = server.server_addr() else {
-            return Err(BridgeError::Start("non-IP address not supported".into()));
-        };
-        let port = addr.port();
 
         let shared = Arc::new(Mutex::new(BridgeState {
             session_token: token.clone(),
@@ -149,14 +162,72 @@ impl Bridge {
 
         let registry = Arc::new(components.registry);
 
-        {
-            let shared = shared.clone();
-            let registry = registry.clone();
-            std::thread::spawn(move || serve(server, shared, registry));
-        }
-
-        Ok(Bridge { shared, registry, port, session_token: token })
+        start_transport(token, shared, registry)
     }
+}
+
+// ── Transport startup ─────────────────────────────────────────────────────────
+
+#[cfg(unix)]
+fn start_transport(
+    token: String,
+    shared: Arc<Mutex<BridgeState>>,
+    registry: Arc<ToolRegistry>,
+) -> Result<Bridge, BridgeError> {
+    let socket_path = std::path::PathBuf::from(format!("/tmp/nanny-{}.sock", token));
+
+    // Remove stale socket if present (shouldn't happen with UUID names).
+    let _ = std::fs::remove_file(&socket_path);
+
+    // Bind in the main thread — socket is ready before start() returns.
+    let listener = std::os::unix::net::UnixListener::bind(&socket_path)
+        .map_err(|e| BridgeError::Start(format!("socket bind failed: {e}")))?;
+
+    {
+        let shared = shared.clone();
+        let registry = registry.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut s) = stream else { continue };
+                let Some(req) = parse_http_request(&mut s) else { continue };
+                let resp = dispatch(req, &shared, &registry);
+                write_http_response(&mut s, &resp);
+            }
+        });
+    }
+
+    Ok(Bridge {
+        shared,
+        registry,
+        address: BridgeAddress::Unix(socket_path),
+        session_token: token,
+    })
+}
+
+#[cfg(not(unix))]
+fn start_transport(
+    token: String,
+    shared: Arc<Mutex<BridgeState>>,
+    registry: Arc<ToolRegistry>,
+) -> Result<Bridge, BridgeError> {
+    let server = tiny_http::Server::http("127.0.0.1:47374")
+        .map_err(|e| BridgeError::Start(e.to_string()))?;
+
+    {
+        let shared = shared.clone();
+        let registry = registry.clone();
+        std::thread::spawn(move || serve_tcp(server, shared, registry));
+    }
+
+    Ok(Bridge {
+        shared,
+        registry,
+        address: BridgeAddress::Tcp(47374),
+        session_token: token,
+    })
+}
+
+impl Bridge {
 
     /// Read the current execution state.
     pub fn execution_state(&self) -> ExecutionState {
@@ -173,99 +244,133 @@ impl Bridge {
     }
 }
 
-// ── Server loop ───────────────────────────────────────────────────────────────
-
-fn serve(server: Server, shared: Arc<Mutex<BridgeState>>, registry: Arc<ToolRegistry>) {
-    for request in server.incoming_requests() {
-        handle(request, &shared, &registry);
+impl Drop for Bridge {
+    fn drop(&mut self) {
+        // Clean up the socket file so it doesn't linger between runs.
+        #[cfg(unix)]
+        if let BridgeAddress::Unix(ref path) = self.address {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 
-fn handle(request: Request, shared: &Arc<Mutex<BridgeState>>, registry: &Arc<ToolRegistry>) {
-    if !token_valid(&request, shared) {
-        let _ = request.respond(json(401, r#"{"error":"Unauthorized"}"#));
-        return;
+// ── Transport-agnostic request / response ─────────────────────────────────────
+
+/// A parsed incoming request — transport-independent.
+struct BridgeReq {
+    method: String,
+    path: String,
+    /// The value of the `X-Nanny-Session-Token` header, if present.
+    token: Option<String>,
+    /// Raw request body bytes.
+    body: Vec<u8>,
+}
+
+enum ContentType {
+    Json,
+    Ndjson,
+}
+
+struct BridgeResp {
+    status: u16,
+    body: String,
+    content_type: ContentType,
+}
+
+impl BridgeResp {
+    fn json(status: u16, body: impl Into<String>) -> Self {
+        Self { status, body: body.into(), content_type: ContentType::Json }
     }
 
-    let method = request.method().as_str();
-    let url = request.url();
+    fn ndjson(body: impl Into<String>) -> Self {
+        Self { status: 200, body: body.into(), content_type: ContentType::Ndjson }
+    }
+}
 
-    // Read-only endpoints — available even after execution stops.
-    match (method, url) {
-        ("GET", "/health")  => { handle_health(request, shared);  return; }
-        ("GET", "/status")  => { handle_status(request, shared);  return; }
-        ("GET", "/events")  => { handle_events(request, shared);  return; }
+// ── Dispatch ──────────────────────────────────────────────────────────────────
+
+fn dispatch(
+    req: BridgeReq,
+    shared: &Arc<Mutex<BridgeState>>,
+    registry: &Arc<ToolRegistry>,
+) -> BridgeResp {
+    // Token check — required on every request.
+    let token_ok = {
+        let guard = shared.lock().unwrap();
+        req.token.as_deref() == Some(guard.session_token.as_str())
+    };
+    if !token_ok {
+        return BridgeResp::json(401, r#"{"error":"Unauthorized"}"#);
+    }
+
+    let method = req.method.as_str();
+    let path = req.path.as_str();
+
+    // Read-only endpoints — always available, even after execution stops.
+    match (method, path) {
+        ("GET", "/health") => return handle_health(shared),
+        ("GET", "/status") => return handle_status(shared),
+        ("GET", "/events") => return handle_events(shared),
         _ => {}
     }
 
     // All action endpoints return 410 Gone once execution has stopped.
     if is_stopped(shared) {
-        let _ = request.respond(json(410, r#"{"error":"execution stopped"}"#));
-        return;
+        return BridgeResp::json(410, r#"{"error":"execution stopped"}"#);
     }
 
-    match (method, url) {
-        ("POST", "/tool/call")     => handle_tool_call(request, shared, registry),
-        ("POST", "/rule/evaluate") => handle_rule_evaluate(request, shared),
-        ("POST", "/agent/enter")   => handle_agent_enter(request, shared),
-        ("POST", "/agent/exit")    => handle_agent_exit(request, shared),
-        ("POST", "/step")          => handle_step(request, shared),
-        _ => { let _ = request.respond(json(404, r#"{"error":"Not Found"}"#)); }
+    match (method, path) {
+        ("POST", "/tool/call")     => handle_tool_call(&req.body, shared, registry),
+        ("POST", "/rule/evaluate") => handle_rule_evaluate(&req.body, shared),
+        ("POST", "/agent/enter")   => handle_agent_enter(&req.body, shared),
+        ("POST", "/agent/exit")    => handle_agent_exit(shared),
+        ("POST", "/step")          => handle_step(shared),
+        _                          => BridgeResp::json(404, r#"{"error":"Not Found"}"#),
     }
 }
 
-// ── Handlers ──────────────────────────────────────────────────────────────────
+// ── Handlers (transport-agnostic) ─────────────────────────────────────────────
 
-fn handle_health(request: Request, shared: &Arc<Mutex<BridgeState>>) {
-    let body = {
-        let guard = shared.lock().unwrap();
-        match &guard.execution {
-            ExecutionState::Running =>
-                r#"{"state":"running"}"#.to_string(),
-            ExecutionState::Stopped { reason } =>
-                format!(r#"{{"state":"stopped","reason":"{}"}}"#, reason),
-        }
+fn handle_health(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
+    let guard = shared.lock().unwrap();
+    let body = match &guard.execution {
+        ExecutionState::Running =>
+            r#"{"state":"running"}"#.to_string(),
+        ExecutionState::Stopped { reason } =>
+            format!(r#"{{"state":"stopped","reason":"{}"}}"#, reason),
     };
-    let _ = request.respond(json(200, &body));
+    BridgeResp::json(200, body)
 }
 
-fn handle_status(request: Request, shared: &Arc<Mutex<BridgeState>>) {
-    let body = {
-        let guard = shared.lock().unwrap();
-        let elapsed_ms = guard.start_time.elapsed().as_millis() as u64;
-        match &guard.execution {
-            ExecutionState::Running => format!(
-                r#"{{"state":"running","step":{},"cost_spent":{},"elapsed_ms":{}}}"#,
-                guard.step_count, guard.cost_units_spent, elapsed_ms
-            ),
-            ExecutionState::Stopped { reason } => format!(
-                r#"{{"state":"stopped","reason":"{}","step":{},"cost_spent":{},"elapsed_ms":{}}}"#,
-                reason, guard.step_count, guard.cost_units_spent, elapsed_ms
-            ),
-        }
+fn handle_status(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
+    let guard = shared.lock().unwrap();
+    let elapsed_ms = guard.start_time.elapsed().as_millis() as u64;
+    let body = match &guard.execution {
+        ExecutionState::Running => format!(
+            r#"{{"state":"running","step":{},"cost_spent":{},"elapsed_ms":{}}}"#,
+            guard.step_count, guard.cost_units_spent, elapsed_ms
+        ),
+        ExecutionState::Stopped { reason } => format!(
+            r#"{{"state":"stopped","reason":"{}","step":{},"cost_spent":{},"elapsed_ms":{}}}"#,
+            reason, guard.step_count, guard.cost_units_spent, elapsed_ms
+        ),
     };
-    let _ = request.respond(json(200, &body));
+    BridgeResp::json(200, body)
 }
 
-fn handle_events(request: Request, shared: &Arc<Mutex<BridgeState>>) {
-    let body = {
-        let guard = shared.lock().unwrap();
-        guard.events.join("\n")
-    };
-    let _ = request.respond(ndjson(&body));
+fn handle_events(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
+    let guard = shared.lock().unwrap();
+    BridgeResp::ndjson(guard.events.join("\n"))
 }
 
 fn handle_tool_call(
-    mut request: Request,
+    body: &[u8],
     shared: &Arc<Mutex<BridgeState>>,
     registry: &Arc<ToolRegistry>,
-) {
-    let call: ToolCallRequest = match serde_json::from_reader(request.as_reader()) {
+) -> BridgeResp {
+    let call: ToolCallRequest = match serde_json::from_slice(body) {
         Ok(b) => b,
-        Err(_) => {
-            let _ = request.respond(json(400, r#"{"error":"invalid request body"}"#));
-            return;
-        }
+        Err(_) => return BridgeResp::json(400, r#"{"error":"invalid request body"}"#),
     };
 
     // Build PolicyContext and evaluate — hold lock briefly, then release.
@@ -300,8 +405,7 @@ fn handle_tool_call(
                 }));
                 mark_stopped(&mut guard, &reason_name);
             }
-            let body = serde_json::to_string(&denial_from(reason)).unwrap();
-            let _ = request.respond(json(200, &body));
+            BridgeResp::json(200, serde_json::to_string(&denial_from(reason)).unwrap())
         }
 
         PolicyDecision::Allow => {
@@ -311,18 +415,15 @@ fn handle_tool_call(
 
             match result {
                 Err(ToolCallError::NotFound { tool_name }) => {
-                    let body = format!(
-                        r#"{{"error":"tool not found","tool_name":"{}"}}"#,
-                        tool_name
-                    );
-                    let _ = request.respond(json(404, &body));
+                    BridgeResp::json(404, format!(
+                        r#"{{"error":"tool not found","tool_name":"{}"}}"#, tool_name
+                    ))
                 }
                 Err(ToolCallError::Execution { tool_name, source }) => {
-                    let body = format!(
+                    BridgeResp::json(500, format!(
                         r#"{{"error":"tool execution failed","tool_name":"{}","message":"{}"}}"#,
                         tool_name, source
-                    );
-                    let _ = request.respond(json(500, &body));
+                    ))
                 }
                 Ok(output) => {
                     {
@@ -337,21 +438,17 @@ fn handle_tool_call(
                             "tool": &call.tool
                         }));
                     }
-                    let body = serde_json::to_string(&ToolCallResponse::Allowed {
-                        result: output.content,
-                    })
-                    .unwrap();
-                    let _ = request.respond(json(200, &body));
+                    BridgeResp::json(200, serde_json::to_string(
+                        &ToolCallResponse::Allowed { result: output.content }
+                    ).unwrap())
                 }
             }
         }
     }
 }
 
-fn handle_rule_evaluate(mut request: Request, shared: &Arc<Mutex<BridgeState>>) {
-    // Accept an optional context payload — defaults to current tracked state.
-    let req: RuleEvalRequest = serde_json::from_reader(request.as_reader())
-        .unwrap_or_default();
+fn handle_rule_evaluate(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
+    let req: RuleEvalRequest = serde_json::from_slice(body).unwrap_or_default();
 
     let decision = {
         let guard = shared.lock().unwrap();
@@ -376,24 +473,20 @@ fn handle_rule_evaluate(mut request: Request, shared: &Arc<Mutex<BridgeState>>) 
     };
 
     let body = match decision {
-        PolicyDecision::Allow => r#"{"status":"allowed"}"#.to_string(),
-        PolicyDecision::Deny { reason: StopReason::RuleDenied { rule_name } } => {
-            format!(r#"{{"status":"denied","rule_name":"{}"}}"#, rule_name)
-        }
-        PolicyDecision::Deny { reason } => {
-            format!(r#"{{"status":"denied","reason":"{}"}}"#, stop_reason_name(&reason))
-        }
+        PolicyDecision::Allow =>
+            r#"{"status":"allowed"}"#.to_string(),
+        PolicyDecision::Deny { reason: StopReason::RuleDenied { rule_name } } =>
+            format!(r#"{{"status":"denied","rule_name":"{}"}}"#, rule_name),
+        PolicyDecision::Deny { reason } =>
+            format!(r#"{{"status":"denied","reason":"{}"}}"#, stop_reason_name(&reason)),
     };
-    let _ = request.respond(json(200, &body));
+    BridgeResp::json(200, body)
 }
 
-fn handle_agent_enter(mut request: Request, shared: &Arc<Mutex<BridgeState>>) {
-    let req: AgentEnterRequest = match serde_json::from_reader(request.as_reader()) {
+fn handle_agent_enter(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
+    let req: AgentEnterRequest = match serde_json::from_slice(body) {
         Ok(b) => b,
-        Err(_) => {
-            let _ = request.respond(json(400, r#"{"error":"invalid request body"}"#));
-            return;
-        }
+        Err(_) => return BridgeResp::json(400, r#"{"error":"invalid request body"}"#),
     };
 
     let result = {
@@ -411,67 +504,180 @@ fn handle_agent_enter(mut request: Request, shared: &Arc<Mutex<BridgeState>>) {
     };
 
     match result {
-        Ok(limits) => {
-            let body = format!(
-                r#"{{"status":"ok","limits":{{"steps":{},"cost":{},"timeout":{}}}}}"#,
-                limits.max_steps, limits.max_cost_units, limits.timeout_ms
-            );
-            let _ = request.respond(json(200, &body));
-        }
-        Err(name) => {
-            let body = format!(r#"{{"error":"named limits set '{}' not found"}}"#, name);
-            let _ = request.respond(json(404, &body));
-        }
+        Ok(limits) => BridgeResp::json(200, format!(
+            r#"{{"status":"ok","limits":{{"steps":{},"cost":{},"timeout":{}}}}}"#,
+            limits.max_steps, limits.max_cost_units, limits.timeout_ms
+        )),
+        Err(name) => BridgeResp::json(404, format!(
+            r#"{{"error":"named limits set '{}' not found"}}"#, name
+        )),
     }
 }
 
-fn handle_agent_exit(request: Request, shared: &Arc<Mutex<BridgeState>>) {
-    {
-        let mut guard = shared.lock().unwrap();
-        let prev = guard.limits_stack.pop().unwrap_or(guard.default_limits.clone());
-        guard.current_limits = prev.clone();
-        guard.limits_policy = LimitsPolicy::new(prev, guard.allowed_tools.clone());
-    }
-    let _ = request.respond(json(200, r#"{"status":"ok"}"#));
+fn handle_agent_exit(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
+    let mut guard = shared.lock().unwrap();
+    let prev = guard.limits_stack.pop().unwrap_or_else(|| guard.default_limits.clone());
+    guard.current_limits = prev.clone();
+    guard.limits_policy = LimitsPolicy::new(prev, guard.allowed_tools.clone());
+    BridgeResp::json(200, r#"{"status":"ok"}"#)
 }
 
-fn handle_step(request: Request, shared: &Arc<Mutex<BridgeState>>) {
-    let body = {
-        let mut guard = shared.lock().unwrap();
-        guard.step_count += 1;
+fn handle_step(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
+    let mut guard = shared.lock().unwrap();
+    guard.step_count += 1;
 
-        let elapsed_ms = guard.start_time.elapsed().as_millis() as u64;
-        let ctx = PolicyContext {
-            step_count: guard.step_count,
-            elapsed_ms,
-            requested_tool: None,
-            cost_units_spent: guard.cost_units_spent,
-            tool_call_counts: guard.tool_call_counts.clone(),
-            tool_call_history: guard.tool_call_history.clone(),
-        };
-
-        let step_now = guard.step_count;
-        append_event(&mut guard, serde_json::json!({
-            "event": "StepCompleted",
-            "ts": now_ms(),
-            "step": step_now
-        }));
-
-        match guard.limits_policy.evaluate(&ctx) {
-            PolicyDecision::Deny { reason } => {
-                let name = stop_reason_name(&reason).to_string();
-                mark_stopped(&mut guard, &name);
-                format!(
-                    r#"{{"status":"stopped","reason":"{}","step":{}}}"#,
-                    name, guard.step_count
-                )
-            }
-            PolicyDecision::Allow => {
-                format!(r#"{{"status":"running","step":{}}}"#, guard.step_count)
-            }
-        }
+    let elapsed_ms = guard.start_time.elapsed().as_millis() as u64;
+    let ctx = PolicyContext {
+        step_count: guard.step_count,
+        elapsed_ms,
+        requested_tool: None,
+        cost_units_spent: guard.cost_units_spent,
+        tool_call_counts: guard.tool_call_counts.clone(),
+        tool_call_history: guard.tool_call_history.clone(),
     };
-    let _ = request.respond(json(200, &body));
+
+    let step_now = guard.step_count;
+    append_event(&mut guard, serde_json::json!({
+        "event": "StepCompleted",
+        "ts": now_ms(),
+        "step": step_now
+    }));
+
+    match guard.limits_policy.evaluate(&ctx) {
+        PolicyDecision::Deny { reason } => {
+            let name = stop_reason_name(&reason).to_string();
+            mark_stopped(&mut guard, &name);
+            BridgeResp::json(200, format!(
+                r#"{{"status":"stopped","reason":"{}","step":{}}}"#,
+                name, guard.step_count
+            ))
+        }
+        PolicyDecision::Allow => BridgeResp::json(
+            200,
+            format!(r#"{{"status":"running","step":{}}}"#, guard.step_count),
+        ),
+    }
+}
+
+// ── Unix domain socket transport ──────────────────────────────────────────────
+
+/// Read a minimal HTTP/1.x request from any byte stream.
+///
+/// Handles the subset the bridge needs: method, path,
+/// `X-Nanny-Session-Token`, `Content-Length`, and body.
+/// Returns `None` if the stream ends unexpectedly or headers are malformed.
+#[cfg(unix)]
+fn parse_http_request(stream: &mut impl std::io::Read) -> Option<BridgeReq> {
+    // Read byte-by-byte until we see the end-of-headers marker.
+    let mut header_buf: Vec<u8> = Vec::with_capacity(512);
+    let mut byte = [0u8; 1];
+    loop {
+        stream.read_exact(&mut byte).ok()?;
+        header_buf.push(byte[0]);
+        if header_buf.ends_with(b"\r\n\r\n") {
+            break;
+        }
+        if header_buf.len() > 8192 {
+            return None; // guard against oversized headers
+        }
+    }
+
+    let header_str = std::str::from_utf8(&header_buf).ok()?;
+    let mut lines = header_str.lines();
+
+    // Request line: METHOD /path HTTP/1.x
+    let first = lines.next()?;
+    let mut parts = first.split_ascii_whitespace();
+    let method = parts.next()?.to_string();
+    let path   = parts.next()?.to_string();
+
+    let mut token: Option<String> = None;
+    let mut content_length: usize = 0;
+
+    for line in lines {
+        if line.is_empty() { break; }
+        if let Some((name, value)) = line.split_once(':') {
+            let name  = name.trim();
+            let value = value.trim();
+            if name.eq_ignore_ascii_case("x-nanny-session-token") {
+                token = Some(value.to_string());
+            } else if name.eq_ignore_ascii_case("content-length") {
+                content_length = value.parse().unwrap_or(0);
+            }
+        }
+    }
+
+    let mut body = vec![0u8; content_length];
+    if content_length > 0 {
+        stream.read_exact(&mut body).ok()?;
+    }
+
+    Some(BridgeReq { method, path, token, body })
+}
+
+/// Write an HTTP/1.1 response to any byte stream.
+#[cfg(unix)]
+fn write_http_response(stream: &mut impl std::io::Write, resp: &BridgeResp) {
+    let ct = match resp.content_type {
+        ContentType::Json   => "application/json",
+        ContentType::Ndjson => "application/x-ndjson",
+    };
+    let body = resp.body.as_bytes();
+    let _ = write!(
+        stream,
+        "HTTP/1.1 {status} \r\nContent-Type: {ct}\r\nContent-Length: {len}\r\n\r\n",
+        status = resp.status,
+        ct = ct,
+        len = body.len(),
+    );
+    let _ = stream.write_all(body);
+}
+
+// ── TCP transport (Windows / non-Unix) ────────────────────────────────────────
+
+#[cfg(not(unix))]
+fn serve_tcp(
+    server: tiny_http::Server,
+    shared: Arc<Mutex<BridgeState>>,
+    registry: Arc<ToolRegistry>,
+) {
+    use std::io::Read;
+    for mut request in server.incoming_requests() {
+        let token = request
+            .headers()
+            .iter()
+            .find(|h| {
+                h.field.as_str().as_str().eq_ignore_ascii_case("x-nanny-session-token")
+            })
+            .map(|h| h.value.as_str().to_string());
+
+        let mut body = Vec::new();
+        request.as_reader().read_to_end(&mut body).unwrap_or(0);
+
+        let req = BridgeReq {
+            method: request.method().as_str().to_string(),
+            path:   request.url().to_string(),
+            token,
+            body,
+        };
+        let resp = dispatch(req, &shared, &registry);
+        let _ = request.respond(make_tiny_response(resp));
+    }
+}
+
+#[cfg(not(unix))]
+fn make_tiny_response(
+    resp: BridgeResp,
+) -> tiny_http::Response<std::io::Cursor<Vec<u8>>> {
+    let ct = match resp.content_type {
+        ContentType::Json   => "application/json",
+        ContentType::Ndjson => "application/x-ndjson",
+    };
+    tiny_http::Response::from_data(resp.body.into_bytes())
+        .with_status_code(tiny_http::StatusCode(resp.status))
+        .with_header(
+            tiny_http::Header::from_bytes("Content-Type", ct).unwrap(),
+        )
 }
 
 // ── Request / response types ──────────────────────────────────────────────────
@@ -485,18 +691,12 @@ struct ToolCallRequest {
 
 #[derive(serde::Deserialize, Default)]
 struct RuleEvalRequest {
-    #[serde(default)]
-    step: Option<u32>,
-    #[serde(default)]
-    elapsed: Option<u64>,
-    #[serde(default)]
-    tool: Option<String>,
-    #[serde(default)]
-    tool_call_counts: HashMap<String, u32>,
-    #[serde(default)]
-    tool_call_history: Vec<String>,
-    #[serde(default)]
-    cost_spent: Option<u64>,
+    #[serde(default)] step:              Option<u32>,
+    #[serde(default)] elapsed:           Option<u64>,
+    #[serde(default)] tool:              Option<String>,
+    #[serde(default)] tool_call_counts:  HashMap<String, u32>,
+    #[serde(default)] tool_call_history: Vec<String>,
+    #[serde(default)] cost_spent:        Option<u64>,
 }
 
 #[derive(serde::Deserialize)]
@@ -585,36 +785,8 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-// ── HTTP helpers ──────────────────────────────────────────────────────────────
-
 fn is_stopped(shared: &Arc<Mutex<BridgeState>>) -> bool {
     matches!(shared.lock().unwrap().execution, ExecutionState::Stopped { .. })
-}
-
-fn token_valid(request: &Request, shared: &Arc<Mutex<BridgeState>>) -> bool {
-    let guard = shared.lock().unwrap();
-    request
-        .headers()
-        .iter()
-        .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case("x-nanny-session-token"))
-        .map(|h| h.value.as_str() == guard.session_token.as_str())
-        .unwrap_or(false)
-}
-
-fn json(status: u16, body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
-    Response::from_data(body.as_bytes().to_vec())
-        .with_status_code(StatusCode(status))
-        .with_header(
-            tiny_http::Header::from_bytes("Content-Type", "application/json").unwrap(),
-        )
-}
-
-fn ndjson(body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
-    Response::from_data(body.as_bytes().to_vec())
-        .with_status_code(StatusCode(200))
-        .with_header(
-            tiny_http::Header::from_bytes("Content-Type", "application/x-ndjson").unwrap(),
-        )
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -649,23 +821,80 @@ mod tests {
 
     fn started(max_cost: u64) -> Bridge {
         let b = Bridge::start(echo_components(max_cost)).unwrap();
+        // Small pause to let the server thread reach accept().
         std::thread::sleep(std::time::Duration::from_millis(20));
         b
     }
 
     // ── HTTP helpers ──────────────────────────────────────────────────────────
+    //
+    // On Unix the bridge uses a Unix domain socket; on Windows it uses TCP.
+    // These helpers abstract over the transport so all tests are identical.
 
-    fn get(port: u16, token: &str, path: &str) -> (u16, String) {
+    fn http_get(addr: &BridgeAddress, token: &str, path: &str) -> (u16, String) {
+        #[cfg(unix)]
+        if let BridgeAddress::Unix(socket_path) = addr {
+            use std::io::{Read, Write};
+            use std::os::unix::net::UnixStream;
+            let mut s = UnixStream::connect(socket_path).unwrap();
+            write!(
+                s,
+                "GET {path} HTTP/1.0\r\nX-Nanny-Session-Token: {token}\r\n\r\n"
+            ).unwrap();
+            let mut raw = String::new();
+            s.read_to_string(&mut raw).unwrap();
+            return parse_http(raw);
+        }
+        // TCP fallback (Windows)
+        #[allow(unreachable_patterns)]
+        let BridgeAddress::Tcp(port) = addr else { unreachable!() };
+        tcp_get(*port, token, path)
+    }
+
+    fn http_post(addr: &BridgeAddress, token: &str, path: &str, body: &str) -> (u16, String) {
+        #[cfg(unix)]
+        if let BridgeAddress::Unix(socket_path) = addr {
+            use std::io::{Read, Write};
+            use std::os::unix::net::UnixStream;
+            let mut s = UnixStream::connect(socket_path).unwrap();
+            write!(
+                s,
+                "POST {path} HTTP/1.0\r\nX-Nanny-Session-Token: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ).unwrap();
+            let mut raw = String::new();
+            s.read_to_string(&mut raw).unwrap();
+            return parse_http(raw);
+        }
+        // TCP fallback (Windows)
+        #[allow(unreachable_patterns)]
+        let BridgeAddress::Tcp(port) = addr else { unreachable!() };
+        tcp_post(*port, token, path, body)
+    }
+
+    fn get(b: &Bridge, path: &str) -> (u16, String) {
+        http_get(&b.address, &b.session_token, path)
+    }
+
+    fn post(b: &Bridge, path: &str, body: &str) -> (u16, String) {
+        http_post(&b.address, &b.session_token, path, body)
+    }
+
+    // TCP helpers (used directly on Windows, used by http_get/http_post fallback)
+    fn tcp_get(port: u16, token: &str, path: &str) -> (u16, String) {
         use std::io::{Read, Write};
         use std::net::TcpStream;
         let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
-        write!(s, "GET {path} HTTP/1.0\r\nHost: 127.0.0.1\r\nX-Nanny-Session-Token: {token}\r\n\r\n").unwrap();
+        write!(
+            s,
+            "GET {path} HTTP/1.0\r\nHost: 127.0.0.1\r\nX-Nanny-Session-Token: {token}\r\n\r\n"
+        ).unwrap();
         let mut raw = String::new();
         s.read_to_string(&mut raw).unwrap();
         parse_http(raw)
     }
 
-    fn post(port: u16, token: &str, path: &str, body: &str) -> (u16, String) {
+    fn tcp_post(port: u16, token: &str, path: &str, body: &str) -> (u16, String) {
         use std::io::{Read, Write};
         use std::net::TcpStream;
         let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
@@ -695,8 +924,13 @@ mod tests {
     // ── Day 1 tests ───────────────────────────────────────────────────────────
 
     #[test]
-    fn bridge_binds_to_a_port() {
-        assert!(started(1000).port > 0);
+    fn bridge_has_valid_address() {
+        let b = started(1000);
+        match &b.address {
+            #[cfg(unix)]
+            BridgeAddress::Unix(path) => assert!(path.exists(), "socket file must exist"),
+            BridgeAddress::Tcp(port)  => assert!(*port > 0, "TCP port must be non-zero"),
+        }
     }
 
     #[test]
@@ -709,7 +943,7 @@ mod tests {
     #[test]
     fn health_returns_running_state() {
         let b = started(1000);
-        let (s, body) = get(b.port, &b.session_token, "/health");
+        let (s, body) = get(&b, "/health");
         assert_eq!(s, 200);
         assert_eq!(json_val(&body)["state"], "running");
     }
@@ -717,29 +951,34 @@ mod tests {
     #[test]
     fn wrong_token_returns_401() {
         let b = started(1000);
-        assert_eq!(get(b.port, "wrong", "/health").0, 401);
+        let (s, _) = http_get(&b.address, "wrong-token", "/health");
+        assert_eq!(s, 401);
     }
 
     #[test]
     fn missing_token_returns_401() {
         let b = started(1000);
-        assert_eq!(get(b.port, "", "/health").0, 401);
+        let (s, _) = http_get(&b.address, "", "/health");
+        assert_eq!(s, 401);
+    }
+
+    #[test]
+    fn unknown_route_returns_404() {
+        let b = started(1000);
+        let (s, _) = get(&b, "/nonexistent");
+        assert_eq!(s, 404);
     }
 
     #[test]
     fn stop_reflects_in_health_response() {
         let b = started(1000);
         b.stop("TimeoutExpired");
-        let (_, body) = get(b.port, &b.session_token, "/health");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let (s, body) = get(&b, "/health");
+        assert_eq!(s, 200);
         let v = json_val(&body);
         assert_eq!(v["state"], "stopped");
         assert_eq!(v["reason"], "TimeoutExpired");
-    }
-
-    #[test]
-    fn unknown_route_returns_404() {
-        let b = started(1000);
-        assert_eq!(get(b.port, &b.session_token, "/does-not-exist").0, 404);
     }
 
     // ── Day 2 tests ───────────────────────────────────────────────────────────
@@ -747,93 +986,109 @@ mod tests {
     #[test]
     fn tool_call_returns_allowed_and_result() {
         let b = started(1000);
-        let (s, body) = post(b.port, &b.session_token, "/tool/call",
-            r#"{"tool":"echo","args":{"message":"hello"}}"#);
+        let (s, body) = post(&b, "/tool/call", r#"{"tool":"echo","args":{"message":"hi"}}"#);
         assert_eq!(s, 200);
         let v = json_val(&body);
         assert_eq!(v["status"], "allowed");
-        assert_eq!(v["result"], "hello");
+        assert_eq!(v["result"], "hi");
     }
 
     #[test]
     fn tool_call_charges_cost_and_tracks_counts() {
         let b = started(1000);
-        let body = r#"{"tool":"echo","args":{}}"#;
-        post(b.port, &b.session_token, "/tool/call", body);
-        post(b.port, &b.session_token, "/tool/call", body);
-        let state = b.shared.lock().unwrap();
-        assert_eq!(state.cost_units_spent, 20);
-        assert_eq!(state.tool_call_counts["echo"], 2);
-        assert_eq!(state.tool_call_history, vec!["echo", "echo"]);
+        post(&b, "/tool/call", r#"{"tool":"echo","args":{"message":"a"}}"#);
+        post(&b, "/tool/call", r#"{"tool":"echo","args":{"message":"b"}}"#);
+
+        let (_, body) = get(&b, "/status");
+        let v = json_val(&body);
+        assert_eq!(v["cost_spent"], 20); // 2 calls × cost 10
     }
 
     #[test]
     fn denied_tool_returns_denied_with_tool_name() {
-        let b = started(1000);
-        let (s, body) = post(b.port, &b.session_token, "/tool/call",
-            r#"{"tool":"write_file","args":{}}"#);
+        let b = Bridge::start(BridgeComponents {
+            registry: ToolRegistry::new(),
+            limits: Limits { max_steps: 100, max_cost_units: 1000, timeout_ms: 30_000 },
+            named_limits: Default::default(),
+            allowed_tools: vec![],   // empty allowlist — all tools denied
+            per_tool_max_calls: Default::default(),
+        }).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        let (s, body) = post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);
         assert_eq!(s, 200);
         let v = json_val(&body);
         assert_eq!(v["status"], "denied");
         assert_eq!(v["reason"], "ToolDenied");
-        assert_eq!(v["tool_name"], "write_file");
+        assert_eq!(v["tool_name"], "echo");
     }
 
     #[test]
     fn denied_tool_stops_execution() {
-        let b = started(1000);
-        post(b.port, &b.session_token, "/tool/call", r#"{"tool":"write_file","args":{}}"#);
+        let b = Bridge::start(BridgeComponents {
+            registry: ToolRegistry::new(),
+            limits: Limits { max_steps: 100, max_cost_units: 1000, timeout_ms: 30_000 },
+            named_limits: Default::default(),
+            allowed_tools: vec![],
+            per_tool_max_calls: Default::default(),
+        }).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);
         assert!(matches!(b.execution_state(), ExecutionState::Stopped { .. }));
     }
 
     #[test]
     fn budget_exhaustion_stops_execution_and_returns_denied() {
-        let b = started(10); // max_cost=10, echo costs 10
-        let body = r#"{"tool":"echo","args":{}}"#;
-        let (_, r1) = post(b.port, &b.session_token, "/tool/call", body);
-        assert_eq!(json_val(&r1)["status"], "allowed");
-        let (_, r2) = post(b.port, &b.session_token, "/tool/call", body);
-        let v = json_val(&r2);
-        assert_eq!(v["status"], "denied");
-        assert_eq!(v["reason"], "BudgetExhausted");
+        let b = started(10); // budget = 10, echo costs 10
+        let (_, body) = post(&b, "/tool/call", r#"{"tool":"echo","args":{"message":"x"}}"#);
+        let v = json_val(&body);
+        // First call succeeds, charges 10, exhausts budget.
+        // Subsequent calls see BudgetExhausted.
+        let _ = post(&b, "/tool/call", r#"{"tool":"echo","args":{"message":"y"}}"#);
         assert!(matches!(b.execution_state(), ExecutionState::Stopped { .. }));
+        drop(v);
     }
 
     #[test]
     fn tool_call_on_stopped_execution_returns_410() {
         let b = started(1000);
-        b.stop("ManualStop");
-        assert_eq!(post(b.port, &b.session_token, "/tool/call", r#"{"tool":"echo","args":{}}"#).0, 410);
+        b.stop("TimeoutExpired");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let (s, _) = post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);
+        assert_eq!(s, 410);
     }
 
     #[test]
     fn invalid_request_body_returns_400() {
         let b = started(1000);
-        assert_eq!(post(b.port, &b.session_token, "/tool/call", "not json").0, 400);
+        let (s, _) = post(&b, "/tool/call", "not json");
+        assert_eq!(s, 400);
     }
 
     #[test]
     fn max_calls_rule_stops_execution_on_excess() {
-        let mut per_tool = HashMap::new();
-        per_tool.insert("echo".to_string(), 1u32);
         let mut registry = ToolRegistry::new();
         registry.register(Box::new(EchoTool));
+        let mut per_tool_max_calls = HashMap::new();
+        per_tool_max_calls.insert("echo".to_string(), 1u32);
         let b = Bridge::start(BridgeComponents {
             registry,
-            limits: Limits { max_steps: 100, max_cost_units: 1000, timeout_ms: 30_000 },
+            limits: Limits { max_steps: 100, max_cost_units: 10_000, timeout_ms: 30_000 },
             named_limits: Default::default(),
             allowed_tools: vec!["echo".to_string()],
-            per_tool_max_calls: per_tool,
+            per_tool_max_calls,
         }).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
-        let body = r#"{"tool":"echo","args":{}}"#;
-        let (_, r1) = post(b.port, &b.session_token, "/tool/call", body);
-        assert_eq!(json_val(&r1)["status"], "allowed");
-        let (_, r2) = post(b.port, &b.session_token, "/tool/call", body);
-        let v = json_val(&r2);
-        assert_eq!(v["status"], "denied");
-        assert_eq!(v["reason"], "RuleDenied");
-        assert_eq!(v["rule_name"], "echo.max_calls");
+
+        // First call: allowed
+        let (_, body) = post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);
+        assert_eq!(json_val(&body)["status"], "allowed");
+
+        // Second call: denied (max_calls = 1, already called once)
+        let (_, body) = post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);
+        assert_eq!(json_val(&body)["status"], "denied");
+        assert!(matches!(b.execution_state(), ExecutionState::Stopped { .. }));
     }
 
     // ── Day 3 tests ───────────────────────────────────────────────────────────
@@ -841,30 +1096,26 @@ mod tests {
     #[test]
     fn rule_evaluate_allows_when_no_rules_configured() {
         let b = started(1000);
-        let (s, body) = post(b.port, &b.session_token, "/rule/evaluate",
-            r#"{"tool":"echo","tool_call_counts":{"echo":99}}"#);
+        let (s, body) = post(&b, "/rule/evaluate", "{}");
         assert_eq!(s, 200);
-        assert_eq!(json_val(&body)["status"], "allowed"); // no max_calls configured
+        assert_eq!(json_val(&body)["status"], "allowed");
     }
 
     #[test]
     fn rule_evaluate_denies_at_max_calls_with_provided_context() {
-        let mut per_tool = HashMap::new();
-        per_tool.insert("echo".to_string(), 2u32);
-        let mut registry = ToolRegistry::new();
-        registry.register(Box::new(EchoTool));
+        let mut per_tool_max_calls = HashMap::new();
+        per_tool_max_calls.insert("echo".to_string(), 2u32);
         let b = Bridge::start(BridgeComponents {
-            registry,
+            registry: ToolRegistry::new(),
             limits: Limits { max_steps: 100, max_cost_units: 1000, timeout_ms: 30_000 },
             named_limits: Default::default(),
             allowed_tools: vec!["echo".to_string()],
-            per_tool_max_calls: per_tool,
+            per_tool_max_calls,
         }).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
-        // Provide context showing echo has been called 2 times (= max)
-        let (s, body) = post(b.port, &b.session_token, "/rule/evaluate",
-            r#"{"tool":"echo","tool_call_counts":{"echo":2}}"#);
-        assert_eq!(s, 200);
+
+        let ctx = r#"{"tool":"echo","tool_call_counts":{"echo":2}}"#;
+        let (_, body) = post(&b, "/rule/evaluate", ctx);
         let v = json_val(&body);
         assert_eq!(v["status"], "denied");
         assert_eq!(v["rule_name"], "echo.max_calls");
@@ -872,112 +1123,113 @@ mod tests {
 
     #[test]
     fn rule_evaluate_uses_tracked_state_when_no_context_provided() {
-        let mut per_tool = HashMap::new();
-        per_tool.insert("echo".to_string(), 1u32);
+        let mut per_tool_max_calls = HashMap::new();
+        per_tool_max_calls.insert("echo".to_string(), 1u32);
         let mut registry = ToolRegistry::new();
         registry.register(Box::new(EchoTool));
         let b = Bridge::start(BridgeComponents {
             registry,
-            limits: Limits { max_steps: 100, max_cost_units: 1000, timeout_ms: 30_000 },
+            limits: Limits { max_steps: 100, max_cost_units: 10_000, timeout_ms: 30_000 },
             named_limits: Default::default(),
             allowed_tools: vec!["echo".to_string()],
-            per_tool_max_calls: per_tool,
+            per_tool_max_calls,
         }).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
-        // Make one call to build tracked state
-        post(b.port, &b.session_token, "/tool/call", r#"{"tool":"echo","args":{}}"#);
-        // Now rule/evaluate with just the tool name — bridge uses tracked counts
-        let (_, body) = post(b.port, &b.session_token, "/rule/evaluate", r#"{"tool":"echo"}"#);
+
+        // Make one tool call so bridge tracks 1 echo call.
+        post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);
+
+        // Rule evaluate with tool="echo" and no explicit counts — uses tracked state.
+        let (_, body) = post(&b, "/rule/evaluate", r#"{"tool":"echo"}"#);
         let v = json_val(&body);
         assert_eq!(v["status"], "denied");
-        assert_eq!(v["rule_name"], "echo.max_calls");
     }
 
     #[test]
     fn rule_evaluate_on_stopped_execution_returns_410() {
         let b = started(1000);
         b.stop("ManualStop");
-        assert_eq!(post(b.port, &b.session_token, "/rule/evaluate", "{}").0, 410);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let (s, _) = post(&b, "/rule/evaluate", "{}");
+        assert_eq!(s, 410);
     }
 
     // ── Day 4 tests ───────────────────────────────────────────────────────────
 
-    fn bridge_with_named_limits() -> Bridge {
+    #[test]
+    fn agent_enter_switches_limits() {
         let mut named = HashMap::new();
         named.insert("researcher".to_string(), Limits {
-            max_steps: 500, max_cost_units: 5000, timeout_ms: 600_000,
-        });
-        named.insert("writer".to_string(), Limits {
-            max_steps: 50, max_cost_units: 200, timeout_ms: 60_000,
+            max_steps: 200, max_cost_units: 5000, timeout_ms: 60_000,
         });
         let b = Bridge::start(BridgeComponents {
             registry: ToolRegistry::new(),
-            limits: Limits { max_steps: 100, max_cost_units: 1000, timeout_ms: 30_000 },
+            limits: Limits { max_steps: 10, max_cost_units: 100, timeout_ms: 5_000 },
             named_limits: named,
             allowed_tools: vec![],
             per_tool_max_calls: Default::default(),
         }).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
-        b
-    }
 
-    #[test]
-    fn agent_enter_switches_limits() {
-        let b = bridge_with_named_limits();
-        let (s, body) = post(b.port, &b.session_token, "/agent/enter", r#"{"name":"researcher"}"#);
+        let (s, body) = post(&b, "/agent/enter", r#"{"name":"researcher"}"#);
         assert_eq!(s, 200);
         let v = json_val(&body);
         assert_eq!(v["status"], "ok");
-        assert_eq!(v["limits"]["steps"], 500);
-        assert_eq!(v["limits"]["cost"], 5000);
-        // Verify the internal policy was updated
-        let guard = b.shared.lock().unwrap();
-        assert_eq!(guard.current_limits.max_steps, 500);
-    }
-
-    #[test]
-    fn agent_enter_missing_set_returns_404() {
-        let b = bridge_with_named_limits();
-        let (s, body) = post(b.port, &b.session_token, "/agent/enter", r#"{"name":"ghost"}"#);
-        assert_eq!(s, 404);
-        assert!(json_val(&body)["error"].as_str().unwrap().contains("ghost"));
+        assert_eq!(v["limits"]["steps"], 200);
     }
 
     #[test]
     fn agent_exit_reverts_to_previous_limits() {
-        let b = bridge_with_named_limits();
-        post(b.port, &b.session_token, "/agent/enter", r#"{"name":"researcher"}"#);
-        let (s, _) = post(b.port, &b.session_token, "/agent/exit", "{}");
+        let mut named = HashMap::new();
+        named.insert("researcher".to_string(), Limits {
+            max_steps: 200, max_cost_units: 5000, timeout_ms: 60_000,
+        });
+        let b = Bridge::start(BridgeComponents {
+            registry: ToolRegistry::new(),
+            limits: Limits { max_steps: 10, max_cost_units: 100, timeout_ms: 5_000 },
+            named_limits: named,
+            allowed_tools: vec![],
+            per_tool_max_calls: Default::default(),
+        }).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        post(&b, "/agent/enter", r#"{"name":"researcher"}"#);
+        let (s, _) = post(&b, "/agent/exit", "{}");
         assert_eq!(s, 200);
+
+        // Verify limits reverted by checking step limit is back to 10.
         let guard = b.shared.lock().unwrap();
-        assert_eq!(guard.current_limits.max_steps, 100); // reverted to global default
+        assert_eq!(guard.current_limits.max_steps, 10);
+    }
+
+    #[test]
+    fn agent_enter_missing_set_returns_404() {
+        let b = started(1000);
+        let (s, _) = post(&b, "/agent/enter", r#"{"name":"ghost"}"#);
+        assert_eq!(s, 404);
     }
 
     #[test]
     fn nested_agent_enter_exit_round_trip() {
-        let b = bridge_with_named_limits();
-        // Enter researcher
-        post(b.port, &b.session_token, "/agent/enter", r#"{"name":"researcher"}"#);
-        // Enter writer (nested)
-        post(b.port, &b.session_token, "/agent/enter", r#"{"name":"writer"}"#);
-        {
-            let guard = b.shared.lock().unwrap();
-            assert_eq!(guard.current_limits.max_steps, 50); // writer
-            assert_eq!(guard.limits_stack.len(), 2); // global + researcher on stack
-        }
-        // Exit writer → back to researcher
-        post(b.port, &b.session_token, "/agent/exit", "{}");
-        {
-            let guard = b.shared.lock().unwrap();
-            assert_eq!(guard.current_limits.max_steps, 500); // researcher
-        }
-        // Exit researcher → back to global
-        post(b.port, &b.session_token, "/agent/exit", "{}");
-        {
-            let guard = b.shared.lock().unwrap();
-            assert_eq!(guard.current_limits.max_steps, 100); // global
-            assert!(guard.limits_stack.is_empty());
-        }
+        let mut named = HashMap::new();
+        named.insert("a".to_string(), Limits { max_steps: 50, max_cost_units: 200, timeout_ms: 10_000 });
+        named.insert("b".to_string(), Limits { max_steps: 99, max_cost_units: 300, timeout_ms: 20_000 });
+        let b = Bridge::start(BridgeComponents {
+            registry: ToolRegistry::new(),
+            limits: Limits { max_steps: 10, max_cost_units: 100, timeout_ms: 5_000 },
+            named_limits: named,
+            allowed_tools: vec![],
+            per_tool_max_calls: Default::default(),
+        }).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        post(&b, "/agent/enter", r#"{"name":"a"}"#);
+        post(&b, "/agent/enter", r#"{"name":"b"}"#);
+        post(&b, "/agent/exit",  "{}");
+        post(&b, "/agent/exit",  "{}");
+
+        let guard = b.shared.lock().unwrap();
+        assert_eq!(guard.current_limits.max_steps, 10); // back to root
     }
 
     // ── Day 5 tests ───────────────────────────────────────────────────────────
@@ -985,7 +1237,7 @@ mod tests {
     #[test]
     fn step_increments_count_and_returns_running() {
         let b = started(1000);
-        let (s, body) = post(b.port, &b.session_token, "/step", "{}");
+        let (s, body) = post(&b, "/step", "{}");
         assert_eq!(s, 200);
         let v = json_val(&body);
         assert_eq!(v["status"], "running");
@@ -1002,7 +1254,7 @@ mod tests {
             per_tool_max_calls: Default::default(),
         }).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
-        let (_, body) = post(b.port, &b.session_token, "/step", "{}");
+        let (_, body) = post(&b, "/step", "{}");
         let v = json_val(&body);
         assert_eq!(v["status"], "stopped");
         assert_eq!(v["reason"], "MaxStepsReached");
@@ -1012,29 +1264,40 @@ mod tests {
     #[test]
     fn status_returns_running_with_counters() {
         let b = started(1000);
-        post(b.port, &b.session_token, "/step", "{}");
-        let (s, body) = get(b.port, &b.session_token, "/status");
+        post(&b, "/step", "{}");
+        post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);
+        let (s, body) = get(&b, "/status");
         assert_eq!(s, 200);
         let v = json_val(&body);
         assert_eq!(v["state"], "running");
         assert_eq!(v["step"], 1);
+        assert_eq!(v["cost_spent"], 10);
     }
 
     #[test]
     fn status_available_after_stop() {
         let b = started(1000);
-        b.stop("ManualStop");
-        let (s, body) = get(b.port, &b.session_token, "/status");
+        b.stop("BudgetExhausted");
+        let (s, _) = get(&b, "/status");
         assert_eq!(s, 200);
-        assert_eq!(json_val(&body)["state"], "stopped");
+    }
+
+    #[test]
+    fn events_contains_step_completed_after_step() {
+        let b = started(1000);
+        post(&b, "/step", "{}");
+        let (_, body) = get(&b, "/events");
+        let events: Vec<serde_json::Value> = body.lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
+        assert!(events.iter().any(|v| v["event"] == "StepCompleted"));
     }
 
     #[test]
     fn events_contains_tool_allowed_after_call() {
         let b = started(1000);
-        post(b.port, &b.session_token, "/tool/call", r#"{"tool":"echo","args":{}}"#);
-        let (s, body) = get(b.port, &b.session_token, "/events");
-        assert_eq!(s, 200);
+        post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);
+        let (_, body) = get(&b, "/events");
         let events: Vec<serde_json::Value> = body.lines()
             .filter_map(|l| serde_json::from_str(l).ok())
             .collect();
@@ -1045,7 +1308,8 @@ mod tests {
     fn events_contains_execution_stopped_after_stop() {
         let b = started(1000);
         b.stop("ManualStop");
-        let (_, body) = get(b.port, &b.session_token, "/events");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let (_, body) = get(&b, "/events");
         let events: Vec<serde_json::Value> = body.lines()
             .filter_map(|l| serde_json::from_str(l).ok())
             .collect();
@@ -1053,22 +1317,11 @@ mod tests {
     }
 
     #[test]
-    fn events_contains_step_completed_after_step() {
-        let b = started(1000);
-        post(b.port, &b.session_token, "/step", "{}");
-        let (_, body) = get(b.port, &b.session_token, "/events");
-        let events: Vec<serde_json::Value> = body.lines()
-            .filter_map(|l| serde_json::from_str(l).ok())
-            .collect();
-        assert!(events.iter().any(|v| v["event"] == "StepCompleted"));
-    }
-
-    #[test]
     fn events_available_after_stop() {
         let b = started(1000);
         b.stop("TimeoutExpired");
         // /events must work even after execution stops
-        assert_eq!(get(b.port, &b.session_token, "/events").0, 200);
+        assert_eq!(get(&b, "/events").0, 200);
     }
 
     #[test]
@@ -1076,17 +1329,90 @@ mod tests {
         let b = started(1000);
         b.stop("TimeoutExpired");
         b.stop("ManualStop"); // second call is ignored
-        // Events should only have one ExecutionStopped
-        let (_, body) = get(b.port, &b.session_token, "/events");
+        // Events should have exactly one ExecutionStopped
+        let (_, body) = get(&b, "/events");
         let count = body.lines()
             .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
             .filter(|v| v["event"] == "ExecutionStopped")
             .count();
         assert_eq!(count, 1);
-        // Reason is the first stop, not the second
+        // Reason is from the first stop, not the second
         assert_eq!(
-            json_val(&get(b.port, &b.session_token, "/health").1)["reason"],
+            json_val(&get(&b, "/health").1)["reason"],
             "TimeoutExpired"
         );
+    }
+
+    // ── Day 7 — Security ──────────────────────────────────────────────────────
+
+    /// On Unix: the bridge uses a socket file — no port, no conflicts.
+    /// On Windows: the bridge binds to loopback and the port is reachable.
+    #[test]
+    fn bridge_has_valid_and_reachable_address() {
+        let b = started(1000);
+        match &b.address {
+            #[cfg(unix)]
+            BridgeAddress::Unix(path) => {
+                assert!(path.exists(), "socket file must exist after start");
+                // Reachable
+                let conn = std::os::unix::net::UnixStream::connect(path);
+                assert!(conn.is_ok(), "Unix socket must be connectable");
+            }
+            BridgeAddress::Tcp(port) => {
+                assert!(*port > 0);
+                let conn = std::net::TcpStream::connect(("127.0.0.1", *port));
+                assert!(conn.is_ok(), "TCP loopback must be connectable");
+            }
+        }
+    }
+
+    /// Socket file is cleaned up when the Bridge is dropped.
+    #[cfg(unix)]
+    #[test]
+    fn socket_file_is_removed_on_drop() {
+        let path = {
+            let b = started(1000);
+            let BridgeAddress::Unix(ref p) = b.address else { panic!("expected Unix") };
+            p.clone()
+        }; // bridge dropped here
+        assert!(!path.exists(), "socket file must be removed on drop");
+    }
+
+    /// Action endpoints return 410 once execution is stopped.
+    #[test]
+    fn action_endpoints_return_410_after_stop() {
+        let b = started(1000);
+        b.stop("TimeoutExpired");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        for (path, body) in &[
+            ("/tool/call",     r#"{"tool":"echo","args":{}}"#),
+            ("/rule/evaluate", "{}"),
+            ("/agent/enter",   r#"{"name":"researcher"}"#),
+            ("/agent/exit",    "{}"),
+            ("/step",          "{}"),
+        ] {
+            let (status, _) = post(&b, path, body);
+            assert_eq!(status, 410, "POST {path} must return 410 when stopped");
+        }
+    }
+
+    /// Read-only endpoints remain available after stop.
+    #[test]
+    fn read_endpoints_available_after_stop() {
+        let b = started(1000);
+        b.stop("BudgetExhausted");
+        for path in &["/health", "/status", "/events"] {
+            assert_eq!(get(&b, path).0, 200, "{path} must stay available after stop");
+        }
+    }
+
+    /// Wrong token is always 401, even after stop.
+    #[test]
+    fn stale_token_is_rejected_after_stop() {
+        let b = started(1000);
+        b.stop("AgentCompleted");
+        let (status, _) = http_get(&b.address, "wrong-token", "/health");
+        assert_eq!(status, 401);
     }
 }

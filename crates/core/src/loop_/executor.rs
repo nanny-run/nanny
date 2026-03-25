@@ -177,7 +177,6 @@ impl Executor {
                 cost_units_spent: ledger.total_debited(),
                 tool_call_counts: self.tool_call_counts.clone(),
                 tool_call_history: self.tool_call_history.clone(),
-                ..PolicyContext::default()
             };
 
             // ── Ask the policy ────────────────────────────────────────────────
@@ -251,7 +250,6 @@ impl Executor {
                         cost_units_spent: ledger.total_debited(),
                         tool_call_counts: self.tool_call_counts.clone(),
                         tool_call_history: self.tool_call_history.clone(),
-                        ..PolicyContext::default()
                     };
 
                     match policy.evaluate(&tool_context) {
