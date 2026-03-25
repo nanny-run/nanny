@@ -42,7 +42,7 @@ These are design decisions, not bugs:
 
 **Do not open a public GitHub issue.** Public disclosure before a fix is in place puts users at risk.
 
-Send a report to **security@nanny.run** with:
+Send a report to **say-hi@nanny.run** with:
 
 1. A description of the vulnerability and the affected component
 2. Steps to reproduce (minimal reproduction preferred)
