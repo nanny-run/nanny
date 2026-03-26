@@ -127,30 +127,34 @@ jobs:
         run: |
           # Publish in topological order — each crate before its dependants.
           # Idempotent: skips crates already on crates.io (safe to re-run).
+          # Output streams directly to the log so errors are always visible.
           publish() {
-            local crate=$1
-            local attempt=1
-            local max=5
-            while [ $attempt -le $max ]; do
-              output=$(cargo publish -p "$crate" --no-verify 2>&1)
-              local status=$?
-              if [ $status -eq 0 ]; then
+            local crate="$1"
+            local attempt=1 max=5
+            while [ "$attempt" -le "$max" ]; do
+              echo "--- Publishing $crate (attempt $attempt/$max) ---"
+              set +e
+              cargo publish -p "$crate" --no-verify 2>&1 | tee /tmp/cp-out.txt
+              local rc=${PIPESTATUS[0]}
+              set -e
+              if [ "$rc" -eq 0 ]; then
                 echo "Published $crate"
                 return 0
-              elif echo "$output" | grep -q "already exists"; then
+              fi
+              if grep -q "already exists" /tmp/cp-out.txt; then
                 echo "Skipping $crate — already published"
                 return 0
-              elif echo "$output" | grep -qE "no matching package|failed to select a version|not yet available"; then
-                echo "Waiting for crates.io index to catch up (attempt $attempt/$max)..."
-                sleep 20
+              fi
+              if grep -qE "no matching package|failed to select a version|not yet available|crate .* is not yet available" /tmp/cp-out.txt; then
+                echo "Index not ready — sleeping 30s (attempt $attempt/$max)..."
+                sleep 30
                 attempt=$((attempt + 1))
               else
-                echo "ERROR publishing $crate:" >&2
-                echo "$output" >&2
+                echo "=== FATAL: cargo publish $crate exited $rc ===" >&2
                 exit 1
               fi
             done
-            echo "ERROR: $crate failed after $max attempts" >&2
+            echo "=== FATAL: $crate failed after $max attempts ===" >&2
             exit 1
           }
           publish nanny-core
@@ -158,4 +162,7 @@ jobs:
           publish nanny-macros
           publish nanny-runtime
           publish nanny-bridge
+          # Wait for crates.io to index all dependency crates before publishing nannyd.
+          echo "Waiting 45s for crates.io index to propagate..."
+          sleep 45
           publish nannyd
