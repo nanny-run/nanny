@@ -91,17 +91,17 @@ jobs:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          git clone https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/nanny-run/homebrew-tap.git tap
-          mkdir -p tap/Formula
+          git clone --depth=1 https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/nanny-run/homebrew-nanny.git tap
           cp homebrew/nannyd.rb tap/Formula/nannyd.rb
-          sed -i "s/version \"[^\"]*\"/version \"${VERSION}\"/" tap/Formula/nannyd.rb
-          sed -i "s/SHA256_MACOS_ARM64/${{ steps.sha.outputs.macos_arm64 }}/" tap/Formula/nannyd.rb
-          sed -i "s/SHA256_MACOS_X86_64/${{ steps.sha.outputs.macos_x86_64 }}/" tap/Formula/nannyd.rb
-          sed -i "s/SHA256_LINUX_X86_64/${{ steps.sha.outputs.linux }}/" tap/Formula/nannyd.rb
+          sed -i.bak "s/version \"[^\"]*\"/version \"${VERSION}\"/" tap/Formula/nannyd.rb
+          sed -i.bak "s/{{SHA256_MACOS_ARM64}}/${{ steps.sha.outputs.macos_arm64 }}/" tap/Formula/nannyd.rb
+          sed -i.bak "s/{{SHA256_MACOS_X86_64}}/${{ steps.sha.outputs.macos_x86_64 }}/" tap/Formula/nannyd.rb
+          sed -i.bak "s/{{SHA256_LINUX_X86_64}}/${{ steps.sha.outputs.linux }}/" tap/Formula/nannyd.rb
+          rm tap/Formula/nannyd.rb.bak
           git -C tap config user.email "noreply@nanny.run"
           git -C tap config user.name "Nanny Release Bot"
           git -C tap add Formula/nannyd.rb
-          git -C tap commit -m "nannyd ${VERSION}"
+          git -C tap diff --quiet || git -C tap commit -m "nannyd ${VERSION}"
           git -C tap push
 
   publish-crates:
