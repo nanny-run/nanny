@@ -1,0 +1,24 @@
+# nanny.toml — qabud (code review agent)
+# Run: nanny run -- ./src
+
+[runtime]
+mode = "local"
+
+[start]
+cmd = "cargo run --release"
+
+[limits]
+steps   = 20
+cost    = 400
+timeout = 60000
+
+[tools]
+# Only read_file is permitted — write_file, exec, etc. are all denied.
+allowed = ["read_file"]
+
+[tools.read_file]
+max_calls     = 10
+cost_per_call = 10
+
+[observability]
+log = "stdout"

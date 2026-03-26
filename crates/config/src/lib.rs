@@ -42,6 +42,11 @@ pub struct NannyConfig {
     #[serde(default)]
     pub runtime: RuntimeConfig,
 
+    /// How to launch the project. `nanny run` always reads this — extra args
+    /// passed after `--` are appended to `cmd`.
+    #[serde(default)]
+    pub start: Option<StartConfig>,
+
     /// Hard limits that govern every execution under this config.
     pub limits: LimitsConfig,
 
@@ -81,6 +86,24 @@ pub enum Mode {
 
     /// Managed mode. Runtime still enforces locally but sends facts to the orchestrator.
     Managed,
+}
+
+// ── StartConfig ───────────────────────────────────────────────────────────────
+
+/// Project start configuration — how to launch the agent under nanny enforcement.
+///
+/// ```toml
+/// [start]
+/// cmd = "python agent.py"
+/// ```
+///
+/// `nanny run` always reads `cmd`, splits it by whitespace, then appends any
+/// extra args passed after `--`. There is no inline command form.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StartConfig {
+    /// The command to run. Split by whitespace into program + args.
+    /// Example: "cargo run --release" → ["cargo", "run", "--release"]
+    pub cmd: String,
 }
 
 // ── LimitsConfig ─────────────────────────────────────────────────────────────
@@ -288,6 +311,19 @@ pub fn default_toml() -> &'static str {
 # In local mode, all enforcement happens on this machine with no network calls.
 mode = "local"
 
+# Cloud orchestrator config — only read when mode = "managed".
+#
+# [managed]
+# endpoint = "https://api.nanny.run"
+# org_id   = "org_123"
+# api_key  = "nny_live_xxx"
+
+[start]
+# How to launch your agent.
+# nanny run          → runs this command
+# nanny run -- arg   → runs this command with arg appended
+cmd = "python agent.py"
+
 [limits]
 # Maximum number of steps before the agent is stopped.
 steps = 100
@@ -301,8 +337,7 @@ cost = 1000
 timeout = 30000
 
 # Named limit sets inherit from [limits] and override only what they declare.
-# Activate with: nanny run system.py --limits=researcher
-# In Python (v0.2.0): @agent("researcher")
+# Activate with: nanny run --limits=researcher
 #
 # [limits.researcher]
 # steps   = 500
@@ -328,13 +363,6 @@ log = "stdout"
 # Uncomment to write events to a file instead:
 # log      = "file"
 # log_file = "nanny.log"
-
-# Cloud orchestrator config — only read when mode = "managed".
-#
-# [managed]
-# endpoint = "https://api.nanny.run"
-# org_id   = "org_123"
-# api_key  = "nny_live_xxx"
 "#
 }
 
@@ -515,6 +543,49 @@ timeout = 5000
         .expect("must parse");
 
         assert!(config.managed.is_none());
+    }
+
+    #[test]
+    fn start_section_is_parsed() {
+        let config: NannyConfig = toml::from_str(
+            r#"
+[start]
+cmd = "cargo run --release"
+
+[limits]
+steps   = 10
+cost    = 100
+timeout = 5000
+"#,
+        )
+        .expect("must parse");
+
+        let start = config.start.expect("[start] must be present");
+        assert_eq!(start.cmd, "cargo run --release");
+    }
+
+    #[test]
+    fn start_section_is_optional() {
+        let config: NannyConfig = toml::from_str(
+            r#"
+[limits]
+steps   = 10
+cost    = 100
+timeout = 5000
+"#,
+        )
+        .expect("must parse — [start] is optional");
+
+        assert!(config.start.is_none());
+    }
+
+    #[test]
+    fn default_toml_includes_start_section() {
+        let config: NannyConfig =
+            toml::from_str(default_toml()).expect("default_toml() must always be valid TOML");
+
+        let start = config.start.expect("default_toml() must include [start]");
+        assert_eq!(start.cmd, "python agent.py");
     }
 
     #[test]
