@@ -76,7 +76,8 @@ fn main() {
     };
 
     if let Err(e) = result {
-        eprintln!("error: {e}");
+        // {e:#} prints the full anyhow error chain: "context: cause: root cause"
+        eprintln!("error: {e:#}");
         std::process::exit(1);
     }
 }
@@ -245,7 +246,13 @@ fn cmd_run(config_path: &Path, limits_name: Option<&str>, extra_args: Vec<String
 
     // ── ExecutionStopped event ────────────────────────────────────────────
     let elapsed_ms = started_at.elapsed().as_millis() as u64;
-    log.write(&execution_stopped_event(&stop_reason, 0, 0, elapsed_ms))?;
+    let metrics = bridge.metrics();
+    log.write(&execution_stopped_event(
+        &stop_reason,
+        metrics.step_count,
+        metrics.cost_units_spent,
+        elapsed_ms,
+    ))?;
 
     // ── Exit code ─────────────────────────────────────────────────────────
     if stop_reason != "AgentCompleted" {

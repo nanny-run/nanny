@@ -215,6 +215,7 @@ fn expand_agent(input: ItemFn, name_lit: LitStr) -> syn::Result<TokenStream2> {
     let inputs   = &sig.inputs;
     let output   = &sig.output;
     let where_cl = &sig.generics.where_clause;
+    let is_async = sig.asyncness.is_some();
 
     // Check: method receivers are not supported.
     if inputs.iter().any(|a| matches!(a, FnArg::Receiver(_))) {
@@ -227,15 +228,23 @@ fn expand_agent(input: ItemFn, name_lit: LitStr) -> syn::Result<TokenStream2> {
 
     let forward_args = forward_arg_names(inputs)?;
 
+    // For async functions the inner impl and its call sites must also be async.
+    let async_kw  = if is_async { quote!(async) } else { quote!() };
+    let call_impl = if is_async {
+        quote!(__nanny_impl(#(#forward_args),*).await)
+    } else {
+        quote!(__nanny_impl(#(#forward_args),*))
+    };
+
     Ok(quote! {
         #(#attrs)*
         #vis #sig {
-            fn __nanny_impl #generics (#inputs) #output #where_cl {
+            #async_kw fn __nanny_impl #generics (#inputs) #output #where_cl {
                 #body
             }
 
             if !::nanny::__private::is_active() {
-                return __nanny_impl(#(#forward_args),*);
+                return #call_impl;
             }
 
             ::nanny::__private::agent_enter(#name_lit);
@@ -249,7 +258,7 @@ fn expand_agent(input: ItemFn, name_lit: LitStr) -> syn::Result<TokenStream2> {
             }
             let __guard = __NannyAgentGuard;
 
-            let __result = __nanny_impl(#(#forward_args),*);
+            let __result = #call_impl;
             drop(__guard);
             __result
         }

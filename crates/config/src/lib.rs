@@ -227,7 +227,7 @@ pub enum LogTarget {
 ///
 /// Only active when [runtime] mode = "managed".
 /// This section is config, not a switch — the switch is runtime.mode.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ManagedConfig {
     /// Cloud API endpoint.
     pub endpoint: String,
@@ -235,8 +235,23 @@ pub struct ManagedConfig {
     /// Your organization ID.
     pub org_id: String,
 
-    /// Your API key. Keep this out of version control.
+    /// Your API key. Keep this out of version control — never log or print it.
+    ///
+    /// Intentionally excluded from serialization so a round-trip through
+    /// `serde_json` / `toml` does not accidentally re-emit the key.
+    #[serde(skip_serializing)]
     pub api_key: String,
+}
+
+/// Redacts `api_key` so it never appears in logs, panic messages, or test output.
+impl std::fmt::Debug for ManagedConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ManagedConfig")
+            .field("endpoint", &self.endpoint)
+            .field("org_id",   &self.org_id)
+            .field("api_key",  &"[redacted]")
+            .finish()
+    }
 }
 
 // ── Load ──────────────────────────────────────────────────────────────────────
@@ -259,7 +274,18 @@ pub fn load(path: &Path) -> Result<NannyConfig, ConfigError> {
 
     let contents = std::fs::read_to_string(path)?;
 
-    toml::from_str(&contents).map_err(|e| ConfigError::Parse(e.to_string()))
+    toml::from_str(&contents).map_err(|e| {
+        let msg = e.to_string();
+        // Surface actionable hints for the most common config mistakes.
+        let hint = if msg.contains("missing field `cmd`") {
+            " — add `cmd = \"<your command>\"` under [start]"
+        } else if msg.contains("missing field") && msg.contains("start") {
+            " — add a [start] section with `cmd = \"<your command>\"`"
+        } else {
+            ""
+        };
+        ConfigError::Parse(format!("{msg}{hint}"))
+    })
 }
 
 // ── Named limits resolution ───────────────────────────────────────────────────

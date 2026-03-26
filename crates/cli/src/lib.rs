@@ -323,6 +323,11 @@ mod tests {
 
     #[test]
     fn inactive_when_no_env_vars() {
+        // SAFETY: std::env::remove_var is unsound when other threads are
+        // reading the environment concurrently (deprecated in Rust 1.85).
+        // This test runs in a single-threaded harness with no other env
+        // readers, so the mutation is safe here. Do not copy this pattern
+        // into multi-threaded production code.
         unsafe {
             std::env::remove_var("NANNY_BRIDGE_SOCKET");
             std::env::remove_var("NANNY_BRIDGE_PORT");
