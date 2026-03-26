@@ -1,0 +1,214 @@
+---
+title: Rust
+description: Per-function governance for Rust agents using Nanny macros.
+---
+
+The Rust SDK brings Nanny's enforcement boundary into your code. Instead of relying only on process-level limits, you mark individual functions as tools and rules — Nanny then governs each call through the bridge.
+
+---
+
+## Installation
+
+The SDK ships inside the same crate as the CLI binary. Add it to your project:
+
+```bash
+cargo add nannyd
+```
+
+Then import what you need:
+
+```rust
+use nanny::{tool, rule, agent, PolicyContext};
+```
+
+---
+
+## Passthrough mode
+
+If your agent runs without `nanny run`, every macro is a no-op. The function executes normally — no bridge call, no overhead:
+
+```bash
+# Governed — bridge active, limits enforced
+nanny run cargo run
+
+# Not governed — macros silent, agent runs normally
+cargo run
+```
+
+This is safe to ship to production. The instrumentation only activates when `nanny run` is present.
+
+---
+
+## `#[tool]` — declare a governed tool
+
+Mark a function as a tool that Nanny should track and charge against the budget:
+
+```rust
+use nanny::tool;
+
+#[tool(cost = 10)]
+fn fetch_page(url: &str) -> String {
+    // HTTP call, file read, LLM call, or any side-effecting operation
+    reqwest::blocking::get(url).unwrap().text().unwrap()
+}
+```
+
+When the agent calls `fetch_page`:
+
+1. Nanny checks: is `fetch_page` in the `[tools] allowed` list?
+2. Nanny checks: has `fetch_page` exceeded `[tools.fetch_page] max_calls`?
+3. Nanny charges 10 cost units against the budget.
+4. If any check fails, execution stops immediately — the function body never runs.
+
+### Cost
+
+The `cost` argument is required. It is the number of cost units charged per call.
+Set it to `0` for tools you want tracked but not charged:
+
+```rust
+#[tool(cost = 0)]
+fn log_step(msg: &str) { ... }
+```
+
+### Matching the tool allowlist
+
+The tool name used for allowlist checks is the **function name** as declared in Rust:
+
+```toml
+# nanny.toml
+[tools]
+allowed = ["fetch_page", "read_file"]
+
+[tools.fetch_page]
+max_calls     = 20
+cost_per_call = 10   # nanny.toml cost overrides the macro default
+```
+
+---
+
+## `#[rule]` — declare an enforcement rule
+
+A rule is a function that returns a verdict on whether execution should continue.
+Return `true` to allow, `false` to deny:
+
+```rust
+use nanny::{rule, PolicyContext};
+
+#[rule("no_spiral")]
+fn check_spiral(ctx: &PolicyContext) -> bool {
+    let h = &ctx.tool_call_history;
+    // Deny if the last three tool calls were all the same URL
+    !(h.len() >= 3 && h[h.len()-3..].iter().all(|u| u == &h[h.len()-1]))
+}
+```
+
+Rules are evaluated on every tool call. When a rule returns `false`, Nanny stops execution with:
+
+```
+StopReason::RuleDenied { rule_name: "no_spiral" }
+```
+
+### PolicyContext fields
+
+The `ctx` parameter gives you a snapshot of the current execution state:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `step_count` | `u32` | Number of steps completed |
+| `elapsed_ms` | `u64` | Wall-clock time elapsed |
+| `cost_units_spent` | `u64` | Total cost units spent so far |
+| `tool_call_counts` | `HashMap<String, u32>` | Per-tool call counts |
+| `tool_call_history` | `Vec<String>` | Ordered log of tool names called |
+| `requested_tool` | `Option<String>` | The tool being evaluated right now |
+| `last_tool_args` | `HashMap<String, String>` | Arguments of the most recent tool call |
+
+Rules are evaluated **before** the tool runs — `requested_tool` is set to the tool name being checked.
+
+---
+
+## `#[agent]` — activate named limits for a scope
+
+Mark a function to run under a named limit set from `nanny.toml`.
+When the function is entered, Nanny switches to those limits; when it exits, limits revert:
+
+```rust
+use nanny::agent;
+
+#[agent("researcher")]
+fn run_research(topic: &str) {
+    // This runs under [limits.researcher] from nanny.toml
+    let page = fetch_page(&format!("https://en.wikipedia.org/wiki/{topic}"));
+    // ...
+}
+```
+
+```toml
+# nanny.toml
+[limits.researcher]
+steps   = 200
+cost    = 5000
+timeout = 120000
+```
+
+The named set inherits from `[limits]` and overrides only the declared fields.
+Nesting `#[agent]` functions is supported — limits revert to the caller's set on exit.
+
+---
+
+## Complete example
+
+```rust
+use nanny::{tool, rule, agent, PolicyContext};
+use std::collections::HashMap;
+
+#[tool(cost = 10)]
+fn fetch_page(url: &str) -> String {
+    reqwest::blocking::get(url).unwrap().text().unwrap()
+}
+
+#[rule("no_spiral")]
+fn check_spiral(ctx: &PolicyContext) -> bool {
+    let h = &ctx.tool_call_history;
+    !(h.len() >= 3 && h[h.len()-3..].iter().all(|u| u == &h[h.len()-1]))
+}
+
+#[agent("researcher")]
+fn research(topic: &str) -> Vec<String> {
+    let mut pages = Vec::new();
+    let mut url = format!("https://en.wikipedia.org/wiki/{topic}");
+
+    loop {
+        let content = fetch_page(&url);
+        pages.push(content.clone());
+        // extract next URL from content ...
+        break;
+    }
+
+    pages
+}
+
+fn main() {
+    let results = research("Alan Turing");
+    println!("Collected {} pages", results.len());
+}
+```
+
+Run it under Nanny:
+
+```bash
+nanny run cargo run
+```
+
+Run it without Nanny (macros silent, agent runs normally):
+
+```bash
+cargo run
+```
+
+---
+
+## What happens on stop
+
+When Nanny stops execution inside an instrumented function, the macro propagates the stop signal by panicking with a structured message. The panic is caught by the Nanny runtime — your agent process exits cleanly with a non-zero code and an `ExecutionStopped` event in the log.
+
+You do not need to handle stop reasons in your agent code. Nanny handles the exit path.

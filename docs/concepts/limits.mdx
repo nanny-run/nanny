@@ -1,0 +1,87 @@
+---
+title: Limits & Enforcement
+description: How steps, cost, and timeout work — and how to configure them.
+---
+
+## The three limit types
+
+Every Nanny execution is governed by three independent limits. Any one of them can stop a run.
+
+### Timeout
+
+The wall-clock time limit in milliseconds. The moment the child process has been running
+for `timeout` ms, Nanny kills it — regardless of what it's doing.
+
+```toml
+[limits]
+timeout = 30000   # 30 seconds
+```
+
+Timeout enforcement requires no instrumentation — it works for any process in any language.
+
+### Steps
+
+The maximum number of agent steps allowed. Requires `#[nanny::tool]` (Rust) or `@tool` (Python) to report tool calls.
+
+```toml
+[limits]
+steps = 100
+```
+
+### Cost
+
+The maximum number of cost units the agent may spend. Each tool declares its cost per call;
+Nanny tracks the running total and stops the moment the budget is exhausted.
+
+```toml
+[limits]
+cost = 1000
+```
+
+## Named limit sets
+
+A single `nanny.toml` can hold multiple limit sets for different workloads.
+
+```toml
+[limits]
+steps   = 50
+cost    = 500
+timeout = 15000
+
+[limits.researcher]
+steps   = 200
+cost    = 5000
+timeout = 120000
+
+[limits.quick]
+timeout = 5000
+```
+
+Named sets **inherit** from `[limits]` and override only the fields you declare.
+In the example above, `[limits.quick]` inherits `steps = 50` and `cost = 500`
+from the base and only changes `timeout`.
+
+Activate a named set at runtime:
+
+```bash
+nanny run --limits=researcher python agent.py
+nanny run --limits=quick python agent.py
+```
+
+## What happens when a limit is hit
+
+1. Nanny kills the child process immediately — no grace period, no way for the agent to catch or delay the stop.
+2. An `ExecutionStopped` event is emitted with the reason.
+3. A human-readable message is printed to stderr: `nanny: stopped — TimeoutExpired`.
+4. Nanny exits with code `1`.
+
+The stop reasons are:
+
+| Reason | Trigger |
+|--------|-------|
+| `AgentCompleted` | Process exited cleanly on its own |
+| `TimeoutExpired` | Wall-clock timeout exceeded |
+| `MaxStepsReached` | Step limit hit |
+| `BudgetExhausted` | Cost budget exhausted |
+| `ToolDenied` | Tool not in allowlist |
+| `RuleDenied` | Custom rule returned denial |

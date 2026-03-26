@@ -1,0 +1,17 @@
+[package]
+name        = "nanny-macros"
+description = "Proc-macro attributes for nanny — re-exported via the nanny crate"
+publish              = false   # internal — re-exported via nanny crate, never published independently
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+repository.workspace = true
+authors.workspace    = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn        = { version = "2", features = ["full"] }
+quote      = "1"
+proc-macro2 = "1"

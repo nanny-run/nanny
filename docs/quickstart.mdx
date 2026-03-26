@@ -1,0 +1,118 @@
+---
+title: Quickstart
+description: Install Nanny, configure limits, and run your first enforced process in under five minutes.
+---
+
+## Install
+
+The Nanny CLI is a system tool — install it once and use `nanny run` from any project.
+
+<Tabs>
+  <Tab title="macOS">
+    ```bash
+    brew install nannyd
+    ```
+  </Tab>
+  <Tab title="Linux">
+    ```bash
+    curl -fsSL https://install.nanny.run | sh
+    ```
+  </Tab>
+  <Tab title="Rust toolchain (all platforms)">
+    ```bash
+    cargo install nannyd
+    ```
+  </Tab>
+</Tabs>
+
+Verify the installation:
+
+```bash
+nanny --version
+```
+
+## Initialise a config
+
+Run this in the root of your project:
+
+```bash
+nanny init
+```
+
+This writes a `nanny.toml` with safe defaults:
+
+```toml
+[runtime]
+mode = "local"
+
+[limits]
+steps   = 100
+cost    = 1000
+timeout = 30000
+```
+
+Edit the values to match your agent's requirements.
+
+## Run your agent
+
+<Tabs>
+  <Tab title="Python">
+    ```bash
+    nanny run python agent.py
+    ```
+  </Tab>
+  <Tab title="Rust">
+    ```bash
+    nanny run ./my-agent
+    ```
+  </Tab>
+</Tabs>
+
+Nanny reads `nanny.toml` from the current directory, spawns the process, and kills it the moment any limit is crossed.
+
+## Use named limits
+
+Define limit sets for different workloads in the same `nanny.toml`:
+
+```toml
+[limits]
+steps   = 50
+cost    = 500
+timeout = 15000
+
+[limits.researcher]
+steps   = 200
+cost    = 5000
+timeout = 120000
+```
+
+Then activate a named set at runtime:
+
+```bash
+nanny run --limits=researcher python agent.py
+```
+
+Named sets inherit from `[limits]` and override only the fields you declare.
+
+## Read the event log
+
+Every run emits structured NDJSON to stdout:
+
+```json
+{"event":"ExecutionStarted","ts":1711234567000,"limits":{"steps":100,"cost":1000,"timeout":30000},"limits_set":"[limits]","command":"python agent.py"}
+{"event":"ExecutionStopped","ts":1711234572000,"reason":"AgentCompleted","steps":7,"cost_spent":70,"elapsed_ms":4823}
+```
+
+Pipe it to a file or your log aggregator:
+
+```bash
+nanny run python agent.py >> nanny.log
+```
+
+Or configure file output directly in `nanny.toml`:
+
+```toml
+[observability]
+log      = "file"
+log_file = "nanny.log"
+```

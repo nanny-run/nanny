@@ -10,6 +10,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -18,13 +19,19 @@ fn nanny_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_nanny"))
 }
 
+static COUNTER: AtomicU64 = AtomicU64::new(0);
+
 /// Creates a unique temp dir for each test run.
+///
+/// Uses timestamp + monotonic counter to stay unique even when two tests
+/// start within the same OS clock tick (common on macOS under parallelism).
 fn temp_dir() -> PathBuf {
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let dir = std::env::temp_dir().join(format!("nanny_test_{ts}"));
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("nanny_test_{ts}_{seq}"));
     fs::create_dir_all(&dir).unwrap();
     dir
 }
@@ -159,5 +166,44 @@ log = "stdout"
     assert!(
         stderr.contains("TimeoutExpired"),
         "stderr must contain 'TimeoutExpired' for named limits timeout\ngot: {stderr}"
+    );
+}
+
+/// Bridge events (ToolCalled, ToolAllowed, …) are flushed into the NDJSON
+/// stream before ExecutionStopped, so ExecutionStopped is always the last line.
+///
+/// This test uses `echo` as the child command — it exits immediately without
+/// making any bridge tool calls, so no per-tool events are produced.  The key
+/// assertion is structural: every line is valid JSON and ExecutionStopped is last.
+#[test]
+fn execution_stopped_is_always_last_line() {
+    let dir = temp_dir();
+    write_config(&dir, 30_000);
+
+    let output = Command::new(nanny_bin())
+        .args(["--config", &config_arg(&dir), "run", "echo", "nanny-test"])
+        .output()
+        .expect("failed to run nanny");
+
+    let _ = fs::remove_dir_all(&dir);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines()
+        .filter(|l| l.trim_start().starts_with('{'))
+        .collect();
+
+    assert!(!lines.is_empty(), "stdout must contain at least one NDJSON line");
+
+    // Every line must be valid JSON.
+    for line in &lines {
+        serde_json::from_str::<serde_json::Value>(line)
+            .unwrap_or_else(|_| panic!("stdout line is not valid JSON: {line}"));
+    }
+
+    // ExecutionStopped must be the very last JSON line.
+    let last: serde_json::Value = serde_json::from_str(lines.last().unwrap()).unwrap();
+    assert_eq!(
+        last["event"], "ExecutionStopped",
+        "ExecutionStopped must be the last NDJSON line; got: {last}"
     );
 }

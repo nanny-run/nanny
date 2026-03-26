@@ -1,6 +1,7 @@
 [package]
 name        = "nanny-core"
-description = "Nanny execution loop, state machine, and event system"
+description = "Core traits and types for the nanny execution boundary"
+publish     = false
 version.workspace    = true
 edition.workspace    = true
 license.workspace    = true
@@ -10,5 +11,3 @@ repository.workspace = true
 serde      = { workspace = true }
 serde_json = { workspace = true }
 thiserror  = { workspace = true }
-chrono     = { workspace = true }
-uuid       = { workspace = true }

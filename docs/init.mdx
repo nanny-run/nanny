@@ -1,0 +1,57 @@
+---
+title: nanny init
+description: Scaffold a nanny.toml configuration file in the current directory.
+---
+
+Writes a `nanny.toml` with safe defaults into the current working directory.
+
+```bash
+nanny init
+```
+
+---
+
+## What it does
+
+Creates a `nanny.toml` with conservative defaults that work for most agents out of the box:
+
+```toml
+[runtime]
+mode = "local"
+
+[limits]
+steps   = 100
+cost    = 1000
+timeout = 30000
+```
+
+After running `nanny init`, edit the values to match your agent's actual requirements before running.
+
+---
+
+## Flags
+
+`nanny init` takes no flags. It always writes to the current working directory.
+
+---
+
+## Errors
+
+| Condition | Behaviour |
+| --------- | --------- |
+| `nanny.toml` already exists | Exits with an error. Does not overwrite. |
+| No write permission in current directory | Exits with an error. |
+
+To reset a config, delete `nanny.toml` and run `nanny init` again.
+
+---
+
+## Next step
+
+Once your config is in place, run your agent:
+
+```bash
+nanny run python agent.py
+```
+
+See [nanny run](/run) for the full command reference.

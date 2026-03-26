@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 jobs:
   build:
@@ -36,19 +36,20 @@ jobs:
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: nanny
+          key: ${{ matrix.target }}
 
       - name: Build release binary
         run: cargo build --release --bin nanny --target ${{ matrix.target }}
-        working-directory: nanny
 
-      - name: Rename artifact
-        run: cp nanny/target/${{ matrix.target }}/release/nanny ${{ matrix.artifact }}
+      - name: Package artifact
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../${{ matrix.artifact }}.tar.gz nanny
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.tar.gz
 
   release:
     name: Publish GitHub Release
@@ -57,26 +58,25 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+          merge-multiple: true
 
-      - name: Create release
+      - name: Compute SHA256s
+        id: sha
+        run: |
+          echo "linux=$(sha256sum artifacts/nanny-linux-x86_64.tar.gz | awk '{print $1}')" >> $GITHUB_OUTPUT
+          echo "macos_x86_64=$(sha256sum artifacts/nanny-macos-x86_64.tar.gz | awk '{print $1}')" >> $GITHUB_OUTPUT
+          echo "macos_arm64=$(sha256sum artifacts/nanny-macos-arm64.tar.gz | awk '{print $1}')" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            artifacts/nanny-linux-x86_64/nanny-linux-x86_64
-            artifacts/nanny-macos-x86_64/nanny-macos-x86_64
-            artifacts/nanny-macos-arm64/nanny-macos-arm64
+          files: artifacts/*.tar.gz
           generate_release_notes: true
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-=======
-=======
->>>>>>> Stashed changes
-=======
->>>>>>> Stashed changes
           prerelease: ${{ contains(github.ref_name, '-rc') }}
 
       - name: Update homebrew tap
@@ -106,4 +106,3 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish -p nannyd
->>>>>>> Stashed changes

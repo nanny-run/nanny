@@ -1,0 +1,91 @@
+---
+title: nanny run
+description: Run a command under Nanny enforcement.
+---
+
+Spawns a child process under full Nanny enforcement. Reads `nanny.toml` from the current directory and kills the process the moment any limit is crossed.
+
+```bash
+nanny run [OPTIONS] <COMMAND> [ARGS...]
+```
+
+---
+
+## Examples
+
+```bash
+# Run with base [limits]
+nanny run python agent.py
+
+# Run with a named limit set
+nanny run --limits=researcher python agent.py
+
+# Pass flags to the child command (use -- to separate nanny flags from command flags)
+nanny run -- python agent.py --verbose --output results.json
+
+# Use a config file in a non-standard location
+nanny run --config=./config/nanny.toml python agent.py
+```
+
+---
+
+## Options
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--limits=<name>` | string | — | Activate a named limit set from `nanny.toml`. Inherits from `[limits]`. |
+| `--config=<path>` | path | `./nanny.toml` | Path to config file. |
+
+---
+
+## Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Process exited cleanly (`AgentCompleted`) |
+| `1` | Nanny stopped the process, a spawn failure occurred, or an internal error occurred |
+
+---
+
+## Stderr
+
+When Nanny stops a process it prints the reason to stderr:
+
+```
+nanny: stopped — TimeoutExpired
+nanny: stopped — BudgetExhausted
+nanny: stopped — MaxStepsReached
+nanny: stopped — ToolDenied
+nanny: stopped — RuleDenied
+```
+
+This message is separate from the structured event log, which goes to stdout (or a configured file).
+
+---
+
+## Event log
+
+Every run emits [NDJSON events](/concepts/event-log) to stdout. `ExecutionStarted` is always first; `ExecutionStopped` is always last:
+
+```json
+{"event":"ExecutionStarted","ts":1711234567000,"limits":{"steps":100,"cost":1000,"timeout":30000},"limits_set":"[limits]","command":"python agent.py"}
+{"event":"ToolAllowed","ts":1711234567120,"tool":"http_get"}
+{"event":"StepCompleted","ts":1711234567800,"step":1}
+{"event":"ExecutionStopped","ts":1711234572000,"reason":"BudgetExhausted","steps":12,"cost_spent":1000,"elapsed_ms":5000}
+```
+
+Pipe to a file to keep your agent's own output separate:
+
+```bash
+nanny run python agent.py > nanny.log
+```
+
+---
+
+## What `nanny run` does not do
+
+- It does not retry. A stop is final.
+- It does not interpret what your agent is doing. It only counts and times.
+- It does not require any changes to your agent code. Any binary works.
+
+For per-function governance (marking individual tools and rules in code), see the [Rust SDK guide](/guides/rust-sdk).
