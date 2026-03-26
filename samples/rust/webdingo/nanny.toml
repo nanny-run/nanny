@@ -14,6 +14,12 @@ steps   = 15
 cost    = 300
 timeout = 30000
 
+[limits.researcher]
+# Limit set activated by agent_enter("researcher") in src/main.rs.
+steps   = 15
+cost    = 300
+timeout = 30000
+
 [limits.deep]
 # Extended research run — more steps, higher budget, longer timeout.
 # Activate with: nanny run --limits=deep -- "topic"
