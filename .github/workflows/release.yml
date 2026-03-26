@@ -71,7 +71,10 @@ jobs:
           generate_release_notes: true
 <<<<<<< Updated upstream
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
 =======
+=======
+>>>>>>> Stashed changes
 =======
 >>>>>>> Stashed changes
           prerelease: ${{ contains(github.ref_name, '-rc') }}
