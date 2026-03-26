@@ -163,6 +163,8 @@ async fn research_inner(topic: &str) -> Result<String> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    dotenvy::dotenv().ok();
+
     let topic = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "best Rust HTTP client crates 2024".to_string());

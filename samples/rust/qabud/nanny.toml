@@ -16,7 +16,7 @@ timeout = 60000
 # Limit set activated by agent_enter("reviewer") in src/main.rs.
 steps   = 20
 cost    = 400
-timeout = 60000
+timeout = 50000
 
 [tools]
 # Only read_file is permitted — write_file, exec, etc. are all denied.

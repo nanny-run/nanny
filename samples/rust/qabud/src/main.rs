@@ -193,6 +193,8 @@ fn collect_rs_recursive(dir: &Path, depth: usize, out: &mut Vec<String>) {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    dotenvy::dotenv().ok();
+
     let dir = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "./src".to_string());
