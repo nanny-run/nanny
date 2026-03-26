@@ -21,16 +21,12 @@ jobs:
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: nanny
 
       - name: Build
         run: cargo build --workspace
-        working-directory: nanny
 
       - name: Test
         run: cargo test --workspace
-        working-directory: nanny
 
   clippy:
     name: Clippy
@@ -45,9 +41,6 @@ jobs:
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: nanny
 
       - name: Clippy
         run: cargo clippy --workspace -- -D warnings
-        working-directory: nanny

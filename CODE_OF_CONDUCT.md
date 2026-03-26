@@ -40,8 +40,8 @@ Maintainers have the right and responsibility to remove, edit, or reject comment
 
 ## Reporting
 
-If you witness or experience behaviour that violates this standard, report it privately to the maintainers at **conduct@nanny.run**. Reports are handled confidentially. We will respond within 72 hours.
+If you witness or experience behaviour that violates this standard, report it privately to the maintainers at **say-hi@nanny.run**. Reports are handled confidentially. We will respond within 72 hours.
 
 ---
 
-*This Code of Conduct applies to the Nanny OSS project. It is not a legal document — it is a social contract between people who share a goal.*
+_This Code of Conduct applies to the Nanny OSS project. It is not a legal document — it is a social contract between people who share a goal._

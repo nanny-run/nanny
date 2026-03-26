@@ -64,7 +64,6 @@ mod runtime {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
     use std::time::Instant;
-    use serde_json;
 
     // ── Rule registry ─────────────────────────────────────────────────────────
 
