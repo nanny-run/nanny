@@ -213,9 +213,10 @@ fn cmd_run(config_path: &Path, limits_name: Option<&str>, extra_args: Vec<String
         }
 
         match child.try_wait() {
-            Ok(Some(_)) => {
-                bridge.stop("AgentCompleted");
-                break "AgentCompleted".to_string();
+            Ok(Some(status)) => {
+                let reason = if status.success() { "AgentCompleted" } else { "ProcessCrashed" };
+                bridge.stop(reason);
+                break reason.to_string();
             }
             Ok(None) => {
                 if started_at.elapsed() >= timeout {
