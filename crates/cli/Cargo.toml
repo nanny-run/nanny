@@ -1,5 +1,5 @@
 [package]
-name        = "nanny"
+name        = "nannyd"
 description = "Nanny — execution boundary for AI agents. CLI (nanny run) and Rust SDK (#[tool], #[rule], #[agent])."
 version.workspace    = true
 edition.workspace    = true
