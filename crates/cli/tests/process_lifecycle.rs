@@ -36,10 +36,13 @@ fn temp_dir() -> PathBuf {
     dir
 }
 
-fn write_config(dir: &Path, timeout_ms: u64) {
+fn write_config(dir: &Path, timeout_ms: u64, cmd: &str) {
     let toml = format!(
         r#"[runtime]
 mode = "local"
+
+[start]
+cmd = "{cmd}"
 
 [limits]
 steps   = 100
@@ -66,10 +69,10 @@ fn config_arg(dir: &Path) -> String {
 #[test]
 fn fast_exit_completes_cleanly() {
     let dir = temp_dir();
-    write_config(&dir, 30_000);
+    write_config(&dir, 30_000, "echo hello");
 
     let output = Command::new(nanny_bin())
-        .args(["--config", &config_arg(&dir), "run", "echo", "hello"])
+        .args(["--config", &config_arg(&dir), "run"])
         .output()
         .expect("failed to run nanny");
 
@@ -94,10 +97,10 @@ fn fast_exit_completes_cleanly() {
 #[test]
 fn timeout_kills_process_and_exits_nonzero() {
     let dir = temp_dir();
-    write_config(&dir, 300); // 300 ms — well below `sleep 60`
+    write_config(&dir, 300, "sleep 60"); // 300 ms timeout — well below `sleep 60`
 
     let output = Command::new(nanny_bin())
-        .args(["--config", &config_arg(&dir), "run", "sleep", "60"])
+        .args(["--config", &config_arg(&dir), "run"])
         .output()
         .expect("failed to run nanny");
 
@@ -130,6 +133,9 @@ fn named_limits_timeout_is_enforced() {
 [runtime]
 mode = "local"
 
+[start]
+cmd = "sleep 60"
+
 [limits]
 steps   = 100
 cost    = 1000
@@ -150,7 +156,6 @@ log = "stdout"
         .args([
             "--config", &config_arg(&dir),
             "run", "--limits=fast",
-            "sleep", "60",
         ])
         .output()
         .expect("failed to run nanny");
@@ -178,10 +183,10 @@ log = "stdout"
 #[test]
 fn execution_stopped_is_always_last_line() {
     let dir = temp_dir();
-    write_config(&dir, 30_000);
+    write_config(&dir, 30_000, "echo nanny-test");
 
     let output = Command::new(nanny_bin())
-        .args(["--config", &config_arg(&dir), "run", "echo", "nanny-test"])
+        .args(["--config", &config_arg(&dir), "run"])
         .output()
         .expect("failed to run nanny");
 
@@ -205,5 +210,43 @@ fn execution_stopped_is_always_last_line() {
     assert_eq!(
         last["event"], "ExecutionStopped",
         "ExecutionStopped must be the last NDJSON line; got: {last}"
+    );
+}
+
+/// Missing [start] section exits non-zero with a clear error message.
+#[test]
+fn missing_start_section_exits_nonzero_with_message() {
+    let dir = temp_dir();
+    fs::write(
+        dir.join("nanny.toml"),
+        r#"[runtime]
+mode = "local"
+
+[limits]
+steps   = 10
+cost    = 100
+timeout = 5000
+
+[observability]
+log = "stdout"
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(nanny_bin())
+        .args(["--config", &config_arg(&dir), "run"])
+        .output()
+        .expect("failed to run nanny");
+
+    let _ = fs::remove_dir_all(&dir);
+
+    assert!(
+        !output.status.success(),
+        "nanny must exit non-zero when [start] is missing"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("no start config"),
+        "stderr must mention 'no start config'; got: {stderr}"
     );
 }

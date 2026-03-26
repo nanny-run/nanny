@@ -70,53 +70,16 @@ flowchart TD
 
 ---
 
-## Who is it for?
-
-Nanny is for developers and teams running agents in production — or preparing to.
-
-It is a good fit if you:
-
-- Are running **autonomous agents** that call external tools, browse the web, or write to APIs
-- Need hard guarantees that an agent **cannot exceed a cost budget or run indefinitely**
-- Want a **structured audit trail** of every tool call and stop reason for every execution
-- Are building with **CrewAI, LangChain, or any Python or Rust agent framework**
-- Want enforcement that is **decoupled from your agent code** — no lock-in, no wrapper framework
-
-Nanny is fully open source under the Apache 2.0 licence. The runtime is the OSS primitive — Cloud is the managed layer above it.
-
-Nanny may not be what you need if you're running simple scripts, batch jobs, or anything without autonomous tool-calling behaviour.
-
----
-
 ## The Nanny ecosystem
 
-Nanny is designed to meet you where you are and grow with you.
+| Layer | What it does |
+|-------|-------------|
+| **Nanny CLI** | Wraps any agent process in any language. Zero code changes required. |
+| **Rust SDK** | Per-function cost metering, allowlist enforcement, and custom rules — in-process. |
+| **Python SDK** _(v0.2.0)_ | The same `@tool`, `@rule`, `@agent` model as Python decorators. |
+| **Nanny Cloud** _(v0.3.0)_ | Durable audit logs, team dashboards, org-level budget aggregation. |
 
-**Nanny CLI** — The universal starting point. Wraps any agent process in any language. Zero code changes required.
-
-```sh
-# Python agent
-nanny run python agent.py
-
-# Rust agent
-nanny run ./my-agent
-```
-
-**Rust SDK** — For Rust agents, go deeper. Annotate individual functions to get per-function cost accounting, allowlist enforcement, and custom rules — all in-process, all with zero overhead when running outside `nanny run`.
-
-```rust
-use nanny::{tool, rule, agent};
-
-#[tool(cost = 10)]
-fn search_web(query: &str) -> String { ... }
-
-#[agent("researcher")]
-fn run_research(topic: &str) { ... }
-```
-
-**Python SDK** _(coming v0.2.0)_ — The same `#[tool]`, `#[rule]`, `#[agent]` model, as Python decorators. This is the public launch milestone — Python is where the majority of agent development happens.
-
-**Nanny Cloud** _(coming v0.3.0)_ — Durable audit logs, team dashboards, org-level budget aggregation, and managed enforcement across all your agents. The OSS runtime stays unchanged — Cloud is the layer above it.
+→ Full docs at [docs.nanny.run](https://docs.nanny.run)
 
 ---
 
@@ -172,11 +135,14 @@ pip install nanny-sdk
 # 1. Scaffold a nanny.toml in your project root
 nanny init
 
-# 2. Run your agent under enforcement
-nanny run python agent.py
+# 2. Run your agent
+nanny run
 
-# 3. Use a named limit set for specific workloads
-nanny run --limits=researcher python agent.py
+# 3. Pass arguments to your agent
+nanny run -- "research topic"
+
+# 4. Use a named limit set for specific workloads
+nanny run --limits=researcher -- "research topic"
 ```
 
 **nanny.toml:**
@@ -184,6 +150,9 @@ nanny run --limits=researcher python agent.py
 ```toml
 [runtime]
 mode = "local"
+
+[start]
+cmd = "python agent.py"   # nanny run always reads this
 
 [limits]
 steps   = 100     # max tool calls
@@ -201,6 +170,47 @@ allowed = ["http_get", "read_file"]   # anything not listed is denied
 
 ---
 
+## Rust SDK — all three macros
+
+For Rust agents, annotate functions directly to get per-function cost accounting,
+allowlist enforcement, and custom policy rules:
+
+```rust
+use nannyd::{tool, rule, PolicyContext};
+
+/// Each call charges 10 cost units and requires the tool to be in the allowlist.
+#[nanny::tool(cost = 10)]
+fn search_web(query: String) -> String {
+    // ... HTTP request ...
+    String::new()
+}
+
+/// Return false to stop the agent immediately with RuleDenied.
+#[nanny::rule("no_spiral")]
+fn check_spiral(ctx: &PolicyContext) -> bool {
+    let h = &ctx.tool_call_history;
+    // Stop if the last 3 calls were all search_web
+    !(h.len() >= 3 && h.iter().rev().take(3).all(|t| t == "search_web"))
+}
+
+/// agent_enter / agent_exit activate a named limit set for a scope.
+async fn run_research(topic: &str) {
+    if nanny::__private::is_active() {
+        nanny::__private::agent_enter("researcher");
+    }
+    // ... Rig agent loop — search_web governed by nanny ...
+    if nanny::__private::is_active() {
+        nanny::__private::agent_exit();
+    }
+}
+```
+
+All macros are no-ops when running outside `nanny run` — no bridge, no overhead.
+
+→ Full Rust SDK guide at [docs.nanny.run](https://docs.nanny.run)
+
+---
+
 ## Event log
 
 Every run emits NDJSON to stdout. One event per line. Always starts with `ExecutionStarted`, always ends with `ExecutionStopped`.
@@ -215,8 +225,8 @@ Every run emits NDJSON to stdout. One event per line. Always starts with `Execut
 Pipe it to a file, stream it to your log aggregator, or query it inline:
 
 ```sh
-nanny run python agent.py > nanny.log
-nanny run python agent.py | tee nanny.log
+nanny run > nanny.log
+nanny run | tee nanny.log
 ```
 
 ---

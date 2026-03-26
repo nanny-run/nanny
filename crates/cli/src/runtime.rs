@@ -156,6 +156,7 @@ mod tests {
     fn test_config() -> NannyConfig {
         NannyConfig {
             runtime: RuntimeConfig::default(),
+            start: None,
             limits: LimitsConfig {
                 max_steps: 42,
                 max_cost_units: 500,
@@ -184,6 +185,7 @@ mod tests {
 
         NannyConfig {
             runtime: RuntimeConfig::default(),
+            start: None,
             limits: LimitsConfig {
                 max_steps: 42,
                 max_cost_units: 500,
@@ -242,6 +244,7 @@ mod tests {
     fn empty_allowlist_is_valid() {
         let config = NannyConfig {
             runtime: RuntimeConfig::default(),
+            start: None,
             limits: LimitsConfig {
                 max_steps: 10,
                 max_cost_units: 100,
@@ -294,6 +297,7 @@ mod tests {
         // Ensures ManagedConfig is importable and the managed field works.
         let config = NannyConfig {
             runtime: RuntimeConfig::default(),
+            start: None,
             limits: LimitsConfig {
                 max_steps: 10,
                 max_cost_units: 100,
@@ -326,6 +330,7 @@ mod tests {
         );
         let config = NannyConfig {
             runtime: RuntimeConfig::default(),
+            start: None,
             limits: LimitsConfig {
                 max_steps: 10,
                 max_cost_units: 500,

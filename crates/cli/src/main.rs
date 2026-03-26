@@ -44,11 +44,14 @@ enum Command {
     /// a code snippet showing how to integrate with your agent.
     Init,
 
-    /// Run a command under nanny enforcement.
+    /// Run the project under nanny enforcement.
     ///
-    /// Example: nanny run system.py
-    /// Example: nanny run --limits=researcher system.py
-    /// Example: nanny run -- python agent.py --verbose
+    /// Reads [start].cmd from nanny.toml and runs it.
+    /// Extra arguments passed after -- are appended to [start].cmd.
+    ///
+    /// Example: nanny run
+    /// Example: nanny run --limits=researcher
+    /// Example: nanny run -- "research topic"
     Run {
         /// Named limits set to activate from nanny.toml [limits.<name>].
         /// Inherits from [limits] defaults and overrides only declared fields.
@@ -56,9 +59,9 @@ enum Command {
         #[arg(long)]
         limits: Option<String>,
 
-        /// The command and arguments to execute under enforcement.
-        #[arg(trailing_var_arg = true, required = true)]
-        command: Vec<String>,
+        /// Extra arguments appended to [start].cmd.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        extra_args: Vec<String>,
     },
 }
 
@@ -69,7 +72,7 @@ fn main() {
 
     let result = match cli.command {
         Command::Init => cmd_init(),
-        Command::Run { limits, command } => cmd_run(&cli.config, limits.as_deref(), command),
+        Command::Run { limits, extra_args } => cmd_run(&cli.config, limits.as_deref(), extra_args),
     };
 
     if let Err(e) = result {
@@ -95,9 +98,10 @@ fn cmd_init() -> Result<()> {
 
     println!("Created nanny.toml — edit it to match your agent's requirements.");
     println!();
-    println!("Then run your agent under nanny enforcement:");
-    println!("    nanny run system.py");
-    println!("    nanny run --limits=researcher system.py");
+    println!("Set [start] cmd to how you normally launch your agent, then:");
+    println!("    nanny run");
+    println!("    nanny run --limits=researcher");
+    println!("    nanny run -- \"my topic\"");
     println!();
     println!("Works with any language — Python, Rust, Go, Node, or any compiled binary.");
 
@@ -106,10 +110,21 @@ fn cmd_init() -> Result<()> {
 
 // ── nanny run ─────────────────────────────────────────────────────────────────
 
-fn cmd_run(config_path: &Path, limits_name: Option<&str>, command: Vec<String>) -> Result<()> {
+fn cmd_run(config_path: &Path, limits_name: Option<&str>, extra_args: Vec<String>) -> Result<()> {
     // Load and validate config — fail immediately if anything is wrong.
     let config = nanny_config::load(config_path)
         .with_context(|| format!("failed to load config from '{}'", config_path.display()))?;
+
+    // Require [start] — nanny run always reads the command from config.
+    let start = config.start.as_ref()
+        .ok_or_else(|| anyhow::anyhow!("no start config found in nanny.toml"))?;
+
+    // Build command: split [start].cmd by whitespace, then append any extra args.
+    let mut command: Vec<String> = start.cmd
+        .split_whitespace()
+        .map(|s| s.to_string())
+        .collect();
+    command.extend(extra_args);
 
     // Build the wired runtime from config.
     // If a named limits set was requested, resolve it with inheritance.

@@ -23,6 +23,7 @@ Thank you for taking the time to contribute. Nanny is a small, focused primitive
   - [Setting up locally](#setting-up-locally)
   - [Running tests](#running-tests)
   - [Opening a pull request](#opening-a-pull-request)
+  - [Release process](#release-process)
   - [Reporting bugs](#reporting-bugs)
   - [Code style](#code-style)
 
@@ -197,6 +198,27 @@ git push origin fix/my-descriptive-branch-name
 
 Then open a pull request on GitHub from your fork's branch to `nanny-run/nanny` targeting the **`next`** branch. `next` is the default and the only active development branch — do not target `main`.
 
+**Fork and branch model:**
+
+- Fork `nanny-run/nanny` on GitHub, clone your fork, and branch off `next`.
+- `next` is the only active development branch — all PRs must target `next`, never `main`.
+- No direct pushes to the upstream repo. Always go through a PR.
+
+**Commit style — conventional commits:**
+
+Use conventional commit prefixes so the changelog can be generated automatically:
+
+| Prefix | When to use |
+|--------|-------------|
+| `feat:` | New feature or behaviour visible to users |
+| `fix:` | Bug fix |
+| `chore:` | Maintenance (CI, deps, tooling) — no user-visible change |
+| `docs:` | Documentation only |
+| `refactor:` | Internal restructure with no behaviour change |
+| `test:` | Adding or fixing tests only |
+
+PR titles are checked against this format. Example: `feat: add [start] table to nanny.toml`.
+
 **Checklist before opening:**
 
 1. **Open an issue first** for anything beyond a small bug fix or typo. This avoids duplicate work and confirms the change fits the project's scope.
@@ -206,7 +228,24 @@ Then open a pull request on GitHub from your fork's branch to `nanny-run/nanny` 
 5. **No `unwrap()` in non-test code.** Use `?` or explicit error handling.
 6. **Update the docs** if your change affects user-facing behaviour, config schema, or events. The documentation lives in the `docs/` directory of this repository — update the relevant `.mdx` files in the same PR.
 
-**A note on releases:** Version tags (`v*`) are restricted to maintainers. You do not need to tag or publish anything — just open the PR. The maintainer handles versioning and release.
+---
+
+## Release process
+
+**Who cuts releases:** Only the maintainer pushes version tags. Contributors submit PRs; the maintainer merges and tags. You never need to tag or publish anything yourself.
+
+**Tag protection:** Version tags (`v*`) are restricted to maintainers at the GitHub repo level (Settings → Rules → Tag protection → pattern `v*`). Pushing a `v*` tag from a fork or contributor branch will be rejected.
+
+**How a release happens:**
+1. Maintainer merges `next` into `main`.
+2. Maintainer pushes a `v*` tag (e.g. `v0.1.2`) on `main`.
+3. The release workflow runs: `cargo publish` for `nannyd`, GitHub Release created, Homebrew formula updated.
+
+**Requirements before a release tag is pushed:**
+- `cargo test --workspace` must pass on both `ubuntu-latest` and `macos-latest`.
+- `cargo clippy --workspace -- -D warnings` must be clean.
+- No `unwrap()` or `expect()` outside of `#[cfg(test)]` code.
+- CHANGELOG.md updated with the new version section.
 
 ---
 

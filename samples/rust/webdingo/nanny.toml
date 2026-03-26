@@ -1,0 +1,33 @@
+# nanny.toml — webdingo (web research agent)
+# Run: nanny run -- "best Rust HTTP clients"
+
+[runtime]
+mode = "local"
+
+[start]
+# nanny run          → starts the agent (uses built-in default topic)
+# nanny run -- topic → passes the research topic as an argument
+cmd = "cargo run --release"
+
+[limits]
+steps   = 15
+cost    = 300
+timeout = 30000
+
+[limits.deep]
+# Extended research run — more steps, higher budget, longer timeout.
+# Activate with: nanny run --limits=deep -- "topic"
+steps   = 40
+cost    = 1000
+timeout = 120000
+
+[tools]
+# Only fetch_url is permitted — write_file, exec, etc. are all denied.
+allowed = ["fetch_url"]
+
+[tools.fetch_url]
+max_calls     = 15
+cost_per_call = 20
+
+[observability]
+log = "stdout"

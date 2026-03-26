@@ -1,0 +1,16 @@
+[package]
+name = "qabud"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+nannyd = { version = "0.1.1", path = "../../../crates/cli" }
+rig-core = "0.33.0"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { version = "1.50.0", features = ["full"] }
