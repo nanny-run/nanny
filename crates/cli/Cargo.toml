@@ -16,11 +16,11 @@ name = "nanny"
 path = "src/lib.rs"
 
 [dependencies]
-nanny-core    = { path = "../core" }
-nanny-config  = { path = "../config" }
-nanny-runtime = { path = "../runtime" }
-nanny-bridge  = { path = "../bridge" }
-nanny-macros  = { path = "../macros" }
+nanny-core    = { path = "../core",    version = "0.1.0" }
+nanny-config  = { path = "../config",  version = "0.1.0" }
+nanny-runtime = { path = "../runtime", version = "0.1.0" }
+nanny-bridge  = { path = "../bridge",  version = "0.1.0" }
+nanny-macros  = { path = "../macros",  version = "0.1.0" }
 inventory    = "0.3"
 anyhow       = { workspace = true }
 clap         = { workspace = true }
@@ -28,6 +28,6 @@ serde        = { workspace = true }
 serde_json   = { workspace = true }
 
 [dev-dependencies]
-nanny-bridge   = { path = "../bridge" }
-nanny-core     = { path = "../core" }
-nanny-runtime  = { path = "../runtime" }
+nanny-bridge   = { path = "../bridge",  version = "0.1.0" }
+nanny-core     = { path = "../core",    version = "0.1.0" }
+nanny-runtime  = { path = "../runtime", version = "0.1.0" }

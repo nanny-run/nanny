@@ -105,4 +105,13 @@ jobs:
         if: ${{ !contains(github.ref_name, '-rc') }}
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish -p nannyd
+        run: |
+          # Publish in topological order — each crate before its dependants.
+          # --no-verify skips the redundant rebuild-from-registry check; the
+          # build job above already verified the binaries compile correctly.
+          cargo publish -p nanny-core    --no-verify
+          cargo publish -p nanny-config  --no-verify
+          cargo publish -p nanny-macros  --no-verify
+          cargo publish -p nanny-runtime --no-verify
+          cargo publish -p nanny-bridge  --no-verify
+          cargo publish -p nannyd        --no-verify

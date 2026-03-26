@@ -1,7 +1,6 @@
 [package]
 name        = "nanny-core"
 description = "Core traits and types for the nanny execution boundary"
-publish     = false
 version.workspace    = true
 edition.workspace    = true
 license.workspace    = true
