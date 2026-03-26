@@ -106,13 +106,14 @@ jobs:
 
   publish-crates:
     name: Publish to crates.io
-    # Runs after a successful release on tag push, OR manually via workflow_dispatch.
-    # On tag push: skip rc tags (e.g. v0.2.0-rc1).
-    # On workflow_dispatch: always run — used to recover a failed publish.
-    if: >
-      (github.event_name == 'push' && !contains(github.ref_name, '-rc')) ||
-      github.event_name == 'workflow_dispatch'
-    needs: ${{ github.event_name == 'push' && fromJSON('["release"]') || fromJSON('[]') }}
+    # On tag push: waits for build to succeed, skips rc tags.
+    # On workflow_dispatch: build is skipped; always() lets this job run anyway.
+    needs: [build]
+    if: >-
+      always() && (
+        (github.event_name == 'push' && needs.build.result == 'success' && !contains(github.ref_name, '-rc')) ||
+        github.event_name == 'workflow_dispatch'
+      )
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -121,7 +122,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Publish to crates.io
-        if: ${{ !contains(github.ref_name, '-rc') }}
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
