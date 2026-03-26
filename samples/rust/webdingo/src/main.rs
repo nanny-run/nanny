@@ -16,9 +16,9 @@
 
 use anyhow::Result;
 use nanny::PolicyContext;
-use rig::client::{CompletionClient, ProviderClient};
+use rig::client::{CompletionClient, Nothing, ProviderClient};
 use rig::completion::{Prompt, ToolDefinition};
-use rig::providers::openai;
+use rig::providers::ollama;
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -141,10 +141,10 @@ async fn run_research(topic: &str) -> Result<String> {
 }
 
 async fn research_inner(topic: &str) -> Result<String> {
-    let client = openai::Client::from_env();
+    let client = ollama::Client::from_val(Nothing);
 
     let agent = client
-        .agent(openai::GPT_4O)
+        .agent(ollama::LLAMA3_2)
         .preamble(
             "You are a research assistant. Given a topic, search for relevant URLs, \
              fetch their content using the fetch_url tool, and synthesize a concise report. \

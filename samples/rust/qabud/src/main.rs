@@ -10,9 +10,9 @@
 
 use anyhow::Result;
 use nanny::PolicyContext;
-use rig::client::{CompletionClient, ProviderClient};
+use rig::client::{CompletionClient, Nothing, ProviderClient};
 use rig::completion::{Prompt, ToolDefinition};
-use rig::providers::openai;
+use rig::providers::ollama;
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -145,10 +145,10 @@ async fn review_inner(dir: &str) -> Result<String> {
          End with an overall assessment."
     );
 
-    let client = openai::Client::from_env();
+    let client = ollama::Client::from_val(Nothing);
 
     let agent = client
-        .agent(openai::GPT_4O)
+        .agent(ollama::LLAMA3_2)
         .preamble(
             "You are a senior Rust engineer performing a code review. \
              You have access to a read_file tool to inspect source files. \
