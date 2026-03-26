@@ -6,7 +6,7 @@ on:
       - "v*"
   workflow_dispatch:
     # Manually publish crates when a tag-triggered run fails at the publish step.
-    # Trigger from the Actions tab → select this workflow → Run workflow → pick main.
+    # Trigger from the Actions tab → select this workflow → Run workflow → pick next.
     # The version published is whatever is in Cargo.toml at that commit.
 
 jobs:

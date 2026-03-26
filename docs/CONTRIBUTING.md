@@ -18,7 +18,7 @@ Thank you for your interest in contributing to our documentation! This guide wil
 4. Edit the `.mdx` files in `docs/`
 5. Run `mint dev` from the `docs/` directory
 6. Preview your changes at `http://localhost:3000`
-7. Commit and open a pull request against `main`
+7. Commit and open a pull request against `next`
 
 ## Writing guidelines
 
