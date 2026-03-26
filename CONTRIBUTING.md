@@ -133,22 +133,39 @@ If you are adding a new enforcement rule, it goes in `runtime`. If you are addin
 
 **Requirements:** Rust stable (1.75+).
 
+Contributors do not have write access to `nanny-run/nanny` directly. The standard flow is fork → clone your fork → open a PR back to the main project.
+
 ```bash
-# Clone the repo
-git clone https://github.com/nanny-run/nanny.git
+# 1. Fork nanny-run/nanny on GitHub (click "Fork" in the top right)
+
+# 2. Clone your fork — replace <your-username> with your GitHub handle
+git clone https://github.com/<your-username>/nanny.git
 cd nanny
 
-# Build everything
+# 3. Add the upstream repo as a remote so you can pull future changes
+git remote add upstream https://github.com/nanny-run/nanny.git
+
+# 4. Create a branch for your change
+git checkout -b fix/my-descriptive-branch-name
+
+# 5. Build everything
 cargo build --workspace
 
-# Run all tests
+# 6. Run all tests
 cargo test --workspace
 
-# Check for warnings (CI enforces this)
+# 7. Check for warnings (CI enforces this)
 cargo clippy --workspace -- -D warnings
 ```
 
 There are no external service dependencies. The bridge runs in-process during tests — no ports need to be open.
+
+**Keeping your fork up to date:**
+
+```bash
+git fetch upstream
+git rebase upstream/next
+```
 
 ---
 
@@ -173,12 +190,23 @@ All tests must pass before a PR can be merged. The CI matrix runs on `ubuntu-lat
 
 ## Opening a pull request
 
+```bash
+# Push your branch to your fork
+git push origin fix/my-descriptive-branch-name
+```
+
+Then open a pull request on GitHub from your fork's branch to `nanny-run/nanny` targeting the **`next`** branch. `next` is the default and the only active development branch — do not target `main`.
+
+**Checklist before opening:**
+
 1. **Open an issue first** for anything beyond a small bug fix or typo. This avoids duplicate work and confirms the change fits the project's scope.
 2. **Keep PRs focused.** One logical change per PR. Reviewers will ask you to split large PRs.
 3. **Write tests.** PRs without tests for new behaviour will not be merged.
 4. **Run clippy before pushing.** `cargo clippy --workspace -- -D warnings` must be clean.
 5. **No `unwrap()` in non-test code.** Use `?` or explicit error handling.
 6. **Update the docs** if your change affects user-facing behaviour, config schema, or events. The documentation lives in the `docs/` directory of this repository — update the relevant `.mdx` files in the same PR.
+
+**A note on releases:** Version tags (`v*`) are restricted to maintainers. You do not need to tag or publish anything — just open the PR. The maintainer handles versioning and release.
 
 ---
 
