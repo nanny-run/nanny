@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 jobs:
   build:
@@ -36,19 +36,20 @@ jobs:
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: nanny
+          key: ${{ matrix.target }}
 
       - name: Build release binary
         run: cargo build --release --bin nanny --target ${{ matrix.target }}
-        working-directory: nanny
 
-      - name: Rename artifact
-        run: cp nanny/target/${{ matrix.target }}/release/nanny ${{ matrix.artifact }}
+      - name: Package artifact
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../${{ matrix.artifact }}.tar.gz nanny
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.tar.gz
 
   release:
     name: Publish GitHub Release
@@ -64,8 +65,5 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            artifacts/nanny-linux-x86_64/nanny-linux-x86_64
-            artifacts/nanny-macos-x86_64/nanny-macos-x86_64
-            artifacts/nanny-macos-arm64/nanny-macos-arm64
+          files: artifacts/**/*.tar.gz
           generate_release_notes: true
