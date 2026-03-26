@@ -1,15 +1,15 @@
 [package]
 name        = "nanny-bridge"
+description = "HTTP sidecar bridge for the nanny execution boundary — internal runtime component"
 version.workspace   = true
 edition.workspace   = true
 license.workspace   = true
 repository.workspace = true
 authors.workspace   = true
-publish     = false   # internal — never published to crates.io
 
 [dependencies]
-nanny-core    = { path = "../core" }
-nanny-runtime = { path = "../runtime" }
+nanny-core    = { path = "../core",    version = "0.1.0" }
+nanny-runtime = { path = "../runtime", version = "0.1.0" }
 uuid         = { workspace = true }
 thiserror    = { workspace = true }
 serde        = { workspace = true }
