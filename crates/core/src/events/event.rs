@@ -77,6 +77,24 @@ pub enum ExecutionEvent {
         step: u32,
     },
 
+    /// Emitted when the agent activates a named limits set via `agent_enter`.
+    ///
+    /// Records the name of the limits set and the limits now in effect,
+    /// so the audit log captures exactly which budget governed each scope.
+    AgentScopeEntered {
+        ts: u64,
+        name: String,
+        limits: LimitsSnapshot,
+    },
+
+    /// Emitted when the agent exits a named limits scope via `agent_exit`.
+    ///
+    /// Paired with `AgentScopeEntered` — together they bracket the governed scope.
+    AgentScopeExited {
+        ts: u64,
+        name: String,
+    },
+
     /// Emitted as the final event when execution stops for any reason.
     ///
     /// This event is always the last one in any complete execution log.

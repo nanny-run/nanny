@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
-use nanny_core::events::event::ExecutionEvent;
+use nanny_core::events::event::{ExecutionEvent, LimitsSnapshot};
 use nanny_core::agent::limits::Limits;
 use nanny_core::agent::state::StopReason;
 use nanny_core::ledger::Ledger;
@@ -93,6 +93,7 @@ struct BridgeState {
     current_limits: Limits,
     named_limits: HashMap<String, Limits>,
     limits_stack: Vec<Limits>,
+    agent_name_stack: Vec<String>,
     allowed_tools: Vec<String>,
 
     // Execution tracking ──────────────────────────────────────────────────────
@@ -146,6 +147,7 @@ impl Bridge {
             current_limits: components.limits.clone(),
             named_limits: components.named_limits,
             limits_stack: Vec::new(),
+            agent_name_stack: Vec::new(),
             allowed_tools: components.allowed_tools,
             cost_units_spent: 0,
             tool_call_counts: HashMap::new(),
@@ -516,9 +518,20 @@ fn handle_agent_enter(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> BridgeRe
         if let Some(new_limits) = guard.named_limits.get(&req.name).cloned() {
             let prev = guard.current_limits.clone();
             guard.limits_stack.push(prev);
+            guard.agent_name_stack.push(req.name.clone());
             guard.current_limits = new_limits.clone();
             guard.limits_policy =
                 LimitsPolicy::new(new_limits.clone(), guard.allowed_tools.clone());
+            let snapshot = LimitsSnapshot {
+                steps: new_limits.max_steps,
+                cost: new_limits.max_cost_units,
+                timeout: new_limits.timeout_ms,
+            };
+            append_event(&mut guard, ExecutionEvent::AgentScopeEntered {
+                ts: now_ms(),
+                name: req.name.clone(),
+                limits: snapshot,
+            });
             Ok(new_limits)
         } else {
             Err(req.name.clone())
@@ -541,6 +554,11 @@ fn handle_agent_exit(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
     let prev = guard.limits_stack.pop().unwrap_or_else(|| guard.default_limits.clone());
     guard.current_limits = prev.clone();
     guard.limits_policy = LimitsPolicy::new(prev, guard.allowed_tools.clone());
+    let name = guard.agent_name_stack.pop().unwrap_or_default();
+    append_event(&mut guard, ExecutionEvent::AgentScopeExited {
+        ts: now_ms(),
+        name,
+    });
     BridgeResp::json(200, r#"{"status":"ok"}"#)
 }
 
