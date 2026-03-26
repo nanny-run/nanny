@@ -456,22 +456,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nanny"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "inventory",
- "nanny-bridge",
- "nanny-config",
- "nanny-core",
- "nanny-macros",
- "nanny-runtime",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "nanny-bridge"
 version = "0.1.0"
 dependencies = [
@@ -520,6 +504,22 @@ dependencies = [
  "serde_json",
  "thiserror",
  "ureq",
+]
+
+[[package]]
+name = "nannyd"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "inventory",
+ "nanny-bridge",
+ "nanny-config",
+ "nanny-core",
+ "nanny-macros",
+ "nanny-runtime",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
