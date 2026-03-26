@@ -11,13 +11,17 @@ Demonstrates the complete Nanny developer workflow:
 
 - Rust toolchain (`curl https://sh.rustup.rs -sSf | sh`)
 - `nanny` CLI (`cargo install nannyd` or `brew install nannyd`)
-- OpenAI API key
+- [Ollama](https://ollama.com) running locally with `llama3.2` pulled:
+
+```sh
+brew install ollama
+ollama serve          # in a separate terminal, or run as a service
+ollama pull llama3.2
+```
 
 ## Run
 
 ```sh
-export OPENAI_API_KEY="sk-..."
-
 # Review ./src (default)
 nanny run
 
