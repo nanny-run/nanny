@@ -8,6 +8,7 @@
 #
 # After tagging v0.1.0, update the sha256 values using:
 #   curl -fsSL <url> | shasum -a 256
+#   NOTE: SHA256 values are updated automatically by CI, no manual steps required.
 
 class Nannyd < Formula
   desc "Execution boundary for autonomous AI agents"
