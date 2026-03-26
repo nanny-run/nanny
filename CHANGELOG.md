@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] — 2026-03-26
+
+### Fixed
+
+- Added `readme` field to `nannyd` crate manifest so the README displays on crates.io.
+
 ## [0.1.0] — 2026-03-26
 
 First public release of Nanny — an execution boundary for autonomous AI agents.
@@ -45,4 +51,5 @@ First public release of Nanny — an execution boundary for autonomous AI agents
   SHA256 checksums for each binary are computed and pushed to the homebrew tap automatically
   on every tagged release.
 
+[0.1.1]: https://github.com/nanny-run/nanny/releases/tag/v0.1.1
 [0.1.0]: https://github.com/nanny-run/nanny/releases/tag/v0.1.0

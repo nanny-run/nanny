@@ -8,8 +8,8 @@ repository.workspace = true
 authors.workspace   = true
 
 [dependencies]
-nanny-core    = { path = "../core",    version = "0.1.0" }
-nanny-runtime = { path = "../runtime", version = "0.1.0" }
+nanny-core    = { workspace = true }
+nanny-runtime = { workspace = true }
 uuid         = { workspace = true }
 thiserror    = { workspace = true }
 serde        = { workspace = true }
