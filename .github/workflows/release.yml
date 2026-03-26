@@ -77,8 +77,10 @@ jobs:
         with:
           files: artifacts/*.tar.gz
           generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-rc') }}
 
       - name: Update homebrew tap
+        if: ${{ !contains(github.ref_name, '-rc') }}
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
@@ -100,6 +102,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Publish to crates.io
+        if: ${{ !contains(github.ref_name, '-rc') }}
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish -p nannyd
