@@ -129,15 +129,29 @@ jobs:
           # Idempotent: skips crates already on crates.io (safe to re-run).
           publish() {
             local crate=$1
-            output=$(cargo publish -p "$crate" --no-verify 2>&1)
-            if [ $? -eq 0 ]; then
-              echo "Published $crate"
-            elif echo "$output" | grep -q "already exists"; then
-              echo "Skipping $crate — already published"
-            else
-              echo "$output" >&2
-              exit 1
-            fi
+            local attempt=1
+            local max=5
+            while [ $attempt -le $max ]; do
+              output=$(cargo publish -p "$crate" --no-verify 2>&1)
+              local status=$?
+              if [ $status -eq 0 ]; then
+                echo "Published $crate"
+                return 0
+              elif echo "$output" | grep -q "already exists"; then
+                echo "Skipping $crate — already published"
+                return 0
+              elif echo "$output" | grep -qE "no matching package|failed to select a version|not yet available"; then
+                echo "Waiting for crates.io index to catch up (attempt $attempt/$max)..."
+                sleep 20
+                attempt=$((attempt + 1))
+              else
+                echo "ERROR publishing $crate:" >&2
+                echo "$output" >&2
+                exit 1
+              fi
+            done
+            echo "ERROR: $crate failed after $max attempts" >&2
+            exit 1
           }
           publish nanny-core
           publish nanny-config
