@@ -69,3 +69,35 @@ jobs:
             artifacts/nanny-macos-x86_64/nanny-macos-x86_64
             artifacts/nanny-macos-arm64/nanny-macos-arm64
           generate_release_notes: true
+<<<<<<< Updated upstream
+=======
+          prerelease: ${{ contains(github.ref_name, '-rc') }}
+
+      - name: Update homebrew tap
+        if: ${{ !contains(github.ref_name, '-rc') }}
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          git clone https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/nanny-run/homebrew-tap.git tap
+          mkdir -p tap/Formula
+          cp homebrew/nannyd.rb tap/Formula/nannyd.rb
+          sed -i "s/version \"[^\"]*\"/version \"${VERSION}\"/" tap/Formula/nannyd.rb
+          sed -i "s/SHA256_MACOS_ARM64/${{ steps.sha.outputs.macos_arm64 }}/" tap/Formula/nannyd.rb
+          sed -i "s/SHA256_MACOS_X86_64/${{ steps.sha.outputs.macos_x86_64 }}/" tap/Formula/nannyd.rb
+          sed -i "s/SHA256_LINUX_X86_64/${{ steps.sha.outputs.linux }}/" tap/Formula/nannyd.rb
+          git -C tap config user.email "noreply@nanny.run"
+          git -C tap config user.name "Nanny Release Bot"
+          git -C tap add Formula/nannyd.rb
+          git -C tap commit -m "nannyd ${VERSION}"
+          git -C tap push
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish to crates.io
+        if: ${{ !contains(github.ref_name, '-rc') }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p nannyd
+>>>>>>> Stashed changes
