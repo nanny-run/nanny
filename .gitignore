@@ -17,6 +17,7 @@
 .env
 .env.local
 .env.*
+!.env.example
 
 
 # Note: Cargo.lock is intentionally committed.
