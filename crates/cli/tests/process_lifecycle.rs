@@ -213,6 +213,49 @@ fn execution_stopped_is_always_last_line() {
     );
 }
 
+/// ExecutionStopped carries numeric `steps` and `cost_spent` fields.
+///
+/// This test uses `echo` — no bridge tool calls — so both values are
+/// legitimately 0. The point is to assert the fields are present and
+/// numeric, catching any regression where they are hardcoded to 0 even
+/// when tools are called.  See the bridge-level
+/// `tool_call_increments_step_and_charges_cost` test for the non-zero case.
+#[test]
+fn execution_stopped_has_accounting_fields() {
+    let dir = temp_dir();
+    write_config(&dir, 30_000, "echo nanny-accounting-test");
+
+    let output = Command::new(nanny_bin())
+        .args(["--config", &config_arg(&dir), "run"])
+        .output()
+        .expect("failed to run nanny");
+
+    let _ = fs::remove_dir_all(&dir);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stopped_line = stdout
+        .lines()
+        .filter(|l| l.trim_start().starts_with('{'))
+        .find(|l| l.contains("ExecutionStopped"))
+        .expect("ExecutionStopped line must be present in stdout");
+
+    let v: serde_json::Value =
+        serde_json::from_str(stopped_line).expect("ExecutionStopped must be valid JSON");
+
+    assert!(
+        v["steps"].is_number(),
+        "ExecutionStopped must have a numeric `steps` field; got: {v}"
+    );
+    assert!(
+        v["cost_spent"].is_number(),
+        "ExecutionStopped must have a numeric `cost_spent` field; got: {v}"
+    );
+    assert!(
+        v["elapsed_ms"].is_number(),
+        "ExecutionStopped must have a numeric `elapsed_ms` field; got: {v}"
+    );
+}
+
 /// Missing [start] section exits non-zero with a clear error message.
 #[test]
 fn missing_start_section_exits_nonzero_with_message() {

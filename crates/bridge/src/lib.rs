@@ -42,15 +42,31 @@ pub enum ExecutionState {
     Stopped { reason: String },
 }
 
+/// Final accounting snapshot read by the CLI when writing `ExecutionStopped`.
+#[derive(Debug, Clone, Default)]
+pub struct BridgeMetrics {
+    pub step_count:      u32,
+    pub cost_units_spent: u64,
+}
+
 // ── BridgeAddress ─────────────────────────────────────────────────────────────
 
 /// How the child process reaches the bridge.
 ///
 /// On Unix (macOS / Linux): a Unix domain socket. No port, no conflicts.
 ///   Inject `NANNY_BRIDGE_SOCKET` into the child environment.
+///   The socket path embeds the session token UUID, and Unix filesystem
+///   permissions restrict access to the creating user — no extra auth needed
+///   to connect, but the `X-Nanny-Session-Token` header is still required.
 ///
 /// On Windows: TCP loopback on an OS-assigned port.
 ///   Inject `NANNY_BRIDGE_PORT` into the child environment.
+///   **Security note:** any local process on the machine can attempt a TCP
+///   connection to 127.0.0.1:<port>. The session token (a random UUID passed
+///   via `NANNY_SESSION_TOKEN` and required as `X-Nanny-Session-Token` on
+///   every request) is the sole authentication mechanism. The token is
+///   visible to child processes spawned by the agent — do not spawn untrusted
+///   sub-processes from within a governed agent on Windows.
 ///
 /// In both cases inject `NANNY_SESSION_TOKEN`.
 #[derive(Debug, Clone)]
@@ -227,6 +243,18 @@ impl Bridge {
     /// Read the current execution state.
     pub fn execution_state(&self) -> ExecutionState {
         self.shared.lock().unwrap().execution.clone()
+    }
+
+    /// Return the current step count and cost spent.
+    ///
+    /// Called by the CLI just before emitting `ExecutionStopped` so the event
+    /// carries accurate accounting rather than hardcoded zeros.
+    pub fn metrics(&self) -> BridgeMetrics {
+        let guard = self.shared.lock().unwrap();
+        BridgeMetrics {
+            step_count:       guard.step_count,
+            cost_units_spent: guard.cost_units_spent,
+        }
     }
 
     /// Mark the execution as stopped with the given reason.
@@ -428,6 +456,7 @@ fn handle_tool_call(
                     let cost = call.cost.unwrap_or(0);
                     {
                         let mut guard = shared.lock().unwrap();
+                        guard.step_count += 1;
                         let _ = guard.ledger.debit(cost);
                         guard.cost_units_spent += cost;
                         *guard.tool_call_counts.entry(call.tool.clone()).or_insert(0) += 1;
@@ -453,6 +482,7 @@ fn handle_tool_call(
                 Ok(output) => {
                     {
                         let mut guard = shared.lock().unwrap();
+                        guard.step_count += 1;
                         let _ = guard.ledger.debit(cost);
                         guard.cost_units_spent += cost;
                         *guard.tool_call_counts.entry(call.tool.clone()).or_insert(0) += 1;
@@ -1052,6 +1082,22 @@ mod tests {
         assert_eq!(v["cost_spent"], 20); // 2 calls × cost 10
     }
 
+    /// Each allowed tool call increments step_count and charges cost.
+    ///
+    /// This is the bridge-level regression guard for the bug where
+    /// ExecutionStopped emitted steps=0 and cost_spent=0. metrics() must
+    /// reflect the real accounting state so the CLI can emit accurate values.
+    #[test]
+    fn tool_call_increments_step_and_charges_cost_in_metrics() {
+        let b = started(1000);
+        post(&b, "/tool/call", r#"{"tool":"echo","args":{"message":"x"}}"#);
+        post(&b, "/tool/call", r#"{"tool":"echo","args":{"message":"y"}}"#);
+
+        let m = b.metrics();
+        assert_eq!(m.step_count,       2,  "each tool call must increment step_count");
+        assert_eq!(m.cost_units_spent, 20, "each tool call must charge declared cost");
+    }
+
     #[test]
     fn denied_tool_returns_denied_with_tool_name() {
         let b = Bridge::start(BridgeComponents {
@@ -1312,13 +1358,13 @@ mod tests {
     #[test]
     fn status_returns_running_with_counters() {
         let b = started(1000);
-        post(&b, "/step", "{}");
-        post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);
+        post(&b, "/step", "{}");                                    // step → 1
+        post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);     // step → 2 (tool call also ticks)
         let (s, body) = get(&b, "/status");
         assert_eq!(s, 200);
         let v = json_val(&body);
         assert_eq!(v["state"], "running");
-        assert_eq!(v["step"], 1);
+        assert_eq!(v["step"], 2);
         assert_eq!(v["cost_spent"], 10);
     }
 

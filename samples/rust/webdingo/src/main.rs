@@ -6,7 +6,7 @@
 // Nanny features exercised:
 //   #[nanny::tool(cost = 20)]   — each fetch charges 20 cost units
 //   #[nanny::rule("no_loop")]   — stops the agent if it loops on the same domain
-//   agent_enter / agent_exit    — activates [limits.researcher] for the research scope
+//   #[nanny::agent("researcher")] — activates [limits.researcher] for the research scope
 //
 // Stop reasons you may see:
 //   BudgetExhausted             — hit the 300-unit cost ceiling
@@ -123,24 +123,8 @@ impl Tool for FetchUrlTool {
 
 // ── Research loop ─────────────────────────────────────────────────────────────
 
+#[nanny::agent("researcher")]
 async fn run_research(topic: &str) -> Result<String> {
-    // Activate [limits.researcher] for this scope.
-    // This is equivalent to #[nanny::agent("researcher")] — the macro does not
-    // yet support async functions, so we call the primitives directly.
-    if nanny::__private::is_active() {
-        nanny::__private::agent_enter("researcher");
-    }
-
-    let result = research_inner(topic).await;
-
-    if nanny::__private::is_active() {
-        nanny::__private::agent_exit();
-    }
-
-    result
-}
-
-async fn research_inner(topic: &str) -> Result<String> {
     let client = ollama::Client::from_val(Nothing);
 
     let agent = client

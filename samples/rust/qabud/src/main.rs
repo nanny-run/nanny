@@ -113,23 +113,8 @@ impl Tool for ReadFileTool {
 
 // ── Review loop ───────────────────────────────────────────────────────────────
 
+#[nanny::agent("reviewer")]
 async fn run_review(dir: &str) -> Result<String> {
-    // Activate [limits] for this scope via the nanny primitives.
-    // #[nanny::agent] does not yet support async functions so we call directly.
-    if nanny::__private::is_active() {
-        nanny::__private::agent_enter("reviewer");
-    }
-
-    let result = review_inner(dir).await;
-
-    if nanny::__private::is_active() {
-        nanny::__private::agent_exit();
-    }
-
-    result
-}
-
-async fn review_inner(dir: &str) -> Result<String> {
     // Collect .rs files under the target directory.
     let rs_files = collect_rs_files(dir);
     if rs_files.is_empty() {
