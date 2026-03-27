@@ -118,13 +118,16 @@ fn expand_tool(input: ItemFn, cost: u64) -> syn::Result<TokenStream2> {
             #(#arg_entries)*
 
             if let Some(__rule_name) = ::nanny::__private::evaluate_local_rules(#fn_str, __nanny_tool_args) {
-                panic!("nanny: stopped — RuleDenied: {}", __rule_name);
+                ::nanny::__private::report_stop("RuleDenied");
+                ::std::eprintln!("nanny: stopped — RuleDenied: {}", __rule_name);
+                ::std::process::exit(1);
             }
 
             match ::nanny::__private::call_tool(#fn_str, #cost) {
                 ::nanny::__private::ToolVerdict::Run  => __nanny_impl(#(#forward_args),*),
                 ::nanny::__private::ToolVerdict::Stop(__reason) => {
-                    panic!("nanny: stopped — {}", __reason)
+                    ::std::eprintln!("nanny: stopped — {}", __reason);
+                    ::std::process::exit(1);
                 }
             }
         }

@@ -355,7 +355,13 @@ fn dispatch(
         _ => {}
     }
 
-    // All action endpoints return 410 Gone once execution has stopped.
+    // /stop — child reports its own stop reason before calling exit(1).
+    // Always accepted, even after execution has already stopped (idempotent).
+    if method == "POST" && path == "/stop" {
+        return handle_stop(&req.body, shared);
+    }
+
+    // All other action endpoints return 410 Gone once execution has stopped.
     if is_stopped(shared) {
         return BridgeResp::json(410, r#"{"error":"execution stopped"}"#);
     }
@@ -831,6 +837,25 @@ fn stop_reason_name(reason: &StopReason) -> &'static str {
         StopReason::ManualStop        => "ManualStop",
         StopReason::AgentCompleted    => "AgentCompleted",
     }
+}
+
+fn handle_stop(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
+    let raw = serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v["reason"].as_str().map(str::to_string))
+        .unwrap_or_default();
+    // Validate against the closed set of known stop reasons.
+    // An untrusted child process holds the session token and can POST /stop;
+    // accepting arbitrary strings would let a misbehaving agent falsify the
+    // event log (e.g. claim "AgentCompleted" while actually crashing).
+    let reason = match raw.as_str() {
+        "RuleDenied" | "ToolDenied" | "BudgetExhausted" | "MaxStepsReached"
+        | "TimeoutExpired" | "AgentCompleted" | "ManualStop" | "ToolFailed" => raw,
+        _ => "ProcessCrashed".to_string(),
+    };
+    let mut guard = shared.lock().unwrap();
+    mark_stopped(&mut guard, &reason);
+    BridgeResp::json(200, r#"{"status":"ok"}"#)
 }
 
 // ── State helpers ─────────────────────────────────────────────────────────────

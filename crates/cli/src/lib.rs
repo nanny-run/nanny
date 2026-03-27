@@ -72,8 +72,29 @@ pub use nanny_macros::agent;
 /// }
 /// ```
 pub fn http_get(url: String) -> Result<String, String> {
-    let args_json = format!(r#"{{"url":"{}"}}"#, url);
-    runtime::call_bridge_tool("http_get", &args_json)
+    // Evaluate local rules first — same as #[nanny::tool] does.
+    // This ensures #[nanny::rule] functions (e.g. "no_loop") fire for
+    // built-in bridge tools, not just developer-defined #[nanny::tool] functions.
+    let mut args = std::collections::HashMap::new();
+    args.insert("url".to_string(), url.clone());
+    if let Some(rule_name) = runtime::evaluate_local_rules("http_get", args) {
+        runtime::report_stop("RuleDenied");
+        eprintln!("nanny: stopped — RuleDenied: {rule_name}");
+        std::process::exit(1);
+    }
+
+    let args_json = serde_json::json!({"url": url}).to_string();
+    let result = runtime::call_bridge_tool("http_get", &args_json);
+
+    // Report tool failure to the bridge so the CLI sees ToolFailed instead
+    // of ProcessCrashed when the caller propagates this error up to exit(1).
+    if let Err(ref e) = result {
+        if e.starts_with("ToolFailed") {
+            runtime::report_stop("ToolFailed");
+        }
+    }
+
+    result
 }
 
 // ── Private runtime — for generated code only ─────────────────────────────────
@@ -91,7 +112,7 @@ pub mod __private {
 
     pub use super::runtime::{
         agent_enter, agent_exit, call_bridge_tool, call_tool, evaluate_local_rules, is_active,
-        Rule, ToolVerdict,
+        report_stop, Rule, ToolVerdict,
     };
 }
 
@@ -323,7 +344,18 @@ mod runtime {
                     .unwrap_or_else(|| "ExecutionStopped".to_string());
                 ToolVerdict::Stop(reason)
             }
-            _ => ToolVerdict::Run,
+            _ => {
+                // If the bridge is unreachable while we are in a governed run,
+                // the enforcement guarantee is broken — fail closed rather than
+                // silently allowing the tool call to proceed ungoverned.
+                // If we are not in a governed run (passthrough mode, no env vars
+                // set), is_active() returns false and we run normally.
+                if is_active() {
+                    ToolVerdict::Stop("BridgeUnavailable".to_string())
+                } else {
+                    ToolVerdict::Run
+                }
+            }
         }
     }
 
@@ -362,15 +394,33 @@ mod runtime {
                     .unwrap_or_else(|| "ExecutionStopped".to_string());
                 Err(reason)
             }
+            Some(resp) if resp.status == 500 => {
+                // Tool execution failed bridge-side (e.g. network error in http_get).
+                let message = serde_json::from_str::<serde_json::Value>(&resp.body)
+                    .ok()
+                    .and_then(|v| v["message"].as_str().map(str::to_string))
+                    .unwrap_or_else(|| "tool execution failed".to_string());
+                Err(format!("ToolFailed: {message}"))
+            }
             _ => Err("bridge unavailable".to_string()),
         }
+    }
+
+    /// POST /stop to the bridge — report a stop reason before calling exit(1).
+    ///
+    /// The bridge records this reason so the CLI emits it in `ExecutionStopped`
+    /// instead of falling back to `ProcessCrashed`. Silently ignored if the
+    /// bridge is unreachable.
+    pub fn report_stop(reason: &str) {
+        let body = serde_json::json!({"reason": reason}).to_string();
+        let _ = http_post("/stop", &body);
     }
 
     // ── Agent enter / exit ────────────────────────────────────────────────────
 
     /// POST /agent/enter — switch to a named limits set.
     pub fn agent_enter(name: &str) {
-        let body = format!(r#"{{"name":"{name}"}}"#);
+        let body = serde_json::json!({"name": name}).to_string();
         if let Some(resp) = http_post("/agent/enter", &body) {
             if resp.status == 404 {
                 panic!("nanny: agent limits set '{name}' not found in nanny.toml");
