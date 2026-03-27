@@ -5,7 +5,8 @@
 //
 // Nanny features exercised:
 //   #[nanny::tool(cost = 10)]            — each file read charges 10 cost units
-//   #[nanny::rule("no_sensitive_files")] — demonstrates the rule hook mechanism
+//   #[nanny::rule("no_read_loop")]       — stop looping agents (history-based)
+//   #[nanny::rule("no_sensitive_files")] — block .env / secret paths (args-based)
 //   agent_enter / agent_exit             — activates [limits] for the review scope
 
 use anyhow::Result;
@@ -34,13 +35,13 @@ fn read_file(path: String) -> String {
     std::fs::read_to_string(&path).unwrap_or_default()
 }
 
-// ── Nanny rule ────────────────────────────────────────────────────────────────
+// ── Nanny rules ───────────────────────────────────────────────────────────────
 
-/// Deny reads when the agent is looping — same file read 3+ times in a row.
+/// Deny reads when the agent is looping — read_file called 3+ times in a row.
 ///
 /// `tool_call_history` is an ordered list of tool names. If the agent is
-/// stuck re-reading the same tool repeatedly we stop it early.
-#[nanny::rule("no_sensitive_files")]
+/// stuck re-reading files repeatedly we stop it early.
+#[nanny::rule("no_read_loop")]
 fn block_loop(ctx: &PolicyContext) -> bool {
     let history = &ctx.tool_call_history;
     if history.len() < 3 {
@@ -59,6 +60,19 @@ fn block_loop(ctx: &PolicyContext) -> bool {
     }
 
     true
+}
+
+/// Deny reads of sensitive files — paths containing `.env` or `secret`.
+///
+/// Uses `last_tool_args` to inspect the `path` argument before the call
+/// reaches disk. This demonstrates content-aware rules: the decision is
+/// made client-side before the tool body runs.
+#[nanny::rule("no_sensitive_files")]
+fn block_sensitive(ctx: &PolicyContext) -> bool {
+    ctx.last_tool_args
+        .get("path")
+        .map(|p| !p.contains(".env") && !p.contains("secret"))
+        .unwrap_or(true)
 }
 
 // ── Rig tool wrapper ──────────────────────────────────────────────────────────
@@ -133,7 +147,7 @@ async fn run_review(dir: &str) -> Result<String> {
     let client = ollama::Client::from_val(Nothing);
 
     let agent = client
-        .agent(ollama::LLAMA3_2)
+        .agent(ollama::MISTRAL)
         .preamble(
             "You are a senior Rust engineer performing a code review. \
              You have access to a read_file tool to inspect source files. \

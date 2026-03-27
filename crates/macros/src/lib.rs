@@ -91,8 +91,17 @@ fn expand_tool(input: ItemFn, cost: u64) -> syn::Result<TokenStream2> {
         ));
     }
 
-    // Collect argument names for forwarding to the inner function.
+    // Collect argument names for forwarding and for last_tool_args serialization.
     let forward_args = forward_arg_names(inputs)?;
+
+    // Build (key, value) pairs for last_tool_args: key is param name as &str,
+    // value uses Display so String args don't get extra quotes.
+    let arg_entries: Vec<TokenStream2> = forward_args.iter().map(|name| {
+        let key = name.to_string();
+        quote! {
+            __nanny_tool_args.insert(#key.to_string(), format!("{}", &#name));
+        }
+    }).collect();
 
     Ok(quote! {
         #(#attrs)*
@@ -105,7 +114,10 @@ fn expand_tool(input: ItemFn, cost: u64) -> syn::Result<TokenStream2> {
                 return __nanny_impl(#(#forward_args),*);
             }
 
-            if let Some(__rule_name) = ::nanny::__private::evaluate_local_rules(#fn_str) {
+            let mut __nanny_tool_args = ::std::collections::HashMap::<String, String>::new();
+            #(#arg_entries)*
+
+            if let Some(__rule_name) = ::nanny::__private::evaluate_local_rules(#fn_str, __nanny_tool_args) {
                 panic!("nanny: stopped — RuleDenied: {}", __rule_name);
             }
 

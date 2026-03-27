@@ -170,7 +170,7 @@ fn call_tool_budget_exhaustion_returns_stop() {
 fn evaluate_local_rules_no_rules_registered_allows_all() {
     // No env vars needed — this is a pure local check over the inventory.
     assert!(
-        evaluate_local_rules("any_tool").is_none(),
+        evaluate_local_rules("any_tool", ::std::collections::HashMap::new()).is_none(),
         "no registered rules must produce None (allow all)"
     );
 }

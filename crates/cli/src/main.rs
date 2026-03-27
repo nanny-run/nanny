@@ -247,6 +247,19 @@ fn cmd_run(config_path: &Path, limits_name: Option<&str>, extra_args: Vec<String
     // ── ExecutionStopped event ────────────────────────────────────────────
     let elapsed_ms = started_at.elapsed().as_millis() as u64;
     let metrics = bridge.metrics();
+
+    // Warn when tools are configured but the agent never called any.
+    // This usually means the model ignored its tool definitions — a common
+    // sign of a model that is too small or a prompt that needs improvement.
+    if metrics.allowed_tool_count > 0 && metrics.tool_call_count == 0 {
+        eprintln!(
+            "nanny: warning — execution completed with 0 tool calls \
+             ({} tool(s) were allowed). \
+             The model may have ignored its tool definitions.",
+            metrics.allowed_tool_count
+        );
+    }
+
     log.write(&execution_stopped_event(
         &stop_reason,
         metrics.step_count,

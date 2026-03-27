@@ -42,6 +42,21 @@ pub struct PolicyContext {
     /// Each entry is a tool name. Appended by the executor after each tool call.
     /// Custom rules use this to detect sequences and patterns.
     pub tool_call_history: Vec<String>,
+
+    /// The arguments of the tool call currently being evaluated.
+    /// Key: parameter name. Value: string representation of the argument.
+    /// Empty when no tool call is in flight (e.g. during step evaluation).
+    ///
+    /// Rules use this to inspect what the agent is about to do:
+    /// ```ignore
+    /// #[nanny::rule("no_sensitive_files")]
+    /// fn block_sensitive(ctx: &PolicyContext) -> bool {
+    ///     ctx.last_tool_args.get("path")
+    ///         .map(|p| !p.contains(".env") && !p.contains("secret"))
+    ///         .unwrap_or(true)
+    /// }
+    /// ```
+    pub last_tool_args: HashMap<String, String>,
 }
 
 // ── PolicyDecision ────────────────────────────────────────────────────────────

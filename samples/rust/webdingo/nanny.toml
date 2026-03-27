@@ -1,39 +1,46 @@
-# nanny.toml — webdingo (web research agent)
+# nanny.toml — webdingo (multi-agent web research pipeline)
 # Run: nanny run -- "best Rust HTTP clients"
 
 [runtime]
 mode = "local"
 
 [start]
-# nanny run          → starts the agent (uses built-in default topic)
+# nanny run          → starts the pipeline (uses built-in default topic)
 # nanny run -- topic → passes the research topic as an argument
 cmd = "cargo run --release"
 
+# Global ceiling — the entire pipeline cannot exceed these totals.
 [limits]
-steps   = 15
-cost    = 300
-timeout = 30000
-
-[limits.researcher]
-# Limit set activated by agent_enter("researcher") in src/main.rs.
-steps   = 15
-cost    = 300
-timeout = 30000
-
-[limits.deep]
-# Extended research run — more steps, higher budget, longer timeout.
-# Activate with: nanny run --limits=deep -- "topic"
-steps   = 40
-cost    = 1000
+steps   = 30
+cost    = 800
 timeout = 120000
 
-[tools]
-# Only fetch_url is permitted — write_file, exec, etc. are all denied.
-allowed = ["fetch_url"]
+# Agent 1: Planner — one LLM call, no tools. Tight budget by design.
+[limits.planner]
+steps   = 5
+cost    = 100
+timeout = 15000
 
-[tools.fetch_url]
-max_calls     = 15
-cost_per_call = 20
+# Agent 2: Researcher — fetches multiple URLs. The most expensive stage.
+# The no_loop rule fires before this budget is exhausted if the model spirals.
+[limits.researcher]
+steps   = 15
+cost    = 500
+timeout = 60000
+
+# Agent 3: Synthesizer — one LLM call, no tools.
+[limits.synthesizer]
+steps   = 5
+cost    = 150
+timeout = 30000
+
+[tools]
+# http_get is nanny's built-in tool — executed bridge-side, cost 10 per call.
+# write_file, exec, and all other tools remain denied.
+allowed = ["http_get"]
+
+[tools.http_get]
+max_calls = 15
 
 [observability]
 log = "stdout"
