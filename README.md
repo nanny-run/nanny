@@ -176,7 +176,7 @@ For Rust agents, annotate functions directly to get per-function cost accounting
 allowlist enforcement, and custom policy rules:
 
 ```rust
-use nannyd::{tool, rule, PolicyContext};
+use nannyd::{tool, rule, agent, PolicyContext};
 
 /// Each call charges 10 cost units and requires the tool to be in the allowlist.
 #[nanny::tool(cost = 10)]
@@ -193,15 +193,11 @@ fn check_spiral(ctx: &PolicyContext) -> bool {
     !(h.len() >= 3 && h.iter().rev().take(3).all(|t| t == "search_web"))
 }
 
-/// agent_enter / agent_exit activate a named limit set for a scope.
+/// Activates [limits.researcher] for the duration of this function.
+/// Limits revert automatically on return, even if the function panics.
+#[nanny::agent("researcher")]
 async fn run_research(topic: &str) {
-    if nanny::__private::is_active() {
-        nanny::__private::agent_enter("researcher");
-    }
     // ... Rig agent loop — search_web governed by nanny ...
-    if nanny::__private::is_active() {
-        nanny::__private::agent_exit();
-    }
 }
 ```
 

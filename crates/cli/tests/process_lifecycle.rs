@@ -256,6 +256,41 @@ fn execution_stopped_has_accounting_fields() {
     );
 }
 
+/// A process that exits with a non-zero status code produces `ProcessCrashed`.
+///
+/// Regression guard: before the fix, the stop reason was always `AgentCompleted`
+/// regardless of the child's exit code.
+#[test]
+fn process_crash_emits_process_crashed_stop_reason() {
+    let dir = temp_dir();
+    // `false` is the POSIX command that always exits with code 1.
+    write_config(&dir, 30_000, "false");
+
+    let output = Command::new(nanny_bin())
+        .args(["--config", &config_arg(&dir), "run"])
+        .output()
+        .expect("failed to run nanny");
+
+    let _ = fs::remove_dir_all(&dir);
+
+    assert!(
+        !output.status.success(),
+        "nanny must exit non-zero when the child crashes"
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("ProcessCrashed"),
+        "ExecutionStopped must carry stop_reason=ProcessCrashed; stdout: {stdout}"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("ProcessCrashed"),
+        "stderr must mention ProcessCrashed; got: {stderr}"
+    );
+}
+
 /// Missing [start] section exits non-zero with a clear error message.
 #[test]
 fn missing_start_section_exits_nonzero_with_message() {

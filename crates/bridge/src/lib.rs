@@ -45,8 +45,12 @@ pub enum ExecutionState {
 /// Final accounting snapshot read by the CLI when writing `ExecutionStopped`.
 #[derive(Debug, Clone, Default)]
 pub struct BridgeMetrics {
-    pub step_count:      u32,
+    pub step_count:       u32,
     pub cost_units_spent: u64,
+    /// Total number of tool calls made during execution.
+    pub tool_call_count:  usize,
+    /// Number of distinct tools that were allowed (configured in `[tools]`).
+    pub allowed_tool_count: usize,
 }
 
 // ── BridgeAddress ─────────────────────────────────────────────────────────────
@@ -252,8 +256,10 @@ impl Bridge {
     pub fn metrics(&self) -> BridgeMetrics {
         let guard = self.shared.lock().unwrap();
         BridgeMetrics {
-            step_count:       guard.step_count,
-            cost_units_spent: guard.cost_units_spent,
+            step_count:         guard.step_count,
+            cost_units_spent:   guard.cost_units_spent,
+            tool_call_count:    guard.tool_call_history.len(),
+            allowed_tool_count: guard.allowed_tools.len(),
         }
     }
 
@@ -421,6 +427,7 @@ fn handle_tool_call(
             cost_units_spent: guard.cost_units_spent,
             tool_call_counts: guard.tool_call_counts.clone(),
             tool_call_history: guard.tool_call_history.clone(),
+            last_tool_args: HashMap::new(),
         };
         // Chain: limits first, then per-tool rules.
         match guard.limits_policy.evaluate(&ctx) {
@@ -522,6 +529,7 @@ fn handle_rule_evaluate(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> Bridge
             } else {
                 req.tool_call_history
             },
+            last_tool_args: HashMap::new(),
         };
         guard.rule_evaluator.evaluate(&ctx)
     };
@@ -604,6 +612,7 @@ fn handle_step(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
         cost_units_spent: guard.cost_units_spent,
         tool_call_counts: guard.tool_call_counts.clone(),
         tool_call_history: guard.tool_call_history.clone(),
+        last_tool_args: HashMap::new(),
     };
 
     let step_now = guard.step_count;
