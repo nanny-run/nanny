@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] — 2026-03-27
+
+### Added
+
+- **`[start]` config** — `nanny.toml` now accepts a `[start]` table with a `cmd` field.
+  `nanny run` reads the command from config rather than requiring it on the CLI. Extra
+  arguments passed after `--` are appended to the configured command.
+- **`nanny::http_get`** — built-in SDK function that routes HTTP GET requests through the
+  bridge. Enforced by the allowlist and rule system; costs 10 units on success.
+- **`AgentScopeEntered` / `AgentScopeExited` events** — the event log now records when an
+  agent enters or exits a named limits scope, including the limits active during that scope.
+- **`ProcessCrashed` stop reason** — `ExecutionStopped` now distinguishes between a clean
+  exit (`AgentCompleted`) and an unexpected non-zero exit (`ProcessCrashed`).
+- **Async `#[agent]` support** — the `#[nanny::agent]` macro now correctly handles `async fn`
+  decorated functions; the inner impl and call sites are generated as async.
+- **`last_tool_args` in rule context** — rules now receive the arguments of the current
+  tool call via `PolicyContext::last_tool_args`, enabling content-based enforcement.
+- **Real-world sample apps** — two complete Rust agent samples using Ollama:
+  - `samples/rust/webdingo` — web research agent (HTTP fetch + summarise)
+  - `samples/rust/qabud` — codebase review agent (file tree + source analysis)
+- **`ARCHITECTURE.md`** — developer design document covering the enforcement model,
+  core abstractions, the direct-call pattern, stop reasons, and testing guidance.
+
+### Fixed
+
+- `ExecutionStopped` no longer emits `steps: 0` and `cost_spent: 0`. Step count and cost
+  are now read from bridge metrics at process exit rather than hardcoded.
+- `nanny run` prints the full `anyhow` error chain on failure (`:?#` formatting).
+- Bridge `/stop` endpoint validates the reason string against the known set of stop reasons;
+  an unknown reason from an untrusted child now maps to `ProcessCrashed`.
+- `call_tool` now returns `Stop("BridgeUnavailable")` when the bridge is unreachable during
+  a governed run, rather than silently allowing the tool call to proceed ungoverned.
+- JSON arguments in `http_get`, `report_stop`, and `agent_enter` are now built with
+  `serde_json::json!` instead of `format!`, preventing invalid JSON on special characters.
+- `TimeoutExpired` added to the governance stop set, suppressing the misleading "0 tool
+  calls" warning when execution ends due to timeout.
+- `[start].cmd` is parsed with shell quoting rules (via `shlex`) so paths with spaces
+  work correctly; unterminated quotes produce a clear error rather than a silent failure.
+
 ## [0.1.1] — 2026-03-26
 
 ### Fixed
