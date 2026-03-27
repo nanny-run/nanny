@@ -11,6 +11,11 @@ description: Complete schema for the nanny.toml configuration file.
 [runtime]
 mode = "local"   # "local" | "managed"
 
+# ── Start ─────────────────────────────────────────────────────────────────────
+
+[start]
+cmd = "python agent.py"   # required — the command nanny run executes
+
 # ── Limits ────────────────────────────────────────────────────────────────────
 
 [limits]
@@ -62,6 +67,26 @@ api_key  = "nanny_live_xxxxxxxxxxxx"
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `mode` | string | `"local"` | `"local"` enforces limits locally, without external services. `"managed"` additionally forwards execution data to Nanny Cloud. |
+
+---
+
+## [start]
+
+Required for `nanny run`. Declares the command to execute when `nanny run` is invoked with no inline command argument.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `cmd` | string | The command string to run. Parsed with shell quoting rules — paths with spaces are supported. Arguments passed after `--` on the CLI are appended. |
+
+```toml
+[start]
+cmd = "python agent.py"
+```
+
+```bash
+nanny run            # runs: python agent.py
+nanny run -- topic   # runs: python agent.py topic
+```
 
 ---
 

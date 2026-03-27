@@ -55,11 +55,12 @@ It is a good fit if you:
 
 Nanny is designed to meet you where you are and grow with you.
 
-**Nanny CLI** — The universal entry point. Wraps any agent process in any language with zero code changes. Install it once as a system tool and use `nanny run` from any project.
+**Nanny CLI** — The universal entry point. Wraps any agent process in any language with zero code changes. Install it once as a system tool and use `nanny run` from any project that has a `nanny.toml` with a `[start]` command configured.
 
 ```bash
-nanny run python agent.py    # Python agent
-nanny run ./my-agent         # Compiled Rust agent
+nanny run                    # reads [start].cmd from nanny.toml
+nanny run --limits=researcher   # activates a named limit set
+nanny run -- "research topic"   # appends args to [start].cmd
 ```
 
 **Rust SDK** — For Rust agents, go deeper. Annotate individual functions with `#[nanny::tool]`, `#[nanny::rule]`, and `#[nanny::agent]` to get per-function cost accounting, allowlist enforcement, and custom rules. See the [Rust SDK guide](/guides/rust-sdk).

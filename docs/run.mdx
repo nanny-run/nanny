@@ -6,7 +6,7 @@ description: Run a command under Nanny enforcement.
 Spawns a child process under full Nanny enforcement. Reads `nanny.toml` from the current directory and kills the process the moment any limit is crossed.
 
 ```bash
-nanny run [OPTIONS] <COMMAND> [ARGS...]
+nanny run [OPTIONS] [-- ARGS...]
 ```
 
 ---
@@ -14,17 +14,17 @@ nanny run [OPTIONS] <COMMAND> [ARGS...]
 ## Examples
 
 ```bash
-# Run with base [limits]
-nanny run python agent.py
+# Run with base [limits] (reads [start].cmd from nanny.toml)
+nanny run
 
 # Run with a named limit set
-nanny run --limits=researcher python agent.py
+nanny run --limits=researcher
 
-# Pass flags to the child command (use -- to separate nanny flags from command flags)
-nanny run -- python agent.py --verbose --output results.json
+# Pass extra arguments to the agent (appended to [start].cmd)
+nanny run -- --verbose --output results.json
 
 # Use a config file in a non-standard location
-nanny run --config=./config/nanny.toml python agent.py
+nanny run --config=./config/nanny.toml
 ```
 
 ---
@@ -77,7 +77,7 @@ Every run emits [NDJSON events](/concepts/event-log) to stdout. `ExecutionStarte
 Pipe to a file to keep your agent's own output separate:
 
 ```bash
-nanny run python agent.py > nanny.log
+nanny run > nanny.log
 ```
 
 ---

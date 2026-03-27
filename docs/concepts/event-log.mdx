@@ -23,7 +23,7 @@ log_file = "nanny.log"
 Or pipe stdout to a file at the shell level:
 
 ```bash
-nanny run python agent.py > nanny.log
+nanny run > nanny.log
 ```
 
 ## Guaranteed events
@@ -76,6 +76,8 @@ When the Rust SDK macros or Python SDK decorators are active, additional events 
 | `ToolAllowed` | When Nanny permits a tool call |
 | `ToolDenied` | When Nanny blocks a tool call (not in allowlist, or rule fired) |
 | `ToolFailed` | When a permitted tool fails at runtime (network error, bad args, etc.) |
+| `AgentScopeEntered` | When a `#[nanny::agent("name")]` function is entered |
+| `AgentScopeExited` | When a `#[nanny::agent("name")]` function returns |
 
 `ToolFailed` is distinct from `ToolDenied` — the tool was allowed but encountered an error.
 No cost is charged on tool failure.

@@ -14,7 +14,8 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="Apache 2.0" /></a>
   <a href="https://crates.io/crates/nannyd"><img src="https://img.shields.io/crates/v/nannyd?logo=rust&label=crates.io" alt="crates.io" /></a>
-  <a href="https://pypi.org/project/nanny-sdk/"><img src="https://img.shields.io/pypi/v/nanny-sdk?logo=python&label=pypi" alt="PyPI" /></a>
+  <!-- PyPI badge enabled when nanny-sdk ships (v0.2.0) -->
+  <!-- <a href="https://pypi.org/project/nanny-sdk/"><img src="https://img.shields.io/pypi/v/nanny-sdk?logo=python&label=pypi" alt="PyPI" /></a> -->
   <a href="https://github.com/nanny-run/nanny/releases"><img src="https://img.shields.io/github/v/release/nanny-run/nanny?logo=github&label=release" alt="GitHub Release" /></a>
   <!-- <a href="https://github.com/nanny-run/nanny/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/nanny-run/nanny/ci.yml?logo=github&label=CI" alt="CI" /></a> -->
   <a href="https://github.com/nanny-run/nanny/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs Welcome" /></a>
@@ -83,6 +84,25 @@ flowchart TD
 
 ---
 
+## Sample applications
+
+Two complete Rust agent samples ship in `examples/rust/`. Both use [Ollama](https://ollama.com) — no API key required.
+
+| Sample | What it does | Stop reasons demonstrated |
+|--------|-------------|--------------------------|
+| [`webdingo`](examples/rust/webdingo) | Web research agent — fetches pages, synthesises a report. Classic spiral risk. | `BudgetExhausted`, `RuleDenied` |
+| [`qabud`](examples/rust/qabud) | Code review agent — reads source files, identifies issues, blocks sensitive files before they're opened. | `RuleDenied`, `ToolDenied`, `MaxStepsReached` |
+
+```bash
+# webdingo
+cd examples/rust/webdingo && nanny run -- "best Rust HTTP clients"
+
+# qabud
+cd examples/rust/qabud && nanny run -- ./src
+```
+
+---
+
 ## Install
 
 The Nanny CLI is a **system tool** — install it once globally and use `nanny run` from any project that has a `nanny.toml`.
@@ -90,6 +110,7 @@ The Nanny CLI is a **system tool** — install it once globally and use `nanny r
 **macOS**
 
 ```sh
+brew tap nanny-run/nanny
 brew install nannyd
 ```
 

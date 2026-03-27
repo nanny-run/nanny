@@ -10,6 +10,7 @@ The Nanny CLI is a system tool — install it once and use `nanny run` from any 
 <Tabs>
   <Tab title="macOS">
     ```bash
+    brew tap nanny-run/nanny
     brew install nannyd
     ```
   </Tab>
@@ -45,30 +46,27 @@ This writes a `nanny.toml` with safe defaults:
 [runtime]
 mode = "local"
 
+[start]
+# How to launch your agent.
+# nanny run          → runs this command
+# nanny run -- arg   → runs this command with arg appended
+cmd = "python agent.py"
+
 [limits]
 steps   = 100
 cost    = 1000
 timeout = 30000
 ```
 
-Edit the values to match your agent's requirements.
+Set `[start].cmd` to your agent's entry point and edit the limit values to match your requirements.
 
 ## Run your agent
 
-<Tabs>
-  <Tab title="Python">
-    ```bash
-    nanny run python agent.py
-    ```
-  </Tab>
-  <Tab title="Rust">
-    ```bash
-    nanny run ./my-agent
-    ```
-  </Tab>
-</Tabs>
+```bash
+nanny run
+```
 
-Nanny reads `nanny.toml` from the current directory, spawns the process, and kills it the moment any limit is crossed.
+Nanny reads `[start].cmd` from `nanny.toml`, spawns the process, and kills it the moment any limit is crossed.
 
 ## Use named limits
 
@@ -89,7 +87,7 @@ timeout = 120000
 Then activate a named set at runtime:
 
 ```bash
-nanny run --limits=researcher python agent.py
+nanny run --limits=researcher
 ```
 
 Named sets inherit from `[limits]` and override only the fields you declare.
@@ -106,7 +104,7 @@ Every run emits structured NDJSON to stdout:
 Pipe it to a file or your log aggregator:
 
 ```bash
-nanny run python agent.py >> nanny.log
+nanny run >> nanny.log
 ```
 
 Or configure file output directly in `nanny.toml`:
