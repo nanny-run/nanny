@@ -120,11 +120,16 @@ fn cmd_run(config_path: &Path, limits_name: Option<&str>, extra_args: Vec<String
     let start = config.start.as_ref()
         .ok_or_else(|| anyhow::anyhow!("no start config found in nanny.toml"))?;
 
-    // Build command: split [start].cmd by whitespace, then append any extra args.
-    let mut command: Vec<String> = start.cmd
-        .split_whitespace()
-        .map(|s| s.to_string())
-        .collect();
+    // Build command: parse [start].cmd with shell quoting rules, then append extra args.
+    // shlex::split handles quoted paths and escaped spaces — e.g. 'python "my agent.py"'.
+    let mut command: Vec<String> = shlex::split(&start.cmd)
+        .ok_or_else(|| anyhow::anyhow!(
+            "invalid [start].cmd in nanny.toml: unterminated quote or invalid shell syntax: {:?}",
+            start.cmd
+        ))?;
+    if command.is_empty() {
+        return Err(anyhow::anyhow!("[start].cmd in nanny.toml is empty"));
+    }
     command.extend(extra_args);
 
     // Build the wired runtime from config.
@@ -215,9 +220,19 @@ fn cmd_run(config_path: &Path, limits_name: Option<&str>, extra_args: Vec<String
 
         match child.try_wait() {
             Ok(Some(status)) => {
-                let reason = if status.success() { "AgentCompleted" } else { "ProcessCrashed" };
-                bridge.stop(reason);
-                break reason.to_string();
+                // Use exit status as the fallback reason only.
+                // The child may have called POST /stop before dying (e.g. for
+                // RuleDenied or ToolFailed), in which case the bridge already
+                // has the specific reason. bridge.stop() is idempotent — it
+                // won't overwrite a reason the child already reported.
+                let fallback = if status.success() { "AgentCompleted" } else { "ProcessCrashed" };
+                bridge.stop(fallback);
+                // Re-read: prefer the bridge's reason over the generic fallback.
+                let reason = match bridge.execution_state() {
+                    nanny_bridge::ExecutionState::Stopped { reason } => reason,
+                    nanny_bridge::ExecutionState::Running => fallback.to_string(),
+                };
+                break reason;
             }
             Ok(None) => {
                 if started_at.elapsed() >= timeout {
@@ -251,7 +266,13 @@ fn cmd_run(config_path: &Path, limits_name: Option<&str>, extra_args: Vec<String
     // Warn when tools are configured but the agent never called any.
     // This usually means the model ignored its tool definitions — a common
     // sign of a model that is too small or a prompt that needs improvement.
-    if metrics.allowed_tool_count > 0 && metrics.tool_call_count == 0 {
+    // Suppress the warning when execution was stopped by a governance decision
+    // (rule denial, tool denial, budget) — in that case 0 calls is expected.
+    let is_governance_stop = matches!(
+        stop_reason.as_str(),
+        "RuleDenied" | "ToolDenied" | "BudgetExhausted" | "MaxStepsReached" | "TimeoutExpired"
+    );
+    if metrics.allowed_tool_count > 0 && metrics.tool_call_count == 0 && !is_governance_stop {
         eprintln!(
             "nanny: warning — execution completed with 0 tool calls \
              ({} tool(s) were allowed). \
