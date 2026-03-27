@@ -5,12 +5,12 @@ description: What Nanny actually does when you run a command under it.
 
 ## The execution boundary
 
-When you run `nanny run <cmd>`, Nanny becomes the parent process of your agent.
-It owns the process lifecycle — it decides when the process lives and when it dies.
+When you run `nanny run`, Nanny becomes the parent process of your agent.
+It reads `[start].cmd` from `nanny.toml`, spawns it as a child, and owns the process lifecycle — it decides when the process lives and when it dies.
 
 ```mermaid
 flowchart TD
-    CMD(["$ nanny run python agent.py"])
+    CMD(["$ nanny run"])
 
     CMD --> NANNY
 

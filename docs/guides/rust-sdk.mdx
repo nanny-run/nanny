@@ -28,8 +28,8 @@ use nanny::{tool, rule, agent, PolicyContext};
 If your agent runs without `nanny run`, every macro is a no-op. The function executes normally — no bridge call, no overhead:
 
 ```bash
-# Governed — bridge active, limits enforced
-nanny run cargo run
+# Governed — bridge active, limits enforced (reads [start].cmd from nanny.toml)
+nanny run
 
 # Not governed — macros silent, agent runs normally
 cargo run
@@ -83,6 +83,36 @@ allowed = ["fetch_page", "read_file"]
 max_calls     = 20
 cost_per_call = 10   # nanny.toml cost overrides the macro default
 ```
+
+---
+
+## `nanny::http_get` — built-in HTTP tool
+
+`nanny::http_get` is a built-in tool that routes HTTP GET requests through the bridge. It requires no `#[tool]` annotation — governance is handled entirely bridge-side.
+
+```rust
+use nanny::http_get;
+
+let html = http_get("https://example.com")?;
+```
+
+Governance applied automatically:
+
+- Checked against the `[tools] allowed` list (tool name: `"http_get"`)
+- Subject to `[tools.http_get] max_calls` limit
+- Costs 10 units per successful call (configurable via `[tools.http_get] cost_per_call`)
+
+```toml
+# nanny.toml
+[tools]
+allowed = ["http_get"]
+
+[tools.http_get]
+max_calls     = 15
+cost_per_call = 10
+```
+
+In passthrough mode (no `nanny run`), `nanny::http_get` makes the request directly — no bridge call, no overhead.
 
 ---
 
@@ -196,7 +226,7 @@ fn main() {
 Run it under Nanny:
 
 ```bash
-nanny run cargo run
+nanny run
 ```
 
 Run it without Nanny (macros silent, agent runs normally):

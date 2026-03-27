@@ -64,8 +64,8 @@ from the base and only changes `timeout`.
 Activate a named set at runtime:
 
 ```bash
-nanny run --limits=researcher python agent.py
-nanny run --limits=quick python agent.py
+nanny run --limits=researcher
+nanny run --limits=quick
 ```
 
 ## What happens when a limit is hit
@@ -85,3 +85,5 @@ The stop reasons are:
 | `BudgetExhausted` | Cost budget exhausted |
 | `ToolDenied` | Tool not in allowlist |
 | `RuleDenied` | Custom rule returned denial |
+| `ManualStop` | Stopped programmatically |
+| `ProcessCrashed` | Child process exited with non-zero code unexpectedly |

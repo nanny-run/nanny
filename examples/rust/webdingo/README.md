@@ -10,7 +10,7 @@ Demonstrates the complete Nanny developer workflow:
 ## Prerequisites
 
 - Rust toolchain (`curl https://sh.rustup.rs -sSf | sh`)
-- `nanny` CLI (`cargo install nannyd` or `brew install nannyd`)
+- `nanny` CLI (`cargo install nannyd` or `brew tap nanny-run/nanny && brew install nannyd`)
 - [Ollama](https://ollama.com) running locally with `llama3.2` pulled:
 
 ```sh

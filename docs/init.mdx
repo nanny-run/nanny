@@ -19,13 +19,19 @@ Creates a `nanny.toml` with conservative defaults that work for most agents out 
 [runtime]
 mode = "local"
 
+[start]
+# How to launch your agent.
+# nanny run          → runs this command
+# nanny run -- arg   → runs this command with arg appended
+cmd = "python agent.py"
+
 [limits]
 steps   = 100
 cost    = 1000
 timeout = 30000
 ```
 
-After running `nanny init`, edit the values to match your agent's actual requirements before running.
+After running `nanny init`, set `[start].cmd` to your agent's entry point and adjust the limit values to match your requirements.
 
 ---
 
@@ -51,7 +57,7 @@ To reset a config, delete `nanny.toml` and run `nanny init` again.
 Once your config is in place, run your agent:
 
 ```bash
-nanny run python agent.py
+nanny run
 ```
 
 See [nanny run](/run) for the full command reference.

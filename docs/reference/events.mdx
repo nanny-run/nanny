@@ -77,7 +77,55 @@ Always the last event in any log.
 | `ToolDenied` | A tool call was blocked by the allowlist or a rule. |
 | `RuleDenied` | A custom rule returned a denial. |
 | `ManualStop` | Execution was stopped programmatically. |
-| `SpawnFailed` | The child process could not be started. |
+| `ProcessCrashed` | The child process exited with a non-zero code unexpectedly. |
+
+---
+
+## AgentScopeEntered
+
+Emitted when a function annotated with `#[nanny::agent("name")]` is entered. Records the limits active for that scope.
+
+```json
+{
+  "event": "AgentScopeEntered",
+  "ts": 1711234567200,
+  "name": "researcher",
+  "limits": {
+    "steps": 200,
+    "cost": 5000,
+    "timeout": 120000
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | The name of the agent scope (matches `[limits.<name>]` in `nanny.toml`). |
+| `limits.steps` | integer | Step limit active for this scope. |
+| `limits.cost` | integer | Cost limit active for this scope. |
+| `limits.timeout` | integer | Timeout active for this scope in milliseconds. |
+
+---
+
+## AgentScopeExited
+
+Emitted when a function annotated with `#[nanny::agent("name")]` returns. Records usage during that scope.
+
+```json
+{
+  "event": "AgentScopeExited",
+  "ts": 1711234571800,
+  "name": "researcher",
+  "steps_used": 12,
+  "cost_used": 240
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | The name of the agent scope. |
+| `steps_used` | integer | Steps consumed during this scope. |
+| `cost_used` | integer | Cost units consumed during this scope. |
 
 ---
 

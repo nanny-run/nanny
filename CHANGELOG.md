@@ -23,8 +23,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **`last_tool_args` in rule context** — rules now receive the arguments of the current
   tool call via `PolicyContext::last_tool_args`, enabling content-based enforcement.
 - **Real-world sample apps** — two complete Rust agent samples using Ollama:
-  - `samples/rust/webdingo` — web research agent (HTTP fetch + summarise)
-  - `samples/rust/qabud` — codebase review agent (file tree + source analysis)
+  - `examples/rust/webdingo` — web research agent (HTTP fetch + summarise)
+  - `examples/rust/qabud` — codebase review agent (file tree + source analysis)
 - **`ARCHITECTURE.md`** — developer design document covering the enforcement model,
   core abstractions, the direct-call pattern, stop reasons, and testing guidance.
 
@@ -85,10 +85,11 @@ First public release of Nanny — an execution boundary for autonomous AI agents
   attached to each GitHub Release as `.tar.gz` archives.
 - **curl installer** — `curl -fsSL https://install.nanny.run | sh` detects OS/arch
   and installs the `nanny` binary to `/usr/local/bin` or `~/.local/bin`.
-- **Homebrew tap** — `brew install nanny-run/tap/nannyd` via `nanny-run/homebrew-tap`.
+- **Homebrew tap** — `brew tap nanny-run/nanny && brew install nannyd` via `nanny-run/nanny`.
 - **CI** — GitHub Actions workflows for test, clippy, and cross-compiled release builds.
   SHA256 checksums for each binary are computed and pushed to the homebrew tap automatically
   on every tagged release.
 
+[0.1.2]: https://github.com/nanny-run/nanny/releases/tag/v0.1.2
 [0.1.1]: https://github.com/nanny-run/nanny/releases/tag/v0.1.1
 [0.1.0]: https://github.com/nanny-run/nanny/releases/tag/v0.1.0
