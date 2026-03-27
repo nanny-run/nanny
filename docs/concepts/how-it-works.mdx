@@ -53,12 +53,13 @@ Step and cost enforcement require the agent to report tool calls — either via 
 
 ## Passthrough mode
 
-When running outside `nanny run`, every macro and decorator becomes a no-op:
+When running outside `nanny run`, every macro becomes a no-op:
 
-```python
-@tool(cost=10)
-def search(query: str) -> str:
-    ...  # runs normally, no enforcement
+```rust
+#[tool(cost = 10)]
+fn search(query: &str) -> String {
+    // runs normally, no enforcement
+}
 ```
 
-This means you can ship instrumented code and run it in development, CI, and production without nanny — until you explicitly wrap it with `nanny run`. The behaviour is identical either way.
+This means you can ship instrumented code and run it in development, CI, and production without Nanny — until you explicitly wrap it with `nanny run`. The behaviour is identical either way.

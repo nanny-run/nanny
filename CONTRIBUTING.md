@@ -113,20 +113,33 @@ These are permanent constraints, not temporary gaps. They protect the property t
 
 ## Codebase map
 
-All source lives in `crates/`. Only `cli` is published to crates.io. The rest are internal implementation crates.
+All source lives in `crates/`. All six crates are published to crates.io — crates.io requires every dependency in the chain to be published. `nannyd` (`cli`) is the developer-facing crate: the one you `cargo add` or `cargo install`. The others are its published dependencies and are not intended to be used directly.
 
-| Crate     | Published    | What it does                                                                                   |
-| --------- | ------------ | ---------------------------------------------------------------------------------------------- |
-| `cli`     | ✓ (`nannyd`) | The `nanny` binary and Rust SDK (`#[tool]`, `#[rule]`, `#[agent]`)                             |
-| `core`    | ✗            | Traits (`Policy`, `Ledger`, `ToolExecutor`) and the `ExecutionEvent` type. No implementations. |
-| `runtime` | ✗            | Concrete impls: `LimitsPolicy`, `RuleEvaluator`, `FakeLedger`, `ToolRegistry`, built-in tools  |
-| `bridge`  | ✗            | Local HTTP enforcement server (Unix socket / TCP); holds all execution state                   |
-| `config`  | ✗            | Parses `nanny.toml`; owns `NannyConfig`                                                        |
-| `macros`  | ✗            | The `#[tool]`, `#[rule]`, `#[agent]` proc-macros (re-exported by `cli`)                        |
+| Crate     | crates.io name  | Developer-facing | What it does                                                                                   |
+| --------- | --------------- | ---------------- | ---------------------------------------------------------------------------------------------- |
+| `cli`     | `nannyd`        | ✓                | The `nanny` binary and Rust SDK (`#[tool]`, `#[rule]`, `#[agent]`)                             |
+| `core`    | `nanny-core`    | ✗                | Traits (`Policy`, `Ledger`, `ToolExecutor`) and the `ExecutionEvent` type. No implementations. |
+| `runtime` | `nanny-runtime` | ✗                | Concrete impls: `LimitsPolicy`, `RuleEvaluator`, `FakeLedger`, `ToolRegistry`, built-in tools  |
+| `bridge`  | `nanny-bridge`  | ✗                | Local HTTP enforcement server (Unix socket / TCP); holds all execution state                   |
+| `config`  | `nanny-config`  | ✗                | Parses `nanny.toml`; owns `NannyConfig`                                                        |
+| `macros`  | `nanny-macros`  | ✗                | The `#[tool]`, `#[rule]`, `#[agent]` proc-macros (re-exported by `cli`)                        |
 
 **The dependency direction is strict:** `core` has no internal dependencies. Everything else depends on `core`. `core` never imports `runtime`, `bridge`, or `cli`.
 
 If you are adding a new enforcement rule, it goes in `runtime`. If you are adding a new event type, it goes in `core/src/events/event.rs`. If you are changing CLI behaviour, it goes in `cli/src/main.rs`.
+
+---
+
+## Reference examples
+
+`examples/rust/` contains two complete Rust agents that exercise the full SDK:
+
+| Example | What it demonstrates |
+|---------|----------------------|
+| [`examples/rust/webdingo`](examples/rust/webdingo) | `#[nanny::tool]`, `#[nanny::agent]`, `nanny::http_get`, loop-detection rule |
+| [`examples/rust/qabud`](examples/rust/qabud) | `#[nanny::tool]`, content-based rule (`last_tool_args`), allowlist enforcement |
+
+Both use Ollama (local LLM) and path deps to the workspace crates, so they build without publishing. They are the best starting point for understanding how the pieces fit together before touching the crate internals.
 
 ---
 
@@ -239,7 +252,7 @@ PR titles are checked against this format. Example: `feat: add [start] table to 
 **How a release happens:**
 1. Maintainer merges `next` into `main`.
 2. Maintainer pushes a `v*` tag (e.g. `v0.1.2`) on `main`.
-3. The release workflow runs: `cargo publish` for `nannyd`, GitHub Release created, Homebrew formula updated.
+3. The release workflow runs: `cargo publish` for all six crates in dependency order (`nanny-core` → `nanny-config` → `nanny-runtime` → `nanny-bridge` → `nanny-macros` → `nannyd`), GitHub Release created, Homebrew formula updated.
 
 **Requirements before a release tag is pushed:**
 - `cargo test --workspace` must pass on both `ubuntu-latest` and `macos-latest`.

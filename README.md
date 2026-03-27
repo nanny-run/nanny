@@ -44,7 +44,7 @@ Think of it as a circuit breaker for autonomous systems — deterministic, audit
 
 ```mermaid
 flowchart TD
-    CMD(["nanny run python agent.py"])
+    CMD(["nanny run"])
     CMD --> NANNY
 
     subgraph NANNY["Nanny — parent process"]
@@ -128,7 +128,7 @@ cargo install nannyd
 
 Or download a pre-built binary directly from [GitHub Releases](https://github.com/nanny-run/nanny/releases).
 
-> **Windows note:** Process enforcement (hard kill on limit breach) requires Unix signal support and is not yet implemented on Windows. The CLI and SDK bridge otherwise work correctly.
+> **Windows note:** Process enforcement (hard kill on limit breach) requires Unix signal support and is not yet implemented on Windows. The CLI and SDK otherwise work correctly.
 
 ---
 
@@ -222,7 +222,7 @@ async fn run_research(topic: &str) {
 }
 ```
 
-All macros are no-ops when running outside `nanny run` — no bridge, no overhead.
+All macros are no-ops when running outside `nanny run` — no enforcement overhead.
 
 → Full Rust SDK guide at [docs.nanny.run](https://docs.nanny.run)
 
