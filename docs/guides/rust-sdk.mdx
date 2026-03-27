@@ -3,7 +3,7 @@ title: Rust
 description: Per-function governance for Rust agents using Nanny macros.
 ---
 
-The Rust SDK brings Nanny's enforcement boundary into your code. Instead of relying only on process-level limits, you mark individual functions as tools and rules — Nanny then governs each call through the bridge.
+The Rust SDK brings Nanny's enforcement boundary into your code. Instead of relying only on process-level limits, you mark individual functions as tools and rules — Nanny governs each call before it executes.
 
 ---
 
@@ -25,10 +25,10 @@ use nanny::{tool, rule, agent, PolicyContext};
 
 ## Passthrough mode
 
-If your agent runs without `nanny run`, every macro is a no-op. The function executes normally — no bridge call, no overhead:
+If your agent runs without `nanny run`, every macro is a no-op. The function executes normally with no enforcement overhead:
 
 ```bash
-# Governed — bridge active, limits enforced (reads [start].cmd from nanny.toml)
+# Governed — enforcement active (reads [start].cmd from nanny.toml)
 nanny run
 
 # Not governed — macros silent, agent runs normally
@@ -88,7 +88,7 @@ cost_per_call = 10   # nanny.toml cost overrides the macro default
 
 ## `nanny::http_get` — built-in HTTP tool
 
-`nanny::http_get` is a built-in tool that routes HTTP GET requests through the bridge. It requires no `#[tool]` annotation — governance is handled entirely bridge-side.
+`nanny::http_get` is a built-in governed HTTP GET function. It requires no `#[tool]` annotation — Nanny applies allowlist, call-count, and cost enforcement automatically.
 
 ```rust
 use nanny::http_get;
@@ -112,7 +112,7 @@ max_calls     = 15
 cost_per_call = 10
 ```
 
-In passthrough mode (no `nanny run`), `nanny::http_get` makes the request directly — no bridge call, no overhead.
+In passthrough mode (no `nanny run`), `nanny::http_get` makes the request directly with no enforcement overhead.
 
 ---
 
@@ -151,6 +151,7 @@ The `ctx` parameter gives you a snapshot of the current execution state:
 | `tool_call_history` | `Vec<String>` | Ordered log of tool names called |
 | `requested_tool` | `Option<String>` | The tool being evaluated right now |
 | `last_tool_args` | `HashMap<String, String>` | Arguments of the most recent tool call |
+| `prompt` | `Option<String>` | The agent's current prompt, if provided |
 
 Rules are evaluated **before** the tool runs — `requested_tool` is set to the tool name being checked.
 

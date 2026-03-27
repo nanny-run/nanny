@@ -6,7 +6,7 @@ This document explains how Nanny enforces its guarantees and how to design agent
 
 ## The enforcement guarantee
 
-When you run `nanny run <cmd>`, Nanny becomes the **parent process** of your agent. The agent runs as its child. All enforcement happens in the parent.
+When you run `nanny run`, Nanny becomes the **parent process** of your agent. It reads `[start].cmd` from `nanny.toml` and spawns it as a child. The agent runs as its child. All enforcement happens in the parent.
 
 This means:
 - The agent cannot catch, delay, or prevent a stop
@@ -116,17 +116,16 @@ Every execution ends with an `ExecutionStopped` event carrying a `reason` field.
 | `TimeoutExpired` | The wall-clock timeout was reached. The process was killed. |
 | `MaxStepsReached` | The step limit was hit. The process was killed. |
 | `BudgetExhausted` | The cost budget was exhausted. The process was killed. |
-| `ToolDenied` | A tool call was blocked — the tool is not on the allowlist. |
+| `ToolDenied` | A tool call was blocked — the tool is not on the allowlist or exceeded its call limit. |
 | `RuleDenied` | A custom rule returned a denial. The tool never ran. |
-| `ToolFailed` | A tool was allowed and called, but failed at runtime (e.g. network error). |
-| `ProcessCrashed` | The process exited unexpectedly with a non-zero code. Nanny did not stop it — something in the agent's own code did (panic, unhandled error, OOM). |
-| `SpawnFailed` | The child process could not be started at all. Check the command in `nanny.toml`. |
+| `ManualStop` | Execution was stopped programmatically via the SDK. |
+| `ProcessCrashed` | The process exited unexpectedly with a non-zero code. Nanny did not stop it — something in the agent's own code did (panic, unhandled error, OOM, or the process could not be started). |
 
-Three of these require attention from the developer rather than the operator:
+Note: `ToolFailed` is an **event** emitted when a permitted tool fails at runtime (network error, bad arguments). It is not a stop reason — execution continues and the agent receives an error response. Handle tool errors in your agent code rather than letting them propagate as crashes.
 
-- **`ProcessCrashed`** — this is a bug in your agent, not a governance event. Inspect your agent's stderr for the actual error.
-- **`ToolFailed`** — the tool was permitted but the underlying operation failed. Handle errors gracefully in your agent so a single failed call doesn't crash the entire run.
-- **`SpawnFailed`** — your `[start] cmd` in `nanny.toml` is wrong, or the binary doesn't exist.
+One stop reason requires attention from the developer rather than the operator:
+
+- **`ProcessCrashed`** — this is not a governance event. Inspect your agent's stderr for the actual error. If the process could not be started at all, verify `[start].cmd` in `nanny.toml` is correct and the binary exists.
 
 All other reasons are governance events — Nanny stopped the agent deliberately.
 
