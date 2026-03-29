@@ -19,28 +19,25 @@ nanny run
 
 # Run with a named limit set
 nanny run --limits=researcher
-
-# Use a config file in a non-standard location
-nanny run --config=./config/nanny.toml
 ```
 
 ---
 
 ## Options
 
-| Flag | Type | Default | Description |
-|------|------|---------|-------------|
-| `--limits=<name>` | string | — | Activate a named limit set from `nanny.toml`. Inherits from `[limits]`. |
-| `--config=<path>` | path | `./nanny.toml` | Path to config file. |
+| Flag              | Type   | Default        | Description                                                             |
+| ----------------- | ------ | -------------- | ----------------------------------------------------------------------- |
+| `--limits=<name>` | string | —              | Activate a named limit set from `nanny.toml`. Inherits from `[limits]`. |
+| `--config=<path>` | path   | `./nanny.toml` | Path to config file.                                                    |
 
 ---
 
 ## Exit codes
 
-| Code | Meaning |
-|------|---------|
-| `0` | Process exited cleanly (`AgentCompleted`) |
-| `1` | Nanny stopped the process, a spawn failure occurred, or an internal error occurred |
+| Code | Meaning                                                                            |
+| ---- | ---------------------------------------------------------------------------------- |
+| `0`  | Process exited cleanly (`AgentCompleted`)                                          |
+| `1`  | Nanny stopped the process, a spawn failure occurred, or an internal error occurred |
 
 ---
 

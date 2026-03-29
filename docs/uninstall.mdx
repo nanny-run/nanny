@@ -1,0 +1,22 @@
+---
+title: nanny uninstall
+description: Remove the nanny binary from its current install location.
+---
+
+Removes the `nanny` binary that is currently running.
+
+```bash
+nanny uninstall
+```
+
+If the binary is managed by Homebrew, `nanny uninstall` exits with an error and tells you to run `brew uninstall nannyd` instead — Homebrew needs to manage its own metadata.
+
+---
+
+## Errors
+
+| Condition | Behaviour |
+|-----------|-----------|
+| Homebrew installation detected | Exits with an error and prints the correct `brew` command |
+| Insufficient permissions | Exits with an error and prints a `sudo rm` fallback |
+| Binary path cannot be determined | Exits with an error |
