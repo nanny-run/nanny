@@ -159,11 +159,8 @@ nanny init
 # 2. Run your agent
 nanny run
 
-# 3. Pass arguments to your agent
-nanny run -- "research topic"
-
-# 4. Use a named limit set for specific workloads
-nanny run --limits=researcher -- "research topic"
+# 3. Use a named limit set for specific workloads
+nanny run --limits=researcher
 ```
 
 **nanny.toml:**
