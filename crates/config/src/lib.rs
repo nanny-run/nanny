@@ -345,9 +345,7 @@ mode = "local"
 # api_key  = "nny_live_xxx"
 
 [start]
-# How to launch your agent.
-# nanny run          → runs this command
-# nanny run -- arg   → runs this command with arg appended
+# How to launch your agent. nanny run reads this command.
 cmd = "python agent.py"
 
 [limits]
