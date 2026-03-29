@@ -73,12 +73,12 @@ flowchart TD
 
 ## The Nanny ecosystem
 
-| Layer | What it does |
-|-------|-------------|
-| **Nanny CLI** | Wraps any agent process in any language. Zero code changes required. |
-| **Rust SDK** | Per-function cost metering, allowlist enforcement, and custom rules — in-process. |
-| **Python SDK** _(v0.2.0)_ | The same `@tool`, `@rule`, `@agent` model as Python decorators. |
-| **Nanny Cloud** _(v0.3.0)_ | Durable audit logs, team dashboards, org-level budget aggregation. |
+| Layer                      | What it does                                                                      |
+| -------------------------- | --------------------------------------------------------------------------------- |
+| **Nanny CLI**              | Wraps any agent process in any language. Zero code changes required.              |
+| **Rust SDK**               | Per-function cost metering, allowlist enforcement, and custom rules — in-process. |
+| **Python SDK** _(v0.2.0)_  | The same `@tool`, `@rule`, `@agent` model as Python decorators.                   |
+| **Nanny Cloud** _(v0.3.0)_ | Durable audit logs, team dashboards, org-level budget aggregation.                |
 
 → Full docs at [docs.nanny.run](https://docs.nanny.run)
 
@@ -88,10 +88,10 @@ flowchart TD
 
 Two complete Rust agent samples ship in `examples/rust/`. Both use [Ollama](https://ollama.com) — no API key required.
 
-| Sample | What it does | Stop reasons demonstrated |
-|--------|-------------|--------------------------|
-| [`webdingo`](examples/rust/webdingo) | Web research agent — fetches pages, synthesises a report. Classic spiral risk. | `BudgetExhausted`, `RuleDenied` |
-| [`qabud`](examples/rust/qabud) | Code review agent — reads source files, identifies issues, blocks sensitive files before they're opened. | `RuleDenied`, `ToolDenied`, `MaxStepsReached` |
+| Sample                               | What it does                                                                                             | Stop reasons demonstrated                     |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| [`webdingo`](examples/rust/webdingo) | Web research agent — fetches pages, synthesises a report. Classic spiral risk.                           | `BudgetExhausted`, `RuleDenied`               |
+| [`qabud`](examples/rust/qabud)       | Code review agent — reads source files, identifies issues, blocks sensitive files before they're opened. | `RuleDenied`, `ToolDenied`, `MaxStepsReached` |
 
 ```bash
 # webdingo
@@ -159,11 +159,8 @@ nanny init
 # 2. Run your agent
 nanny run
 
-# 3. Pass arguments to your agent
-nanny run -- "research topic"
-
-# 4. Use a named limit set for specific workloads
-nanny run --limits=researcher -- "research topic"
+# 3. Use a named limit set for specific workloads
+nanny run --limits=researcher
 ```
 
 **nanny.toml:**
