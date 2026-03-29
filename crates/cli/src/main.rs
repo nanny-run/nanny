@@ -47,11 +47,9 @@ enum Command {
     /// Run the project under nanny enforcement.
     ///
     /// Reads [start].cmd from nanny.toml and runs it.
-    /// Extra arguments passed after -- are appended to [start].cmd.
     ///
     /// Example: nanny run
     /// Example: nanny run --limits=researcher
-    /// Example: nanny run -- "research topic"
     Run {
         /// Named limits set to activate from nanny.toml [limits.<name>].
         /// Inherits from [limits] defaults and overrides only declared fields.
@@ -63,6 +61,9 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         extra_args: Vec<String>,
     },
+
+    /// Remove the nanny binary from its current install location.
+    Uninstall,
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -73,6 +74,7 @@ fn main() {
     let result = match cli.command {
         Command::Init => cmd_init(),
         Command::Run { limits, extra_args } => cmd_run(&cli.config, limits.as_deref(), extra_args),
+        Command::Uninstall => cmd_uninstall(),
     };
 
     if let Err(e) = result {
@@ -102,10 +104,37 @@ fn cmd_init() -> Result<()> {
     println!("Set [start] cmd to how you normally launch your agent, then:");
     println!("    nanny run");
     println!("    nanny run --limits=researcher");
-    println!("    nanny run -- \"my topic\"");
     println!();
     println!("Works with any language — Python, Rust, Go, Node, or any compiled binary.");
 
+    Ok(())
+}
+
+// ── nanny uninstall ───────────────────────────────────────────────────────────
+
+fn cmd_uninstall() -> Result<()> {
+    let exe = std::env::current_exe()
+        .context("failed to determine current binary path")?;
+
+    // Homebrew manages its own metadata — removing the binary directly leaves
+    // the formula in a broken state. Redirect to `brew uninstall nannyd`.
+    let path_str = exe.to_string_lossy();
+    if path_str.contains("/Cellar/") || path_str.contains("/homebrew/") {
+        eprintln!("This looks like a Homebrew-managed installation.");
+        eprintln!("Run `brew uninstall nannyd` instead to keep Homebrew consistent.");
+        std::process::exit(1);
+    }
+
+    println!("Removing {}", exe.display());
+    std::fs::remove_file(&exe).with_context(|| {
+        format!(
+            "failed to remove '{}'\nIf this is a permissions issue, try: sudo rm {}",
+            exe.display(),
+            exe.display()
+        )
+    })?;
+
+    println!("nanny uninstalled.");
     Ok(())
 }
 

@@ -22,6 +22,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   decorated functions; the inner impl and call sites are generated as async.
 - **`last_tool_args` in rule context** — rules now receive the arguments of the current
   tool call via `PolicyContext::last_tool_args`, enabling content-based enforcement.
+- **`nanny uninstall`** — removes the `nanny` binary from its current install location.
+  Detects Homebrew-managed installations and redirects to `brew uninstall nannyd` rather
+  than removing the binary directly and leaving Homebrew metadata inconsistent.
 - **Real-world sample apps** — two complete Rust agent samples using Ollama:
   - `examples/rust/webdingo` — web research agent (HTTP fetch + summarise)
   - `examples/rust/qabud` — codebase review agent (file tree + source analysis)

@@ -58,7 +58,7 @@
         "groups": [
           {
             "group": "Commands",
-            "pages": ["init", "run"]
+            "pages": ["init", "run", "uninstall"]
           },
           {
             "group": "Reference",
