@@ -101,7 +101,7 @@ jobs:
           git -C tap config user.email "noreply@nanny.run"
           git -C tap config user.name "Nanny Release Bot"
           git -C tap add Formula/nannyd.rb
-          git -C tap diff --quiet || git -C tap commit -m "nannyd ${VERSION}"
+          git -C tap diff --cached --quiet || git -C tap commit -m "nannyd ${VERSION}"
           git -C tap push
 
   publish-crates:
