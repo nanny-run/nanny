@@ -5,9 +5,11 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
-    # Manually publish crates when a tag-triggered run fails at the publish step.
-    # Trigger from the Actions tab → select this workflow → Run workflow → pick next.
-    # The version published is whatever is in Cargo.toml at that commit.
+    inputs:
+      version:
+        description: "Version tag to homebrew tap publish (e.g. v0.1.2). Only used by the homebrew-tap-publish job."
+        required: false
+        default: ""
 
 jobs:
   build:
@@ -71,13 +73,6 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      - name: Compute SHA256s
-        id: sha
-        run: |
-          echo "linux=$(sha256sum artifacts/nanny-linux-x86_64.tar.gz | awk '{print $1}')" >> $GITHUB_OUTPUT
-          echo "macos_x86_64=$(sha256sum artifacts/nanny-macos-x86_64.tar.gz | awk '{print $1}')" >> $GITHUB_OUTPUT
-          echo "macos_arm64=$(sha256sum artifacts/nanny-macos-arm64.tar.gz | awk '{print $1}')" >> $GITHUB_OUTPUT
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -85,23 +80,58 @@ jobs:
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-rc') }}
 
-      - name: Update homebrew tap
-        if: ${{ !contains(github.ref_name, '-rc') }}
+  homebrew-tap-publish:
+    name: Homebrew Tap Publish
+    needs: [release]
+    # On tag push: runs after release succeeds, skips rc tags.
+    # On workflow_dispatch: always() lets this run independently; requires version input.
+    if: >-
+      always() && (
+        (github.event_name == 'push' && needs.release.result == 'success' && !contains(github.ref_name, '-rc')) ||
+        (github.event_name == 'workflow_dispatch' && inputs.version != '')
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.version }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "version=${TAG#v}" >> $GITHUB_OUTPUT
+
+      - name: Download release artifacts and compute SHA256s
+        id: sha
+        run: |
+          TAG="${{ steps.ver.outputs.tag }}"
+          BASE="https://github.com/nanny-run/nanny/releases/download/${TAG}"
+          curl -fsSL "${BASE}/nanny-macos-arm64.tar.gz" -o nanny-macos-arm64.tar.gz
+          curl -fsSL "${BASE}/nanny-macos-x86_64.tar.gz" -o nanny-macos-x86_64.tar.gz
+          curl -fsSL "${BASE}/nanny-linux-x86_64.tar.gz" -o nanny-linux-x86_64.tar.gz
+          echo "macos_arm64=$(sha256sum nanny-macos-arm64.tar.gz | awk '{print $1}')" >> $GITHUB_OUTPUT
+          echo "macos_x86_64=$(sha256sum nanny-macos-x86_64.tar.gz | awk '{print $1}')" >> $GITHUB_OUTPUT
+          echo "linux=$(sha256sum nanny-linux-x86_64.tar.gz | awk '{print $1}')" >> $GITHUB_OUTPUT
+
+      - name: Homebrew tap publish
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${{ steps.ver.outputs.version }}"
           git clone --depth=1 https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/nanny-run/homebrew-nanny.git tap
           cp homebrew/nannyd.rb tap/Formula/nannyd.rb
-          sed -i.bak "s/version \"[^\"]*\"/version \"${VERSION}\"/" tap/Formula/nannyd.rb
-          sed -i.bak "s/{{SHA256_MACOS_ARM64}}/${{ steps.sha.outputs.macos_arm64 }}/" tap/Formula/nannyd.rb
-          sed -i.bak "s/{{SHA256_MACOS_X86_64}}/${{ steps.sha.outputs.macos_x86_64 }}/" tap/Formula/nannyd.rb
-          sed -i.bak "s/{{SHA256_LINUX_X86_64}}/${{ steps.sha.outputs.linux }}/" tap/Formula/nannyd.rb
-          rm tap/Formula/nannyd.rb.bak
+          sed -i "s/version \"[^\"]*\"/version \"${VERSION}\"/" tap/Formula/nannyd.rb
+          sed -i "s/{{SHA256_MACOS_ARM64}}/${{ steps.sha.outputs.macos_arm64 }}/" tap/Formula/nannyd.rb
+          sed -i "s/{{SHA256_MACOS_X86_64}}/${{ steps.sha.outputs.macos_x86_64 }}/" tap/Formula/nannyd.rb
+          sed -i "s/{{SHA256_LINUX_X86_64}}/${{ steps.sha.outputs.linux }}/" tap/Formula/nannyd.rb
           git -C tap config user.email "noreply@nanny.run"
           git -C tap config user.name "Nanny Release Bot"
           git -C tap add Formula/nannyd.rb
-          git -C tap diff --quiet || git -C tap commit -m "nannyd ${VERSION}"
+          git -C tap diff --cached --quiet || git -C tap commit -m "nannyd ${VERSION}"
           git -C tap push
 
   publish-crates:
