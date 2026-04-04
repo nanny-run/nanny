@@ -162,8 +162,9 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Verify version matches tag
+        if: github.event_name == 'push'
         run: |
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          TAG_VERSION=$(echo "${GITHUB_REF_NAME}" | sed 's/^v//')
           CARGO_VERSION=$(cargo metadata --no-deps --format-version 1 | python3 -c "import sys,json; pkgs=json.load(sys.stdin)['packages']; print(next(p['version'] for p in pkgs if p['name']=='nannyd'))")
           echo "Tag version:   $TAG_VERSION"
           echo "Cargo version: $CARGO_VERSION"
