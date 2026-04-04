@@ -73,11 +73,21 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      - name: Extract release notes from CHANGELOG.md
+        id: changelog
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          # Extract the block between ## [VERSION] and the next ## heading
+          awk "/^## \[${VERSION}\]/{found=1; next} found && /^## /{exit} found{print}" CHANGELOG.md > /tmp/release-notes.md
+          if [ ! -s /tmp/release-notes.md ]; then
+            echo "WARNING: No CHANGELOG entry found for ${VERSION} — release notes will be empty." >&2
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*.tar.gz
-          generate_release_notes: true
+          body_path: /tmp/release-notes.md
           prerelease: ${{ contains(github.ref_name, '-rc') }}
 
   homebrew-tap-publish:
