@@ -159,7 +159,18 @@ mod tests {
 
     #[test]
     fn denies_on_budget_exhausted() {
-        let ctx = PolicyContext { cost_units_spent: 500, ..base_context() };
+        // Budget fully spent; any new call (cost=1) is denied.
+        let ctx = PolicyContext { cost_units_spent: 500, next_tool_cost: 1, ..base_context() };
+        assert!(matches!(
+            policy().evaluate(&ctx),
+            PolicyDecision::Deny { reason: StopReason::BudgetExhausted }
+        ));
+    }
+
+    #[test]
+    fn denies_when_next_call_would_exceed_budget() {
+        // budget=500, spent=491, next call costs 10: 491+10 > 500 → denied before execution.
+        let ctx = PolicyContext { cost_units_spent: 491, next_tool_cost: 10, ..base_context() };
         assert!(matches!(
             policy().evaluate(&ctx),
             PolicyDecision::Deny { reason: StopReason::BudgetExhausted }
