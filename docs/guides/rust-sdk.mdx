@@ -147,11 +147,11 @@ The `ctx` parameter gives you a snapshot of the current execution state:
 | `step_count` | `u32` | Number of steps completed |
 | `elapsed_ms` | `u64` | Wall-clock time elapsed |
 | `cost_units_spent` | `u64` | Total cost units spent so far |
+| `next_tool_cost` | `u64` | Declared cost of the tool currently being evaluated. `0` when no tool call is in flight. |
 | `tool_call_counts` | `HashMap<String, u32>` | Per-tool call counts |
 | `tool_call_history` | `Vec<String>` | Ordered log of tool names called |
 | `requested_tool` | `Option<String>` | The tool being evaluated right now |
-| `last_tool_args` | `HashMap<String, String>` | Arguments of the most recent tool call |
-| `prompt` | `Option<String>` | The agent's current prompt, if provided |
+| `last_tool_args` | `HashMap<String, String>` | Arguments of the tool call currently being evaluated |
 
 Rules are evaluated **before** the tool runs — `requested_tool` is set to the tool name being checked.
 
