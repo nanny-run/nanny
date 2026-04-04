@@ -84,9 +84,7 @@ pub fn http_get(url: String) -> Result<String, String> {
     }
 
     let args_json = serde_json::json!({"url": url}).to_string();
-    let result = runtime::call_bridge_tool("http_get", &args_json);
-
-    result
+    runtime::call_bridge_tool("http_get", &args_json)
 }
 
 // ── Private runtime — for generated code only ─────────────────────────────────
