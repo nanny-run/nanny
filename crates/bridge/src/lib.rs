@@ -924,6 +924,15 @@ mod tests {
         }
     }
 
+    struct FailingTool;
+    impl Tool for FailingTool {
+        fn name(&self) -> &str { "fail" }
+        fn declared_cost(&self) -> u64 { 5 }
+        fn execute(&self, _args: &ToolArgs) -> Result<ToolOutput, ToolError> {
+            Err(ToolError::ExecutionFailed("simulated network error".into()))
+        }
+    }
+
     fn echo_components(max_cost: u64) -> BridgeComponents {
         let mut registry = ToolRegistry::new();
         registry.register(Box::new(EchoTool));
@@ -1450,6 +1459,39 @@ mod tests {
             .filter_map(|l| serde_json::from_str(l).ok())
             .collect();
         assert!(events.iter().any(|v| v["event"] == "ToolAllowed"));
+    }
+
+    #[test]
+    fn tool_failure_emits_tool_failed_event() {
+        // FailingTool always returns Err — the bridge must emit ToolFailed to /events
+        // and must NOT stop execution (tool failure is an audit event, not a hard stop).
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(FailingTool));
+        let b = Bridge::start(BridgeComponents {
+            registry,
+            limits: Limits { max_steps: 100, max_cost_units: 1000, timeout_ms: 30_000 },
+            named_limits: Default::default(),
+            allowed_tools: vec!["fail".to_string()],
+            per_tool_max_calls: Default::default(),
+        }).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        let (status, _body) = post(&b, "/tool/call", r#"{"tool":"fail","args":{}}"#);
+        assert_eq!(status, 500, "tool execution failure must return 500");
+
+        let (_, events_body) = get(&b, "/events");
+        let events: Vec<serde_json::Value> = events_body.lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
+        assert!(
+            events.iter().any(|v| v["event"] == "ToolFailed"),
+            "ToolFailed event must appear in /events after a tool execution error\ngot: {events_body}"
+        );
+        // Execution must NOT have stopped — ToolFailed is audit-only.
+        assert!(
+            matches!(b.execution_state(), ExecutionState::Running),
+            "execution must remain running after a tool failure"
+        );
     }
 
     #[test]

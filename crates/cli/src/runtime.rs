@@ -338,6 +338,74 @@ mod tests {
     }
 
     #[test]
+    fn ceiling_cap_clamps_named_scope_to_cli_limits() {
+        // Global limits: steps=100, cost=1000, timeout=30_000.
+        // Named "big" scope: steps=500, cost=9999, timeout=60_000 — all exceed global.
+        // With enforce_ceiling=true, every named scope must be clamped to global values.
+        let mut named = HashMap::new();
+        named.insert(
+            "big".to_string(),
+            PartialLimitsConfig {
+                max_steps: Some(500),
+                max_cost_units: Some(9999),
+                timeout_ms: Some(60_000),
+            },
+        );
+        let config = NannyConfig {
+            runtime: RuntimeConfig::default(),
+            start: None,
+            limits: LimitsConfig {
+                max_steps: 100,
+                max_cost_units: 1000,
+                timeout_ms: 30_000,
+                named,
+            },
+            tools: ToolsConfig::default(),
+            observability: ObservabilityConfig::default(),
+            managed: None,
+        };
+        let ceiling = Limits { max_steps: 100, max_cost_units: 1000, timeout_ms: 30_000 };
+        let components = build_bridge_components(&config, ceiling, true);
+        let big = components.named_limits.get("big").expect("big must be resolved");
+        assert_eq!(big.max_steps, 100, "steps must be capped to CLI ceiling");
+        assert_eq!(big.max_cost_units, 1000, "cost must be capped to CLI ceiling");
+        assert_eq!(big.timeout_ms, 30_000, "timeout must be capped to CLI ceiling");
+    }
+
+    #[test]
+    fn ceiling_cap_inactive_without_enforce_flag() {
+        // Same config — without enforce_ceiling, big scope keeps its own values.
+        let mut named = HashMap::new();
+        named.insert(
+            "big".to_string(),
+            PartialLimitsConfig {
+                max_steps: Some(500),
+                max_cost_units: Some(9999),
+                timeout_ms: Some(60_000),
+            },
+        );
+        let config = NannyConfig {
+            runtime: RuntimeConfig::default(),
+            start: None,
+            limits: LimitsConfig {
+                max_steps: 100,
+                max_cost_units: 1000,
+                timeout_ms: 30_000,
+                named,
+            },
+            tools: ToolsConfig::default(),
+            observability: ObservabilityConfig::default(),
+            managed: None,
+        };
+        let base = Limits { max_steps: 100, max_cost_units: 1000, timeout_ms: 30_000 };
+        let components = build_bridge_components(&config, base, false);
+        let big = components.named_limits.get("big").expect("big must be resolved");
+        assert_eq!(big.max_steps, 500, "steps must not be capped without enforce flag");
+        assert_eq!(big.max_cost_units, 9999, "cost must not be capped without enforce flag");
+        assert_eq!(big.timeout_ms, 60_000, "timeout must not be capped without enforce flag");
+    }
+
+    #[test]
     fn cost_per_call_override_applied_to_registry() {
         use nanny_config::ToolConfig;
         use nanny_core::tool::ToolExecutor;
