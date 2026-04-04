@@ -41,7 +41,7 @@ impl Policy for LimitsPolicy {
         if ctx.elapsed_ms >= self.limits.timeout_ms {
             return PolicyDecision::Deny { reason: StopReason::TimeoutExpired };
         }
-        if ctx.cost_units_spent >= self.limits.max_cost_units {
+        if ctx.cost_units_spent + ctx.next_tool_cost > self.limits.max_cost_units {
             return PolicyDecision::Deny { reason: StopReason::BudgetExhausted };
         }
         if let Some(tool) = &ctx.requested_tool {

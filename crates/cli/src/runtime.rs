@@ -100,7 +100,18 @@ fn build_components(config: &NannyConfig, limits: Limits) -> RuntimeComponents {
 ///
 /// Resolves every named limits set with full inheritance so `/agent/enter`
 /// can switch contexts without re-reading config.
-pub fn build_bridge_components(config: &NannyConfig, limits: Limits) -> BridgeComponents {
+///
+/// When `enforce_ceiling` is true (i.e. `--limits=X` was explicitly passed),
+/// every named scope is capped to `min(scope_value, limits_value)` per
+/// dimension. This makes `--limits` a hard ceiling that no `#[nanny::agent]`
+/// scope can exceed, while still allowing all scopes to activate cleanly
+/// (no 404 / panic). Normal `nanny run` passes `false` so per-scope budgets
+/// that intentionally exceed the base `[limits]` are unaffected.
+pub fn build_bridge_components(
+    config: &NannyConfig,
+    limits: Limits,
+    enforce_ceiling: bool,
+) -> BridgeComponents {
     // Resolve every named set once, up front.
     let named_limits: HashMap<String, Limits> = config
         .limits
@@ -108,10 +119,18 @@ pub fn build_bridge_components(config: &NannyConfig, limits: Limits) -> BridgeCo
         .keys()
         .filter_map(|name| {
             resolve_named_limits(config, name).ok().map(|partial| {
-                let l = Limits {
-                    max_steps: partial.max_steps,
-                    max_cost_units: partial.max_cost_units,
-                    timeout_ms: partial.timeout_ms,
+                let l = if enforce_ceiling {
+                    Limits {
+                        max_steps:      partial.max_steps.min(limits.max_steps),
+                        max_cost_units: partial.max_cost_units.min(limits.max_cost_units),
+                        timeout_ms:     partial.timeout_ms.min(limits.timeout_ms),
+                    }
+                } else {
+                    Limits {
+                        max_steps:      partial.max_steps,
+                        max_cost_units: partial.max_cost_units,
+                        timeout_ms:     partial.timeout_ms,
+                    }
                 };
                 (name.clone(), l)
             })

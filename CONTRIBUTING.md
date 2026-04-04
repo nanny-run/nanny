@@ -134,12 +134,12 @@ If you are adding a new enforcement rule, it goes in `runtime`. If you are addin
 
 `examples/rust/` contains two complete Rust agents that exercise the full SDK:
 
-| Example | What it demonstrates |
-|---------|----------------------|
-| [`examples/rust/webdingo`](examples/rust/webdingo) | `#[nanny::tool]`, `#[nanny::agent]`, `nanny::http_get`, loop-detection rule |
-| [`examples/rust/qabud`](examples/rust/qabud) | `#[nanny::tool]`, content-based rule (`last_tool_args`), allowlist enforcement |
+| Example                                            | What it demonstrates                                                           |
+| -------------------------------------------------- | ------------------------------------------------------------------------------ |
+| [`examples/rust/webdingo`](examples/rust/webdingo) | `#[nanny::tool]`, `#[nanny::agent]`, `nanny::http_get`, loop-detection rule    |
+| [`examples/rust/qabud`](examples/rust/qabud)       | `#[nanny::tool]`, content-based rule (`last_tool_args`), allowlist enforcement |
 
-Both use Ollama (local LLM) and path deps to the workspace crates, so they build without publishing. They are the best starting point for understanding how the pieces fit together before touching the crate internals.
+Both use Ollama (local LLM) and depend on the published `nannyd = "0.1.2"` from crates.io. They are the best starting point for understanding how the pieces fit together before touching the crate internals.
 
 ---
 
@@ -221,14 +221,14 @@ Then open a pull request on GitHub from your fork's branch to `nanny-run/nanny` 
 
 Use conventional commit prefixes so the changelog can be generated automatically:
 
-| Prefix | When to use |
-|--------|-------------|
-| `feat:` | New feature or behaviour visible to users |
-| `fix:` | Bug fix |
-| `chore:` | Maintenance (CI, deps, tooling) — no user-visible change |
-| `docs:` | Documentation only |
-| `refactor:` | Internal restructure with no behaviour change |
-| `test:` | Adding or fixing tests only |
+| Prefix      | When to use                                              |
+| ----------- | -------------------------------------------------------- |
+| `feat:`     | New feature or behaviour visible to users                |
+| `fix:`      | Bug fix                                                  |
+| `chore:`    | Maintenance (CI, deps, tooling) — no user-visible change |
+| `docs:`     | Documentation only                                       |
+| `refactor:` | Internal restructure with no behaviour change            |
+| `test:`     | Adding or fixing tests only                              |
 
 PR titles are checked against this format. Example: `feat: add [start] table to nanny.toml`.
 
@@ -250,11 +250,13 @@ PR titles are checked against this format. Example: `feat: add [start] table to 
 **Tag protection:** Version tags (`v*`) are restricted to maintainers at the GitHub repo level (Settings → Rules → Tag protection → pattern `v*`). Pushing a `v*` tag from a fork or contributor branch will be rejected.
 
 **How a release happens:**
+
 1. Maintainer merges `next` into `main`.
 2. Maintainer pushes a `v*` tag (e.g. `v0.1.2`) on `main`.
 3. The release workflow runs: `cargo publish` for all six crates in dependency order (`nanny-core` → `nanny-config` → `nanny-runtime` → `nanny-bridge` → `nanny-macros` → `nannyd`), GitHub Release created, Homebrew formula updated.
 
 **Requirements before a release tag is pushed:**
+
 - `cargo test --workspace` must pass on both `ubuntu-latest` and `macos-latest`.
 - `cargo clippy --workspace -- -D warnings` must be clean.
 - No `unwrap()` or `expect()` outside of `#[cfg(test)]` code.

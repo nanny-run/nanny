@@ -422,6 +422,12 @@ fn handle_tool_call(
         Err(_) => return BridgeResp::json(400, r#"{"error":"invalid request body"}"#),
     };
 
+    // Resolve cost before locking — registry is immutable after init.
+    // For bridge tools (e.g. http_get) use the registry's declared cost;
+    // for user-defined tools fall back to the cost the SDK sent in the request.
+    let next_cost = registry.declared_cost(&call.tool)
+        .unwrap_or_else(|| call.cost.unwrap_or(0) as u64);
+
     // Build PolicyContext and evaluate — hold lock briefly, then release.
     let decision = {
         let guard = shared.lock().unwrap();
@@ -431,6 +437,7 @@ fn handle_tool_call(
             elapsed_ms,
             requested_tool: Some(call.tool.clone()),
             cost_units_spent: guard.cost_units_spent,
+            next_tool_cost: next_cost,
             tool_call_counts: guard.tool_call_counts.clone(),
             tool_call_history: guard.tool_call_history.clone(),
             last_tool_args: HashMap::new(),
@@ -487,6 +494,14 @@ fn handle_tool_call(
                     ).unwrap())
                 }
                 Err(ToolCallError::Execution { tool_name, source }) => {
+                    {
+                        let mut guard = shared.lock().unwrap();
+                        append_event(&mut guard, ExecutionEvent::ToolFailed {
+                            ts:    now_ms(),
+                            tool:  tool_name.clone(),
+                            error: source.to_string(),
+                        });
+                    }
                     BridgeResp::json(500, format!(
                         r#"{{"error":"tool execution failed","tool_name":"{}","message":"{}"}}"#,
                         tool_name, source
@@ -504,6 +519,9 @@ fn handle_tool_call(
                             ts: now_ms(),
                             tool: call.tool.clone(),
                         });
+                        if guard.cost_units_spent >= guard.current_limits.max_cost_units {
+                            mark_stopped(&mut guard, "BudgetExhausted");
+                        }
                     }
                     BridgeResp::json(200, serde_json::to_string(
                         &ToolCallResponse::Allowed { result: output.content }
@@ -525,6 +543,7 @@ fn handle_rule_evaluate(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> Bridge
                 .unwrap_or_else(|| guard.start_time.elapsed().as_millis() as u64),
             requested_tool: req.tool.clone(),
             cost_units_spent: req.cost_spent.unwrap_or(guard.cost_units_spent),
+            next_tool_cost: 0,
             tool_call_counts: if req.tool_call_counts.is_empty() {
                 guard.tool_call_counts.clone()
             } else {
@@ -616,6 +635,7 @@ fn handle_step(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
         elapsed_ms,
         requested_tool: None,
         cost_units_spent: guard.cost_units_spent,
+        next_tool_cost: 0,
         tool_call_counts: guard.tool_call_counts.clone(),
         tool_call_history: guard.tool_call_history.clone(),
         last_tool_args: HashMap::new(),

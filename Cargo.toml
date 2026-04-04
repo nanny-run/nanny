@@ -6,7 +6,7 @@ members = [
     "crates/config",
     "crates/bridge",
     "crates/macros",
-    "crates/cli", "examples/rust/webdingo", "examples/rust/qabud",
+    "crates/cli",
 ]
 
 [workspace.package]

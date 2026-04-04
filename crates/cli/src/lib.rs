@@ -86,14 +86,6 @@ pub fn http_get(url: String) -> Result<String, String> {
     let args_json = serde_json::json!({"url": url}).to_string();
     let result = runtime::call_bridge_tool("http_get", &args_json);
 
-    // Report tool failure to the bridge so the CLI sees ToolFailed instead
-    // of ProcessCrashed when the caller propagates this error up to exit(1).
-    if let Err(ref e) = result {
-        if e.starts_with("ToolFailed") {
-            runtime::report_stop("ToolFailed");
-        }
-    }
-
     result
 }
 

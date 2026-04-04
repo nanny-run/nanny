@@ -14,7 +14,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="Apache 2.0" /></a>
   <a href="https://crates.io/crates/nannyd"><img src="https://img.shields.io/crates/v/nannyd?logo=rust&label=crates.io" alt="crates.io" /></a>
-  <!-- PyPI badge enabled when nanny-sdk ships (v0.2.0) -->
+  <!-- PyPI badge enabled when nanny-sdk ships (v0.1.4) -->
   <!-- <a href="https://pypi.org/project/nanny-sdk/"><img src="https://img.shields.io/pypi/v/nanny-sdk?logo=python&label=pypi" alt="PyPI" /></a> -->
   <a href="https://github.com/nanny-run/nanny/releases"><img src="https://img.shields.io/github/v/release/nanny-run/nanny?logo=github&label=release" alt="GitHub Release" /></a>
   <!-- <a href="https://github.com/nanny-run/nanny/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/nanny-run/nanny/ci.yml?logo=github&label=CI" alt="CI" /></a> -->
@@ -77,8 +77,8 @@ flowchart TD
 | -------------------------- | --------------------------------------------------------------------------------- |
 | **Nanny CLI**              | Wraps any agent process in any language. Zero code changes required.              |
 | **Rust SDK**               | Per-function cost metering, allowlist enforcement, and custom rules — in-process. |
-| **Python SDK** _(v0.2.0)_  | The same `@tool`, `@rule`, `@agent` model as Python decorators.                   |
-| **Nanny Cloud** _(v0.3.0)_ | Durable audit logs, team dashboards, org-level budget aggregation.                |
+| **Python SDK** _(v0.1.4)_  | The same `@tool`, `@rule`, `@agent` model as Python decorators.                   |
+| **Nanny Cloud** _(v0.1.6)_ | Durable audit logs, team dashboards, org-level budget aggregation.                |
 
 → Full docs at [docs.nanny.run](https://docs.nanny.run)
 
@@ -142,7 +142,7 @@ SDKs are **project dependencies** — add them per project, not globally.
 cargo add nannyd
 ```
 
-**Python** _(v0.2.0 — coming soon)_
+**Python** _(v0.1.4 — coming soon)_
 
 ```sh
 pip install nanny-sdk
@@ -185,6 +185,8 @@ timeout = 120000
 [tools]
 allowed = ["http_get", "read_file"]   # anything not listed is denied
 ```
+
+![Nanny demo — BudgetExhausted stops a web research agent mid-run](assets/demo/webdingo-budget-exhausted.gif)
 
 ---
 

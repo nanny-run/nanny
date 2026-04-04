@@ -120,13 +120,21 @@ async fn research(topic: &str, urls: Vec<String>) -> Result<Vec<String>> {
 
     for url in &urls {
         // Fetch directly through the bridge — always tracked, always policy-enforced.
-        let raw = tokio::task::spawn_blocking({
+        // Network errors (DNS failure, timeout, connection refused) are per-URL: log and
+        // skip. Only propagate if the bridge itself fails (spawn error = infrastructure issue).
+        let raw = match tokio::task::spawn_blocking({
             let u = url.clone();
             move || nanny::http_get(u)
         })
         .await
         .map_err(|e| anyhow::anyhow!("spawn error: {e}"))?
-        .map_err(|e| anyhow::anyhow!("http_get error: {e}"))?;
+        {
+            Ok(content) => content,
+            Err(e) => {
+                eprintln!("researcher: skipped {} — fetch failed: {}", url, e);
+                continue;
+            }
+        };
 
         eprintln!("researcher: fetched {} ({} chars)", url, raw.len());
 

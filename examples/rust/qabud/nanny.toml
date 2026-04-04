@@ -12,12 +12,6 @@ steps   = 20
 cost    = 400
 timeout = 60000
 
-[limits.reviewer]
-# Limit set activated by agent_enter("reviewer") in src/main.rs.
-steps   = 20
-cost    = 400
-timeout = 50000
-
 [tools]
 # Only read_file is permitted — write_file, exec, etc. are all denied.
 allowed = ["read_file"]
@@ -25,6 +19,33 @@ allowed = ["read_file"]
 [tools.read_file]
 max_calls     = 10
 cost_per_call = 10
+
+# With --limits=X, these are capped to min(reviewer_value, X_value) per dimension.
+[limits.reviewer]
+steps   = 20
+cost    = 200
+timeout = 60000
+
+# Demo recordings
+# Use: nanny run --limits=<name> -- .
+
+# demo-rule-denied: generous limits so no_sensitive_files rule fires before any ceiling
+[limits.rule-demo]
+steps   = 30
+cost    = 500
+timeout = 60000
+
+# demo-max-steps: MaxStepsReached after 2 read_file calls
+[limits.max-steps-demo]
+steps   = 2
+cost    = 500
+timeout = 30000
+
+# demo-budget-exhausted: BudgetExhausted after 2 read_file calls (10 cost each = 20)
+[limits.budget-demo]
+steps   = 30
+cost    = 20
+timeout = 30000
 
 [observability]
 log = "stdout"
