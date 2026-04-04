@@ -195,7 +195,7 @@ fn cmd_run(config_path: &Path, limits_name: Option<&str>, extra_args: Vec<String
     log.write(&execution_started_event(&components.limits, active_set, &command.join(" ")))?;
 
     // ── Start bridge ──────────────────────────────────────────────────────
-    let bridge_components = runtime::build_bridge_components(&config, components.limits.clone());
+    let bridge_components = runtime::build_bridge_components(&config, components.limits.clone(), limits_name.is_some());
     let bridge = Bridge::start(bridge_components)
         .context("failed to start bridge")?;
 

@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] — 2026-04-04
+
+### Added
+
+- **Affordability pre-check** — `BudgetExhausted` now fires _before_ a tool executes when the
+  remaining budget cannot cover the next call's declared cost. Previously the check only fired
+  after the cost was already debited, allowing one call to overshoot the limit. The new check
+  is `cost_units_spent + next_tool_cost > max_cost_units`; `next_tool_cost` is a new field on
+  `PolicyContext` populated by the enforcement layer before each tool call.
+- **`ToolFailed` event from built-in tools** — when `nanny::http_get` encounters a network
+  error (DNS failure, HTTP error, timeout), the enforcement layer now emits a `ToolFailed`
+  event to the structured log before returning the error to the caller. Previously the failure
+  was silently swallowed with no audit record.
+- **`--limits` ceiling cap** — when `nanny run --limits=<name>` is passed, every named agent
+  scope activated during the run is capped to `min(scope_value, CLI_limit_value)` per
+  dimension. A scope cannot silently exceed the operator-specified ceiling.
+
+### Fixed
+
+- `nanny::http_get` no longer calls `report_stop("ToolFailed")` on network errors. A tool
+  failure is an audit event, not a hard stop. Whether to abort or recover is the agent's
+  decision. Limits enforcement (budget, steps, timeout, allowlist) remains a hard stop.
+
 ## [0.1.2] — 2026-03-30
 
 ### Added
@@ -93,6 +116,7 @@ First public release of Nanny — an execution boundary for autonomous AI agents
   SHA256 checksums for each binary are computed and pushed to the homebrew tap automatically
   on every tagged release.
 
+[0.1.3]: https://github.com/nanny-run/nanny/releases/tag/v0.1.3
 [0.1.2]: https://github.com/nanny-run/nanny/releases/tag/v0.1.2
 [0.1.1]: https://github.com/nanny-run/nanny/releases/tag/v0.1.1
 [0.1.0]: https://github.com/nanny-run/nanny/releases/tag/v0.1.0

@@ -20,6 +20,7 @@ Thank you for taking the time to contribute. Nanny is a small, focused primitive
     - [Documentation](#documentation)
   - [What belongs elsewhere](#what-belongs-elsewhere)
   - [Codebase map](#codebase-map)
+  - [Reference examples](#reference-examples)
   - [Setting up locally](#setting-up-locally)
   - [Running tests](#running-tests)
   - [Opening a pull request](#opening-a-pull-request)
@@ -134,12 +135,12 @@ If you are adding a new enforcement rule, it goes in `runtime`. If you are addin
 
 `examples/rust/` contains two complete Rust agents that exercise the full SDK:
 
-| Example | What it demonstrates |
-|---------|----------------------|
-| [`examples/rust/webdingo`](examples/rust/webdingo) | `#[nanny::tool]`, `#[nanny::agent]`, `nanny::http_get`, loop-detection rule |
-| [`examples/rust/qabud`](examples/rust/qabud) | `#[nanny::tool]`, content-based rule (`last_tool_args`), allowlist enforcement |
+| Example                                            | What it demonstrates                                                           |
+| -------------------------------------------------- | ------------------------------------------------------------------------------ |
+| [`examples/rust/webdingo`](examples/rust/webdingo) | `#[nanny::tool]`, `#[nanny::agent]`, `nanny::http_get`, loop-detection rule    |
+| [`examples/rust/qabud`](examples/rust/qabud)       | `#[nanny::tool]`, content-based rule (`last_tool_args`), allowlist enforcement |
 
-Both use Ollama (local LLM) and path deps to the workspace crates, so they build without publishing. They are the best starting point for understanding how the pieces fit together before touching the crate internals.
+Both use Ollama (local LLM) and depend on the published `nannyd = "0.1.3"` from crates.io. They are the best starting point for understanding how the pieces fit together before touching the crate internals.
 
 ---
 
@@ -221,14 +222,14 @@ Then open a pull request on GitHub from your fork's branch to `nanny-run/nanny` 
 
 Use conventional commit prefixes so the changelog can be generated automatically:
 
-| Prefix | When to use |
-|--------|-------------|
-| `feat:` | New feature or behaviour visible to users |
-| `fix:` | Bug fix |
-| `chore:` | Maintenance (CI, deps, tooling) — no user-visible change |
-| `docs:` | Documentation only |
-| `refactor:` | Internal restructure with no behaviour change |
-| `test:` | Adding or fixing tests only |
+| Prefix      | When to use                                              |
+| ----------- | -------------------------------------------------------- |
+| `feat:`     | New feature or behaviour visible to users                |
+| `fix:`      | Bug fix                                                  |
+| `chore:`    | Maintenance (CI, deps, tooling) — no user-visible change |
+| `docs:`     | Documentation only                                       |
+| `refactor:` | Internal restructure with no behaviour change            |
+| `test:`     | Adding or fixing tests only                              |
 
 PR titles are checked against this format. Example: `feat: add [start] table to nanny.toml`.
 
@@ -250,15 +251,30 @@ PR titles are checked against this format. Example: `feat: add [start] table to 
 **Tag protection:** Version tags (`v*`) are restricted to maintainers at the GitHub repo level (Settings → Rules → Tag protection → pattern `v*`). Pushing a `v*` tag from a fork or contributor branch will be rejected.
 
 **How a release happens:**
-1. Maintainer merges `next` into `main`.
-2. Maintainer pushes a `v*` tag (e.g. `v0.1.2`) on `main`.
-3. The release workflow runs: `cargo publish` for all six crates in dependency order (`nanny-core` → `nanny-config` → `nanny-runtime` → `nanny-bridge` → `nanny-macros` → `nannyd`), GitHub Release created, Homebrew formula updated.
 
-**Requirements before a release tag is pushed:**
-- `cargo test --workspace` must pass on both `ubuntu-latest` and `macos-latest`.
-- `cargo clippy --workspace -- -D warnings` must be clean.
-- No `unwrap()` or `expect()` outside of `#[cfg(test)]` code.
-- CHANGELOG.md updated with the new version section.
+1. Maintainer merges the release branch into `next`, then merges `next` into `main`.
+2. Maintainer pushes a `v*` tag (e.g. `v0.1.3`) on `main`.
+3. The release workflow runs automatically: binaries built, GitHub Release created with notes from `CHANGELOG.md`, all six crates published to crates.io in dependency order, Homebrew formula updated in the tap repo.
+
+**Pre-tag checklist — complete every item before pushing the tag:**
+
+Every item below is a release participant. Missing any one of them produces a broken or misleading release.
+
+| #   | What                          | How                                                                                                                                                                                             |
+| --- | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | **Workspace version**         | Bump `version` in `[workspace.package]` and all `version = "x.y.z"` entries in `[workspace.dependencies]` inside the root `Cargo.toml`. Run `cargo check --workspace` to confirm.               |
+| 2   | **Example app versions**      | Bump `version` in `examples/rust/qabud/Cargo.toml` and `examples/rust/webdingo/Cargo.toml` to match.                                                                                            |
+| 3   | **Homebrew formula template** | Bump `version "x.y.z"` in `homebrew/nannyd.rb`. CI substitutes the SHA256s automatically; the version line must match so the template stays readable.                                           |
+| 4   | **`CHANGELOG.md` entry**      | Add `## [x.y.z] — YYYY-MM-DD` with `### Added` / `### Fixed` sections. The release workflow reads this file and uses it as the GitHub Release body. A missing entry means blank release notes.  |
+| 5   | **Tests pass**                | `cargo test --workspace` must be green on both Linux and macOS.                                                                                                                                 |
+| 6   | **Clippy clean**              | `cargo clippy --workspace -- -D warnings` must produce no errors.                                                                                                                               |
+| 7   | **Tag matches Cargo.toml**    | The `publish-crates` CI job validates this automatically and fails loudly — but verify locally first: the tag you push (e.g. `v0.1.3`) must equal `[workspace.package] version` (e.g. `0.1.3`). |
+
+**What CI handles automatically (do not do manually):**
+
+- SHA256 computation and Homebrew tap update
+- `cargo publish` for all six crates in dependency order
+- GitHub Release artifact upload and release notes body
 
 ---
 

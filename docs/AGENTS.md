@@ -26,15 +26,17 @@
 ## Audience and content boundaries
 
 ### User-facing docs (`docs/`)
+
 Audience: developers using Nanny in their projects.
 
 - Focus on what to do, not how it works internally
 - Never expose internal implementation details: bridge, socket paths, HTTP endpoints, crate internals
 - Show concrete `nanny.toml` + code examples for every feature
 - Stop reasons, event types, and `PolicyContext` fields must match the authoritative enum in `crates/core`
-- Python SDK content is clearly marked *(v0.2.0)* — do not document it as if it exists today
+- Python SDK content is clearly marked _(v0.1.4)_ — do not document it as if it exists today
 
 ### ARCHITECTURE.md
+
 Audience: developers building integrations or wanting deep understanding of the enforcement model.
 
 - Bridge internals may be described at a high level (the parent/child process model)
@@ -42,6 +44,7 @@ Audience: developers building integrations or wanting deep understanding of the 
 - Direct developers toward `CONTRIBUTING.md` for contributor workflow
 
 ### CONTRIBUTING.md
+
 Audience: OSS contributors and maintainers.
 
 - Bridge crate internals, dependency graph, publish order are all appropriate here

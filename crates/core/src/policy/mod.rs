@@ -33,6 +33,12 @@ pub struct PolicyContext {
     /// Total cost units spent across all steps so far.
     pub cost_units_spent: u64,
 
+    /// The declared cost of the tool call currently being evaluated.
+    /// Zero when no tool call is in flight or when the tool has no declared cost.
+    /// LimitsPolicy uses this to deny a call before it executes if the remaining
+    /// budget is insufficient to cover it.
+    pub next_tool_cost: u64,
+
     /// How many times each tool has been called in this execution.
     /// Key: tool name. Value: call count. Updated by the executor after each tool call.
     /// Custom rules use this to detect spirals (e.g., same tool called 8 times in a row).

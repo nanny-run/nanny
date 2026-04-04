@@ -1,4 +1,27 @@
+# Rust build output — never commit this
+/target
+
+# macOS filesystem noise
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment / secrets — never commit these
 .env
 .env.local
 .env.*
 !.env.example
+
+
+# Note: Cargo.lock is intentionally committed.
+# This workspace produces a binary (nanny CLI). Committing Cargo.lock ensures
+# every user gets an identical, reproducible build — a direct requirement of
+# the determinism invariant in the Nanny manifesto.
+.windsurf

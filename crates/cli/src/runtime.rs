@@ -100,7 +100,18 @@ fn build_components(config: &NannyConfig, limits: Limits) -> RuntimeComponents {
 ///
 /// Resolves every named limits set with full inheritance so `/agent/enter`
 /// can switch contexts without re-reading config.
-pub fn build_bridge_components(config: &NannyConfig, limits: Limits) -> BridgeComponents {
+///
+/// When `enforce_ceiling` is true (i.e. `--limits=X` was explicitly passed),
+/// every named scope is capped to `min(scope_value, limits_value)` per
+/// dimension. This makes `--limits` a hard ceiling that no `#[nanny::agent]`
+/// scope can exceed, while still allowing all scopes to activate cleanly
+/// (no 404 / panic). Normal `nanny run` passes `false` so per-scope budgets
+/// that intentionally exceed the base `[limits]` are unaffected.
+pub fn build_bridge_components(
+    config: &NannyConfig,
+    limits: Limits,
+    enforce_ceiling: bool,
+) -> BridgeComponents {
     // Resolve every named set once, up front.
     let named_limits: HashMap<String, Limits> = config
         .limits
@@ -108,10 +119,18 @@ pub fn build_bridge_components(config: &NannyConfig, limits: Limits) -> BridgeCo
         .keys()
         .filter_map(|name| {
             resolve_named_limits(config, name).ok().map(|partial| {
-                let l = Limits {
-                    max_steps: partial.max_steps,
-                    max_cost_units: partial.max_cost_units,
-                    timeout_ms: partial.timeout_ms,
+                let l = if enforce_ceiling {
+                    Limits {
+                        max_steps:      partial.max_steps.min(limits.max_steps),
+                        max_cost_units: partial.max_cost_units.min(limits.max_cost_units),
+                        timeout_ms:     partial.timeout_ms.min(limits.timeout_ms),
+                    }
+                } else {
+                    Limits {
+                        max_steps:      partial.max_steps,
+                        max_cost_units: partial.max_cost_units,
+                        timeout_ms:     partial.timeout_ms,
+                    }
                 };
                 (name.clone(), l)
             })
@@ -316,6 +335,74 @@ mod tests {
         // build_from_config uses runtime limits regardless of managed presence
         let components = build_from_config(&config);
         assert_eq!(components.limits.max_steps, 10);
+    }
+
+    #[test]
+    fn ceiling_cap_clamps_named_scope_to_cli_limits() {
+        // Global limits: steps=100, cost=1000, timeout=30_000.
+        // Named "big" scope: steps=500, cost=9999, timeout=60_000 — all exceed global.
+        // With enforce_ceiling=true, every named scope must be clamped to global values.
+        let mut named = HashMap::new();
+        named.insert(
+            "big".to_string(),
+            PartialLimitsConfig {
+                max_steps: Some(500),
+                max_cost_units: Some(9999),
+                timeout_ms: Some(60_000),
+            },
+        );
+        let config = NannyConfig {
+            runtime: RuntimeConfig::default(),
+            start: None,
+            limits: LimitsConfig {
+                max_steps: 100,
+                max_cost_units: 1000,
+                timeout_ms: 30_000,
+                named,
+            },
+            tools: ToolsConfig::default(),
+            observability: ObservabilityConfig::default(),
+            managed: None,
+        };
+        let ceiling = Limits { max_steps: 100, max_cost_units: 1000, timeout_ms: 30_000 };
+        let components = build_bridge_components(&config, ceiling, true);
+        let big = components.named_limits.get("big").expect("big must be resolved");
+        assert_eq!(big.max_steps, 100, "steps must be capped to CLI ceiling");
+        assert_eq!(big.max_cost_units, 1000, "cost must be capped to CLI ceiling");
+        assert_eq!(big.timeout_ms, 30_000, "timeout must be capped to CLI ceiling");
+    }
+
+    #[test]
+    fn ceiling_cap_inactive_without_enforce_flag() {
+        // Same config — without enforce_ceiling, big scope keeps its own values.
+        let mut named = HashMap::new();
+        named.insert(
+            "big".to_string(),
+            PartialLimitsConfig {
+                max_steps: Some(500),
+                max_cost_units: Some(9999),
+                timeout_ms: Some(60_000),
+            },
+        );
+        let config = NannyConfig {
+            runtime: RuntimeConfig::default(),
+            start: None,
+            limits: LimitsConfig {
+                max_steps: 100,
+                max_cost_units: 1000,
+                timeout_ms: 30_000,
+                named,
+            },
+            tools: ToolsConfig::default(),
+            observability: ObservabilityConfig::default(),
+            managed: None,
+        };
+        let base = Limits { max_steps: 100, max_cost_units: 1000, timeout_ms: 30_000 };
+        let components = build_bridge_components(&config, base, false);
+        let big = components.named_limits.get("big").expect("big must be resolved");
+        assert_eq!(big.max_steps, 500, "steps must not be capped without enforce flag");
+        assert_eq!(big.max_cost_units, 9999, "cost must not be capped without enforce flag");
+        assert_eq!(big.timeout_ms, 60_000, "timeout must not be capped without enforce flag");
     }
 
     #[test]

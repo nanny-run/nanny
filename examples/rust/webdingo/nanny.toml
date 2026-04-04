@@ -42,5 +42,25 @@ allowed = ["http_get"]
 [tools.http_get]
 max_calls = 15
 
+# Demo recordings
+# Use: nanny run --limits=<name> -- "best Rust HTTP clients"
+
+# demo-budget-exhausted: BudgetExhausted before 3rd http_get executes
+# cost_per_call=10: call1→10, call2→20, call3 pre-check: 20+10>25 → BudgetExhausted
+[limits.budget-demo]
+steps   = 10
+cost    = 25
+timeout = 120000
+
+# demo-timeout: TimeoutExpired — fires after 6s, before LLM returns, no SDK needed
+[limits.timeout-demo]
+timeout = 6000
+
+# demo-agent-scopes: generous limits — lets all 3 scopes run and exit cleanly
+[limits.agent-scopes-demo]
+steps   = 50
+cost    = 2000
+timeout = 180000
+
 [observability]
 log = "stdout"
