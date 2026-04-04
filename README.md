@@ -8,7 +8,7 @@
 
 <p align="center">
   <strong>Open-source execution boundary for autonomous systems.</strong><br/>
-  Hard limits. Deterministic stops. Structured audit trail. No code changes required.
+  Hard limits. Deterministic stops. Structured audit trail.
 </p>
 
 <p align="center">
@@ -75,7 +75,7 @@ flowchart TD
 
 | Layer                      | What it does                                                                      |
 | -------------------------- | --------------------------------------------------------------------------------- |
-| **Nanny CLI**              | Wraps any agent process in any language. Zero code changes required.              |
+| **Nanny CLI**              | Hard timeout, step, and cost limits for any agent process in any language.        |
 | **Rust SDK**               | Per-function cost metering, allowlist enforcement, and custom rules — in-process. |
 | **Python SDK** _(v0.1.4)_  | The same `@tool`, `@rule`, `@agent` model as Python decorators.                   |
 | **Nanny Cloud** _(v0.1.6)_ | Durable audit logs, team dashboards, org-level budget aggregation.                |
