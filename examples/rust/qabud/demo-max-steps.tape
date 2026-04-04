@@ -22,7 +22,7 @@ Sleep 400ms
 # MaxStepsReached — fires on 3rd read_file attempt (steps=2)
 # Demonstrates: step ceiling, MaxStepsReached stop reason, structured event log
 # ./src contains only .rs files — no sensitive patterns to trigger no_sensitive_files first
-Type "/Users/evans/Documents/codes/a-nanny/nanny/target/release/nanny run --limits=max-steps-demo -- ./src"
+Type "nanny run --limits=max-steps-demo"
 Enter
 
 Sleep 25s

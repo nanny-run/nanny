@@ -23,7 +23,7 @@ Sleep 400ms
 # Demonstrates: #[nanny::rule] with last_tool_args, content-based enforcement
 # src/*.rs files read first (collector.rs, main.rs, rules.rs), then .env at root is blocked
 # Shows successful reads before the rule fires, .env is never opened
-Type "/Users/evans/Documents/codes/a-nanny/nanny/target/release/nanny run --limits=rule-demo"
+Type "nanny run --limits=rule-demo"
 Enter
 
 Sleep 60s

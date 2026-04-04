@@ -3,6 +3,7 @@
 A Rust agent that researches a topic by fetching web pages, governed by Nanny.
 
 Demonstrates the complete Nanny developer workflow:
+
 - `#[nanny::tool(cost = 20)]` — each HTTP fetch is metered
 - `#[nanny::rule("no_loop")]` — stops the agent if it spirals on the same domain
 - `agent_enter` / `agent_exit` — activates `[limits.researcher]` for the research scope
@@ -44,19 +45,19 @@ nanny: stopped — BudgetExhausted
 
 **Stop reasons you may see:**
 
-| Reason | Cause |
-|--------|-------|
-| `BudgetExhausted` | Hit the 300-unit cost ceiling (15 fetches × 20 units) |
-| `RuleDenied: no_loop` | Agent looped on the same domain 5+ times in a row |
-| `ToolDenied` | Agent tried a tool not in the allowlist (e.g. `write_file`) |
-| `AgentCompleted` | Research finished within limits |
+| Reason                | Cause                                                       |
+| --------------------- | ----------------------------------------------------------- |
+| `BudgetExhausted`     | Hit the 300-unit cost ceiling (15 fetches × 20 units)       |
+| `RuleDenied: no_loop` | Agent looped on the same domain 5+ times in a row           |
+| `ToolDenied`          | Agent tried a tool not in the allowlist (e.g. `write_file`) |
+| `AgentCompleted`      | Research finished within limits                             |
 
 ## Development
 
-During development this sample uses a path dependency to the local `nannyd` crate.
-To switch to the published crate after `v0.1.2` ships:
+This example uses the published `nannyd = "0.1.3"` crate from crates.io.
+During active development on the nanny crate itself, switch to a path dependency:
 
 ```toml
 # Cargo.toml
-nannyd = "0.1.2"   # instead of path = "../../../crates/cli"
+nannyd = { path = "../../../crates/cli" }   # instead of nannyd = "0.1.3"
 ```

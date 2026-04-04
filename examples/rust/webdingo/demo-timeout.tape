@@ -21,7 +21,7 @@ Sleep 400ms
 
 # TimeoutExpired — fires after 6s wall-clock, no SDK instrumentation needed
 # Demonstrates: process-level timeout works for any language, zero code changes
-Type '/Users/evans/Documents/codes/a-nanny/nanny/target/release/nanny run --limits=timeout-demo -- "best Rust HTTP clients"'
+Type 'nanny run --limits=timeout-demo -- "best Rust HTTP clients"'
 Enter
 
 Sleep 12s

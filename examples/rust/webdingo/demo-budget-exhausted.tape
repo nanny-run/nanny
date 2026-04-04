@@ -22,7 +22,7 @@ Sleep 400ms
 # BudgetExhausted — fires before 3rd http_get executes (cost=25, cost_per_call=10:
 # call1→spent=10, call2→spent=20, call3 pre-check: 20+10>25 → BudgetExhausted)
 # Demonstrates: nanny::http_get cost metering, tool allowlist enforcement
-Type '/Users/evans/Documents/codes/a-nanny/nanny/target/release/nanny run --limits=budget-demo -- "best Rust HTTP clients"'
+Type 'nanny run --limits=budget-demo -- "best Rust HTTP clients"'
 Enter
 
 Sleep 80s

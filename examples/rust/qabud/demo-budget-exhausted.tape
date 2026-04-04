@@ -23,7 +23,7 @@ Sleep 400ms
 # read1→10, read2→0, read3 attempt: 0 < 10 → BudgetExhausted)
 # Demonstrates: #[nanny::tool(cost=10)] per-call cost metering, BudgetExhausted stop reason
 # ./src contains only .rs files — no sensitive patterns to trigger no_sensitive_files first
-Type "/Users/evans/Documents/codes/a-nanny/nanny/target/release/nanny run --limits=budget-demo -- ./src"
+Type "nanny run --limits=budget-demo"
 Enter
 
 Sleep 25s

@@ -21,7 +21,7 @@ Sleep 400ms
 
 # Agent scopes — shows AgentScopeEntered/AgentScopeExited for all 3 pipeline stages
 # Demonstrates: #[nanny::agent], named limit sets, scope enter/exit events in NDJSON log
-Type '/Users/evans/Documents/codes/a-nanny/nanny/target/release/nanny run --limits=agent-scopes-demo -- "best Rust HTTP clients"'
+Type 'nanny run --limits=agent-scopes-demo -- "best Rust HTTP clients"'
 Enter
 
 Sleep 95s

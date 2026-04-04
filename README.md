@@ -223,6 +223,8 @@ async fn run_research(topic: &str) {
 
 All macros are no-ops when running outside `nanny run` — no enforcement overhead.
 
+![Nanny demo — named agent scopes (planner → researcher → synthesizer) entering and exiting](assets/demo/webdingo-agent-scopes.gif)
+
 → Full Rust SDK guide at [docs.nanny.run](https://docs.nanny.run)
 
 ---
