@@ -1,5 +1,7 @@
 """Day 2 — @tool decorator tests."""
 
+from typing import Any
+
 import pytest
 from pytest_httpserver import HTTPServer
 
@@ -14,8 +16,14 @@ def _allow() -> dict[str, str]:
     return {"status": "allowed"}
 
 
-def _deny(reason: str, detail: str = "") -> dict[str, str]:
-    return {"status": "denied", "reason": reason, "detail": detail}
+def _deny(reason: str, *, tool_name: str = "", rule_name: str = "") -> dict[str, Any]:
+    """Build a bridge deny response using the bridge's actual field names."""
+    d: dict[str, Any] = {"status": "denied", "reason": reason}
+    if tool_name:
+        d["tool_name"] = tool_name
+    if rule_name:
+        d["rule_name"] = rule_name
+    return d
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +119,9 @@ def test_deny_max_steps_reached(mock_bridge: HTTPServer) -> None:
 
 
 def test_deny_tool_denied_carries_name(mock_bridge: HTTPServer) -> None:
-    mock_bridge.expect_request("/tool/call").respond_with_json(_deny("ToolDenied", "write_file"))
+    mock_bridge.expect_request("/tool/call").respond_with_json(
+        _deny("ToolDenied", tool_name="write_file")
+    )
 
     @tool(cost=10)
     def my_func() -> str:
@@ -123,7 +133,9 @@ def test_deny_tool_denied_carries_name(mock_bridge: HTTPServer) -> None:
 
 
 def test_deny_rule_denied_carries_name(mock_bridge: HTTPServer) -> None:
-    mock_bridge.expect_request("/tool/call").respond_with_json(_deny("RuleDenied", "no_spiral"))
+    mock_bridge.expect_request("/tool/call").respond_with_json(
+        _deny("RuleDenied", rule_name="no_spiral")
+    )
 
     @tool(cost=10)
     def my_func() -> str:

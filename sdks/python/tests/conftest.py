@@ -3,10 +3,25 @@
 ``mock_bridge`` — spins up a fake Nanny bridge via pytest-httpserver and
 sets ``NANNY_BRIDGE_PORT`` so _client routes to it. Because _client reads
 env vars lazily (at call time), monkeypatch works without reloading modules.
+
+``_reset_rules`` — clears the global rule registry before and after every
+test so rules registered in one test don't bleed into the next.
 """
+
+from collections.abc import Generator
 
 import pytest
 from pytest_httpserver import HTTPServer
+
+
+@pytest.fixture(autouse=True)
+def _reset_rules() -> Generator[None, None, None]:
+    """Clear _RULES before and after every test."""
+    from nanny_sdk._decorators import _RULES
+
+    _RULES.clear()
+    yield
+    _RULES.clear()
 
 
 @pytest.fixture()
