@@ -165,3 +165,17 @@ def agent_exit(name: str) -> None:
     """POST /agent/exit — deactivate the named limit scope."""
     with _make_client(timeout=5.0) as c:
         c.post("/agent/exit", json={}, headers=_headers())
+
+
+def report_stop(reason: str) -> None:
+    """POST /stop — notify the bridge of a stop reason before raising.
+
+    The bridge records this so the NDJSON log shows the real stop reason
+    (e.g. ``RuleDenied``) instead of ``ProcessCrashed`` when the process exits.
+    Silently ignored if the bridge is unreachable — best-effort only.
+    """
+    try:
+        with _make_client(timeout=2.0) as c:
+            c.post("/stop", json={"reason": reason}, headers=_headers())
+    except Exception:
+        pass

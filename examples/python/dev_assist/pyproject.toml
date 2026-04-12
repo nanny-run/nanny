@@ -1,16 +1,22 @@
 [project]
-name = "lc-dev-assist"
+name = "dev-assist"
 version = "0.1.0"
 description = "dev_assist — LangChain debug agent governed by Nanny"
 requires-python = ">=3.11"
 dependencies = [
-    "langchain>=0.3",
     "langchain-core>=0.3",
     "langchain-ollama>=0.2",
     "typer>=0.12",
     "rich>=13",
     "nanny-sdk",
 ]
+
+[project.scripts]
+dev = "dev_assist.cli.main:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [tool.uv.sources]
 nanny-sdk = { path = "../../../sdks/python", editable = true }

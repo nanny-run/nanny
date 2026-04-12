@@ -5,7 +5,7 @@
 mode = "local"
 
 [start]
-cmd = "python cli.py"
+cmd = "uv run dev debug --trace fixtures/sample_trace.txt"
 
 [limits]
 # Global ceiling: applies to every run unless a named scope overrides.
@@ -20,8 +20,28 @@ steps   = 30
 cost    = 100
 timeout = 30000
 
+[limits.demo-budget]
+# Demo: BudgetExhausted — file_reader costs 5 each, ripgrep costs 8 each.
+# Budget of 12 means the second file_reader call exhausts the budget.
+steps   = 30
+cost    = 12
+timeout = 30000
+
+[limits.demo-steps]
+# Demo: MaxStepsReached — cap at 3 steps so the agent hits the ceiling fast.
+steps   = 3
+cost    = 100
+timeout = 30000
+
+[limits.demo-rule]
+# Demo: RuleDenied (no_read_loop) — generous budget so only the rule fires.
+# The no_read_loop rule triggers after 5 consecutive file_reader calls.
+steps   = 50
+cost    = 500
+timeout = 30000
+
 [tools]
-# Only file_reader and ripgrep are permitted.
+# file_reader and ripgrep are permitted.
 # write_file is intentionally absent — ToolDenied fires if the LLM hallucinates it.
 allowed = ["file_reader", "ripgrep"]
 

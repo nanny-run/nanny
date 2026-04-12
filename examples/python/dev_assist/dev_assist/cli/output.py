@@ -32,13 +32,7 @@ console = Console(stderr=True, highlight=False)
 
 @contextmanager
 def thinking(message: str = "Analysing trace…") -> Generator[None, None, None]:
-    """Context manager: show a spinner while the block executes.
-
-    Usage::
-
-        with thinking("Reading files…"):
-            result = run_debug(trace_text)
-    """
+    """Context manager: show a spinner while the block executes."""
     with console.status(
         Text(message, style="bold cyan"),
         spinner="dots",
@@ -52,11 +46,7 @@ def thinking(message: str = "Analysing trace…") -> Generator[None, None, None]
 
 
 def render_diagnosis(text: str) -> None:
-    """Render the agent's diagnosis in a styled panel.
-
-    Treats the content as Markdown so bullet lists, bold text,
-    and code fences render properly in the terminal.
-    """
+    """Render the agent's diagnosis in a styled panel."""
     console.print()
     console.print(
         Panel(
@@ -74,11 +64,7 @@ def render_diagnosis(text: str) -> None:
 
 
 def render_stop(exc: Exception) -> None:
-    """Render a user-facing message when analysis stops early.
-
-    Maps internal stop conditions to plain language the developer can act on.
-    The exception type determines the message — the word "Nanny" never appears.
-    """
+    """Render a user-facing message when analysis stops early."""
     kind = type(exc).__name__
     message, hint = _stop_copy(exc, kind)
 

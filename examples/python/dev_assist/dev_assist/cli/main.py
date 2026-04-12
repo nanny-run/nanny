@@ -2,17 +2,17 @@
 
 Usage
 -----
-  python cli.py --trace <file>    Diagnose a stack trace.
-  python cli.py                   Read a stack trace from stdin.
-  nanny run                       Same, with execution limits enforced.
+  dev debug --trace <file>             Diagnose a stack trace (ReAct mode).
+  dev debug --trace <file> --mode plan Diagnose using Plan-and-Execute mode.
+  dev debug                            Read a stack trace from stdin.
+  nanny run                            Same, with execution limits enforced.
 
-Note: Typer promotes a single command to the root.  When more commands are
-added (``dev commit``, ``dev memory``, etc.) the subcommand structure emerges
-automatically.
+More commands coming: dev ask, dev commit, dev pr, dev remember, dev plan.
 """
 
 from __future__ import annotations
 
+import enum
 import sys
 from pathlib import Path
 from typing import Annotated
@@ -27,14 +27,25 @@ from nanny_sdk import (
     ToolDenied,
 )
 
-from agent import run_debug
-from output import console, render_diagnosis, render_stop, thinking
+from dev_assist.agents.debug import run_debug
+from dev_assist.cli.output import console, render_diagnosis, render_stop, thinking
 
 app = typer.Typer(
     name="dev",
-    help="dev_assist — diagnose stack traces and debug errors with a local LLM.",
+    help="dev_assist — your local AI engineering assistant.",
     add_completion=False,
+    no_args_is_help=True,
 )
+
+
+@app.callback()
+def main() -> None:
+    """dev_assist — diagnose errors, explore code, and automate dev tasks."""
+
+
+class Mode(str, enum.Enum):
+    react = "react"
+    plan = "plan"
 
 
 @app.command()
@@ -50,6 +61,18 @@ def debug(
             resolve_path=True,
         ),
     ] = None,
+    mode: Annotated[
+        Mode,
+        typer.Option(
+            "--mode",
+            "-m",
+            help=(
+                "Execution mode. "
+                "'react' (default): iterative Thought/Action loop. "
+                "'plan': single planning call then deterministic execution."
+            ),
+        ),
+    ] = Mode.react,
 ) -> None:
     """Diagnose a stack trace and propose a fix.
 
@@ -57,8 +80,9 @@ def debug(
 
     \b
     Examples:
-      dev --trace ./error.log
-      cat error.log | dev
+      dev debug --trace ./error.log
+      dev debug --trace ./error.log --mode plan
+      cat error.log | dev debug
     """
     # --- read input ---
     if trace is not None:
@@ -78,8 +102,9 @@ def debug(
 
     # --- run agent ---
     try:
-        with thinking("Analysing trace…"):
-            output = run_debug(trace_text)
+        label = "Planning and executing…" if mode == Mode.plan else "Analysing trace…"
+        with thinking(label):
+            output = run_debug(trace_text, mode=mode.value)
 
     except (ToolDenied, RuleDenied, BudgetExhausted, MaxStepsReached, TimeoutExpired) as exc:
         render_stop(exc)

@@ -39,4 +39,8 @@ def mock_bridge(httpserver: HTTPServer, monkeypatch: pytest.MonkeyPatch) -> HTTP
     """
     monkeypatch.setenv("NANNY_BRIDGE_PORT", str(httpserver.port))
     monkeypatch.setenv("NANNY_SESSION_TOKEN", "test-token")
+    # Permanent catch-all for POST /stop — report_stop() calls this on every denial.
+    # Using expect_request (not expect_oneshot_request) so it handles any number of calls
+    # and is NOT checked by check_assertions(), avoiding noise in allow-path tests.
+    httpserver.expect_request("/stop", method="POST").respond_with_json({"status": "ok"})
     return httpserver
