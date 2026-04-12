@@ -19,7 +19,6 @@ class PolicyContext:
     tool_call_counts: dict[str, int] = field(default_factory=dict)
     tool_call_history: list[str] = field(default_factory=list)
     last_tool_args: dict[str, str] = field(default_factory=dict)
-    prompt: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> PolicyContext:
@@ -31,5 +30,4 @@ class PolicyContext:
             tool_call_counts=data.get("tool_call_counts", {}),
             tool_call_history=data.get("tool_call_history", []),
             last_tool_args=data.get("last_tool_args", {}),
-            prompt=data.get("prompt"),
         )

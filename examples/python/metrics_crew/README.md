@@ -1,0 +1,78 @@
+# metrics_crew — incident analysis pipeline
+
+Imagine a hospital emergency room. When a patient comes in, a team of specialists works in sequence: intake runs the initial tests, diagnostics finds what's wrong, radiology produces the scans, and the attending physician writes the final report. Each specialist has their own budget and their own tools — the radiologist can't order blood work, and the diagnostician can't write the discharge summary. There's also a hospital-wide spending cap that applies regardless of what any individual specialist is doing.
+
+`metrics_crew` is a CrewAI pipeline that investigates a production incident from a server metrics CSV. Four agents work in sequence. Nanny plays the role of hospital administration: each specialist gets their own spending limit and their own tool access. When any limit is hit, the case closes immediately.
+
+---
+
+## What it does
+
+Given a CSV of server metrics (CPU, memory, request rate, error rate, latency), the pipeline:
+
+1. **Ingestion agent** — loads and validates the data, confirms available signals and date range
+2. **Analysis agent** — detects anomalies using Z-score analysis and correlates affected signals
+3. **Visualization agent** — generates interactive Plotly HTML charts for each anomalous signal
+4. **Reporter agent** — writes a structured Markdown incident report linking to the charts
+
+Output: HTML charts in `reports/` and an incident report Markdown file.
+
+---
+
+## Prerequisites
+
+- **`nanny` CLI** — `brew tap nanny-run/nanny && brew install nannyd` (macOS) or `cargo install nannyd`
+- **Ollama** — `brew install ollama && ollama serve` (keep it running in a separate terminal)
+- **`llama3.1:8b` model** — `ollama pull llama3.1:8b`
+
+---
+
+## Install
+
+```bash
+cd examples/python/metrics_crew
+pip install nanny-sdk
+uv sync
+```
+
+---
+
+## Run under enforcement
+
+```bash
+nanny run
+```
+
+Reads `[start].cmd` from `nanny.toml` and runs the full four-agent pipeline under Nanny governance. Charts are written to `reports/`. The NDJSON event log goes to stdout.
+
+---
+
+## Run without enforcement (passthrough)
+
+All decorators are no-ops outside `nanny run`. The full pipeline runs normally with no bridge required:
+
+```bash
+uv run metrics-crew analyze --data fixtures/sample_metrics.csv
+```
+
+---
+
+## Nanny features demonstrated
+
+| Feature | What it does |
+| ------- | ------------ |
+| `@tool(cost=N)` on each tool | Each tool call charges its declared cost against the active budget |
+| Per-role limits | `[limits.ingestion]`, `[limits.analysis]`, `[limits.visualization]`, `[limits.reporter]` — each agent gets its own ceiling |
+| Per-role tool allowlists | Each agent only receives the tools it needs; calling another role's tool raises `ToolDenied` |
+| `@rule("no_analysis_loop")` | Stops if `compute_stats` is called 5+ times in a row — prevents the analysis agent from looping on the same metric |
+
+---
+
+## Stop reasons you may see
+
+| Reason | What caused it |
+| ------ | -------------- |
+| `BudgetExhausted` | Hit the cost ceiling during analysis before all signals were checked |
+| `RuleDenied: no_analysis_loop` | Analysis agent kept re-running `compute_stats` on the same metric |
+| `ToolDenied` | An agent tried to call a tool outside its allowlist (e.g. analysis agent calling `write_report`) |
+| `AgentCompleted` | All four agents finished within their limits; charts and report produced |
