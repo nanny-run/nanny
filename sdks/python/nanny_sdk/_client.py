@@ -162,9 +162,16 @@ def agent_enter(name: str) -> None:
 
 
 def agent_exit(name: str) -> None:
-    """POST /agent/exit — deactivate the named limit scope."""
-    with _make_client(timeout=5.0) as c:
-        c.post("/agent/exit", json={}, headers=_headers())
+    """POST /agent/exit — deactivate the named limit scope.
+
+    Silently ignored if the bridge closed the connection after a stop event —
+    the bridge already recorded the scope exit when it issued the stop.
+    """
+    try:
+        with _make_client(timeout=5.0) as c:
+            c.post("/agent/exit", json={}, headers=_headers())
+    except Exception:
+        pass
 
 
 def report_stop(reason: str) -> None:
