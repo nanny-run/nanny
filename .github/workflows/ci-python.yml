@@ -1,0 +1,41 @@
+name: CI — Python SDK
+
+on:
+  push:
+    branches: [next]
+    paths: ["sdks/python/**"]
+  pull_request:
+    paths: ["sdks/python/**"]
+
+jobs:
+  test:
+    name: Test (Python ${{ matrix.python }}, ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.10", "3.12"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "${{ matrix.python }}"
+
+      - name: Install dependencies
+        run: uv sync
+        working-directory: sdks/python
+
+      - name: Test
+        run: uv run pytest -q
+        working-directory: sdks/python
+
+      - name: Lint
+        run: uv run ruff check .
+        working-directory: sdks/python
+
+      - name: Type check
+        run: uv run mypy nanny_sdk
+        working-directory: sdks/python
