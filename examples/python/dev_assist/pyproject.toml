@@ -8,7 +8,7 @@ dependencies = [
     "langchain-ollama>=0.2",
     "typer>=0.12",
     "rich>=13",
-    "nanny-sdk",
+    "nanny-sdk==0.1.4",
 ]
 
 [project.scripts]
@@ -17,9 +17,6 @@ dev = "dev_assist.cli.main:app"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
-
-[tool.uv.sources]
-nanny-sdk = { path = "../../../sdks/python", editable = true }
 
 [tool.ruff]
 line-length = 100
