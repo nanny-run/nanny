@@ -1,0 +1,286 @@
+---
+title: Python
+description: Per-function governance for Python agents using Nanny decorators.
+---
+
+The Python SDK brings the same enforcement model as the [Rust SDK](/v0.1/guides/rust-sdk) to Python — `@tool`, `@rule`, and `@agent` decorators that enforce limits per function call.
+
+```bash
+pip install nanny-sdk
+```
+
+---
+
+## Passthrough mode
+
+When running outside `nanny run`, every decorator is a no-op. The function executes normally with no enforcement overhead:
+
+```bash
+# Governed — enforcement active (reads [start].cmd from nanny.toml)
+nanny run
+
+# Not governed — decorators silent, agent runs normally
+python agent.py
+uv run agent.py
+```
+
+This is safe to ship to production. The instrumentation only activates when `nanny run` is present.
+
+---
+
+## `@tool` — declare a governed tool
+
+Mark a function as a tool that Nanny should track and charge against the budget:
+
+```python
+from nanny_sdk import tool
+
+@tool(cost=10)
+def fetch_page(url: str) -> str:
+    import httpx
+    return httpx.get(url).text
+```
+
+When the agent calls `fetch_page`:
+
+1. Nanny checks: is `fetch_page` in the `[tools] allowed` list?
+2. Nanny checks: has `fetch_page` exceeded `[tools.fetch_page] max_calls`?
+3. Nanny charges 10 cost units against the budget.
+4. If any check fails, a `NannyStop` exception is raised — the function body never runs.
+
+Works identically for async functions:
+
+```python
+@tool(cost=10)
+async def fetch_page(url: str) -> str:
+    import httpx
+    async with httpx.AsyncClient() as client:
+        return (await client.get(url)).text
+```
+
+### Cost
+
+The `cost` argument is required. Set it to `0` for tools you want tracked but not charged:
+
+```python
+@tool(cost=0)
+def log_step(msg: str) -> None: ...
+```
+
+### Matching the tool allowlist
+
+The tool name used for allowlist checks is the **function name** as declared in Python:
+
+```toml
+# nanny.toml
+[tools]
+allowed = ["fetch_page", "read_file"]
+
+[tools.fetch_page]
+max_calls     = 20
+cost_per_call = 10   # nanny.toml cost overrides the decorator default
+```
+
+---
+
+## `@rule` — declare an enforcement rule
+
+A rule is a function that returns a verdict on whether execution should continue.
+Return `True` to allow, `False` to deny:
+
+```python
+from nanny_sdk import rule
+
+@rule("no_spiral")
+def check_spiral(ctx) -> bool:
+    h = ctx.tool_call_history
+    # Deny if the last three tool calls were all the same
+    return not (len(h) >= 3 and len(set(h[-3:])) == 1)
+```
+
+Rules are evaluated client-side on every tool call, before the bridge is contacted. When a rule returns `False`, Nanny raises:
+
+```python
+RuleDenied("no_spiral")
+```
+
+The denied tool never runs and no cost is charged.
+
+### PolicyContext fields
+
+The `ctx` parameter gives you a snapshot of the current execution state:
+
+| Field               | Type             | Description                                |
+| ------------------- | ---------------- | ------------------------------------------ |
+| `step_count`        | `int`            | Steps completed so far                     |
+| `elapsed_ms`        | `int`            | Wall-clock time elapsed                    |
+| `cost_units_spent`  | `int`            | Total cost units spent                     |
+| `tool_call_counts`  | `dict[str, int]` | Per-tool call counts                       |
+| `tool_call_history` | `list[str]`      | Ordered log of tool names called           |
+| `requested_tool`    | `str \| None`    | The tool being evaluated right now         |
+| `last_tool_args`    | `dict[str, str]` | Arguments of the tool call being evaluated |
+
+Rules are evaluated **before** the tool runs — `requested_tool` is set to the tool name being checked. Use `last_tool_args` for content-based enforcement:
+
+```python
+@rule("no_sensitive_files")
+def block_sensitive(ctx) -> bool:
+    path = ctx.last_tool_args.get("path", "")
+    return ".env" not in path and "secret" not in path
+```
+
+<Note>
+  `requested_tool` and `last_tool_args` are always populated. The counter fields
+  (`step_count`, `tool_call_counts`, `tool_call_history`, `elapsed_ms`) are
+  coming in a future release.
+</Note>
+
+---
+
+## `@agent` — activate named limits for a scope
+
+Mark a function to run under a named limit set from `nanny.toml`.
+When the function is entered, Nanny switches to those limits; when it exits, limits revert:
+
+```python
+from nanny_sdk import agent
+
+@agent("researcher")
+def run_research(topic: str) -> list[str]:
+    # This runs under [limits.researcher] from nanny.toml
+    pages = [fetch_page(f"https://en.wikipedia.org/wiki/{topic}")]
+    return pages
+```
+
+```toml
+# nanny.toml
+[limits.researcher]
+steps   = 200
+cost    = 5000
+timeout = 120000
+```
+
+The named set inherits from `[limits]` and overrides only the declared fields.
+Works identically for async functions. Limits revert on exit whether the function returns normally or raises.
+
+---
+
+## What happens on stop
+
+When Nanny stops execution, it raises a `NannyStop` exception. All stop reasons are distinct subclasses:
+
+```python
+from nanny_sdk import (
+    NannyStop,
+    MaxStepsReached,
+    BudgetExhausted,
+    TimeoutExpired,
+    ToolDenied,
+    RuleDenied,
+    AgentCompleted,
+    AgentNotFound,
+)
+```
+
+Catch them by category or individually:
+
+```python
+from nanny_sdk import NannyStop, BudgetExhausted, ToolDenied
+
+try:
+    run_research("Alan Turing")
+except BudgetExhausted:
+    print("Hit the cost ceiling")
+except ToolDenied as e:
+    print(f"Blocked tool: {e.tool_name}")
+except NannyStop as e:
+    print(f"Stopped: {type(e).__name__}")
+```
+
+You do not need to handle stop reasons in most agent code. They propagate up the call stack and terminate the process via `nanny run`. Catching them is useful in test code and at the CLI entry point.
+
+---
+
+## Complete example
+
+```python
+from nanny_sdk import tool, rule, agent
+
+@tool(cost=10)
+def fetch_page(url: str) -> str:
+    import httpx
+    return httpx.get(url).text
+
+@tool(cost=5)
+def read_file(path: str) -> str:
+    with open(path) as f:
+        return f.read()
+
+@rule("no_spiral")
+def check_spiral(ctx) -> bool:
+    h = ctx.tool_call_history
+    return not (len(h) >= 3 and len(set(h[-3:])) == 1)
+
+@agent("researcher")
+def research(topic: str) -> list[str]:
+    results = []
+    page = fetch_page(f"https://en.wikipedia.org/wiki/{topic}")
+    results.append(page)
+    return results
+
+if __name__ == "__main__":
+    pages = research("Alan Turing")
+    print(f"Collected {len(pages)} pages")
+```
+
+Run it under Nanny:
+
+```bash
+nanny run
+```
+
+Run it without Nanny (decorators silent, agent runs normally):
+
+```bash
+python agent.py
+```
+
+---
+
+## Framework integration
+
+### LangChain
+
+Stack `@lc_tool` (outer) and `@nanny_tool` (inner). LangChain registers the function for dispatch; Nanny intercepts every call regardless of which model or API style invoked it:
+
+```python
+from langchain_core.tools import tool as lc_tool
+from nanny_sdk import tool as nanny_tool
+
+@lc_tool                    # outer — LangChain registers for tool dispatch
+@nanny_tool(cost=5)         # inner — Nanny intercepts before file is opened
+def read_file(path: str) -> str:
+    """Read a source file from disk."""
+    with open(path) as f:
+        return f.read()
+```
+
+Execution order: your code calls `tool.run(args)` → LangChain validates args → Nanny wrapper intercepts → bridge check → if allowed, file is read.
+
+### CrewAI
+
+Same stacking pattern. CrewAI's `@tool` decorator and Nanny's `@tool` decorator both wrap the function — Nanny's wrapper fires on every `tool.run()` call inside the crew:
+
+```python
+from crewai.tools import tool as crew_tool
+from nanny_sdk import tool as nanny_tool
+
+@crew_tool                  # outer — CrewAI registers for agent dispatch
+@nanny_tool(cost=15)        # inner — Nanny intercepts before function runs
+def generate_chart(metric: str, output_dir: str) -> str:
+    """Generate an interactive Plotly chart for a metric."""
+    # ... chart generation ...
+    return output_path
+```
+
+See [`examples/python/dev_assist`](https://github.com/nanny-run/nanny/tree/next/examples/python/dev_assist) for a complete LangChain integration and [`examples/python/metrics_crew`](https://github.com/nanny-run/nanny/tree/next/examples/python/metrics_crew) for a complete CrewAI integration.

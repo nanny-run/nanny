@@ -8,6 +8,15 @@
 - Run `mint dev` to preview locally
 - Run `mint broken-links` to check links
 
+## Versioning policy
+
+- Docs are versioned at the **minor** level: `v0.1/`, `v0.2/`, `v1.0/`, etc. — never at the patch level
+- A new docs version is only created when the content would meaningfully mislead a user on a different release line (new mental model, removed commands, changed APIs)
+- Patch releases update the existing version folder in place
+- **Keep at most 4 versions** in the `docs.json` version switcher; drop the oldest when adding a fifth (add a redirect and a banner to the dropped version if it still has active users)
+- All internal links must include the version prefix: `/v0.1/quickstart`, not `/quickstart`
+- Redirects for removed or renamed paths live in the `"redirects"` array in `docs.json`
+
 ## Terminology
 
 - **Nanny** — the product name; capitalise in prose, lowercase as the CLI command (`nanny run`)
@@ -33,7 +42,7 @@ Audience: developers using Nanny in their projects.
 - Never expose internal implementation details: bridge, socket paths, HTTP endpoints, crate internals
 - Show concrete `nanny.toml` + code examples for every feature
 - Stop reasons, event types, and `PolicyContext` fields must match the authoritative enum in `crates/core`
-- Python SDK content is clearly marked _(v0.1.4)_ — do not document it as if it exists today
+- Python SDK shipped in v0.1.4. Document it as a live, available feature. Do not add "coming soon" language.
 
 ### ARCHITECTURE.md
 

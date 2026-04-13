@@ -1,0 +1,11 @@
+# Generated output — produced at runtime, not committed
+reports/*.html
+reports/*.md
+reports/*/
+
+# Python / uv
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+dist/

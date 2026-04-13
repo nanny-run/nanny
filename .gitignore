@@ -19,6 +19,16 @@
 .env.*
 !.env.example
 
+# Python build output and caches
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+*.egg-info/
+dist/
+# Note: uv.lock is intentionally committed — reproducible Python builds.
 
 # Note: Cargo.lock is intentionally committed.
 # This workspace produces a binary (nanny CLI). Committing Cargo.lock ensures
