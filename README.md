@@ -38,7 +38,7 @@ Nanny is the thing that stops them.
 
 You tell nanny "this agent is allowed 100 steps, 1000 cost units, and 30 seconds." The moment any limit is crossed, nanny kills the process immediately, emits a structured event log saying exactly why it stopped, and exits. No grace period. No recovery logic. No second chances.
 
-Think of it as a circuit breaker for autonomous systems — deterministic, auditable, and completely decoupled from the agent itself.
+Think of it as a **hard execution boundary** — deterministic, auditable, and structurally impossible for the agent to bypass.
 
 ```mermaid
 flowchart TD
@@ -71,12 +71,12 @@ flowchart TD
 
 ## The Nanny ecosystem
 
-| Layer | What it does |
-| ----- | ------------ |
-| **Nanny CLI** | Hard timeout, step, and cost limits for any agent process in any language. |
-| **Rust SDK** | Per-function cost metering, allowlist enforcement, and custom rules — in-process. |
-| **Python SDK** | The same `@tool`, `@rule`, `@agent` model as Python decorators. |
-| **Nanny Cloud** _(v0.1.6)_ | Durable audit logs, team dashboards, org-level budget aggregation. |
+| Layer                      | What it does                                                                      |
+| -------------------------- | --------------------------------------------------------------------------------- |
+| **Nanny CLI**              | Hard timeout, step, and cost limits for any agent process in any language.        |
+| **Rust SDK**               | Per-function cost metering, allowlist enforcement, and custom rules — in-process. |
+| **Python SDK**             | The same `@tool`, `@rule`, `@agent` model as Python decorators.                   |
+| **Nanny Cloud** _(v0.1.6)_ | Durable audit logs, team dashboards, org-level budget aggregation.                |
 
 → Full docs at [docs.nanny.run](https://docs.nanny.run)
 
@@ -86,11 +86,11 @@ flowchart TD
 
 Four complete agent samples ship in `examples/`. All use [Ollama](https://ollama.com) — no API key required.
 
-| Sample | What it does | Stop reasons demonstrated |
-| ------ | ------------ | ------------------------- |
-| [`examples/rust/webdingo`](examples/rust/webdingo) | Web research agent (Rust) — fetches pages, synthesises a report. Classic spiral risk. | `BudgetExhausted`, `RuleDenied` |
-| [`examples/rust/qabud`](examples/rust/qabud) | Code review agent (Rust) — reads source files, identifies issues, blocks sensitive files before they're opened. | `RuleDenied`, `ToolDenied`, `MaxStepsReached` |
-| [`examples/python/dev_assist`](examples/python/dev_assist) | Debug agent (LangChain) — given a stack trace, reads relevant files and searches for related symbols. | `BudgetExhausted`, `RuleDenied`, `ToolDenied` |
+| Sample                                                         | What it does                                                                                                                | Stop reasons demonstrated                     |
+| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| [`examples/rust/webdingo`](examples/rust/webdingo)             | Web research agent (Rust) — fetches pages, synthesises a report. Classic spiral risk.                                       | `BudgetExhausted`, `RuleDenied`               |
+| [`examples/rust/qabud`](examples/rust/qabud)                   | Code review agent (Rust) — reads source files, identifies issues, blocks sensitive files before they're opened.             | `RuleDenied`, `ToolDenied`, `MaxStepsReached` |
+| [`examples/python/dev_assist`](examples/python/dev_assist)     | Debug agent (LangChain) — given a stack trace, reads relevant files and searches for related symbols.                       | `BudgetExhausted`, `RuleDenied`, `ToolDenied` |
 | [`examples/python/metrics_crew`](examples/python/metrics_crew) | Incident pipeline (CrewAI) — four agents analyse server metrics, generate interactive charts, and write an incident report. | `BudgetExhausted`, `RuleDenied`, `ToolDenied` |
 
 ```bash

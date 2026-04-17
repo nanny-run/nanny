@@ -11,7 +11,7 @@ Nanny is an open-source, deterministic execution boundary for autonomous agents 
 
 No grace period. No soft warnings. No recovery logic. No negotiation.
 
-Think of it as a **circuit breaker for autonomous systems** — deterministic, auditable, and completely decoupled from the agent itself.
+That boundary is deterministic, auditable, and structurally impossible for the agent to bypass.
 
 ---
 
@@ -47,7 +47,7 @@ It is a good fit if you:
 - Need hard guarantees that an agent **cannot exceed a cost budget or run indefinitely**
 - Want a **structured audit trail** of every tool call and stop reason for every execution
 - Are building with **CrewAI, LangChain, or any Python or Rust agent framework**
-- Want enforcement that is **decoupled from your agent code** — no lock-in, no wrapper framework
+- Want enforcement that is **not tied to any agent framework** — use CrewAI, LangGraph, or any Python or Rust framework without lock-in
 
 ---
 
@@ -55,7 +55,7 @@ It is a good fit if you:
 
 Nanny is designed to meet you where you are and grow with you.
 
-**Nanny CLI** — The universal entry point. Wraps any agent process in any language. Install it once as a system tool and use `nanny run` from any project that has a `nanny.toml` with a `[start]` command configured.
+**Nanny CLI** — The enforcement entry point. Governs any agent process in any language as its parent process supervisor. Install it once as a system tool and use `nanny run` from any project that has a `nanny.toml` with a `[start]` command configured.
 
 ```bash
 nanny run                        # reads [start].cmd from nanny.toml
