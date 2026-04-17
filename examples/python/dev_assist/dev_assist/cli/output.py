@@ -31,7 +31,7 @@ console = Console(stderr=True, highlight=False)
 
 
 @contextmanager
-def thinking(message: str = "Analysing trace…") -> Generator[None, None, None]:
+def thinking(message: str = "Analysing…") -> Generator[None, None, None]:
     """Context manager: show a spinner while the block executes."""
     with console.status(
         Text(message, style="bold cyan"),

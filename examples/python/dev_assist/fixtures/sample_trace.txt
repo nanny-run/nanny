@@ -1,16 +1,16 @@
 Traceback (most recent call last):
-  File "fixtures/sample_project/router.py", line 8, in route
+  File "fixtures/sample_project/router.py", line 10, in route
     return handle_request(request)
-  File "fixtures/sample_project/server.py", line 8, in handle_request
-    response = middleware.preprocess(request)
+  File "fixtures/sample_project/server.py", line 12, in handle_request
+    return _middleware.preprocess(request)
   File "fixtures/sample_project/middleware.py", line 18, in preprocess
-    return self.pipeline.process(request)
-  File "fixtures/sample_project/pipeline.py", line 18, in process
-    return self._run_stage(request)
-  File "fixtures/sample_project/pipeline.py", line 21, in _run_stage
+    return self.pipeline.process(clean_request)
+  File "fixtures/sample_project/pipeline.py", line 22, in process
+    return self._run_stage(body)
+  File "fixtures/sample_project/pipeline.py", line 26, in _run_stage
     return self.normalizer.apply(data)
-  File "fixtures/sample_project/normalizer.py", line 12, in apply
-    return self._normalize_record(data)
-  File "fixtures/sample_project/normalizer.py", line 21, in _normalize_record
+  File "fixtures/sample_project/normalizer.py", line 11, in apply
+    return self._normalize_record(validated)
+  File "fixtures/sample_project/normalizer.py", line 28, in _normalize_record
     value = record[self.key_map[field]]
 KeyError: 'user_id'

@@ -102,7 +102,7 @@ def debug(
 
     # --- run agent ---
     try:
-        label = "Planning and executing…" if mode == Mode.plan else "Analysing trace…"
+        label = "Planning and executing…" if mode == Mode.plan else "Analysing…"
         with thinking(label):
             output = run_debug(trace_text, mode=mode.value)
 

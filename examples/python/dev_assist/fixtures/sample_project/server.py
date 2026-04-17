@@ -3,11 +3,10 @@
 from middleware import RequestMiddleware
 from pipeline import Pipeline
 
-pipeline = Pipeline()
-middleware = RequestMiddleware(pipeline)
+_pipeline = Pipeline()
+_middleware = RequestMiddleware(_pipeline)
 
 
 def handle_request(request: dict) -> dict:
-    """Handle an incoming API request."""
-    response = middleware.preprocess(request)
-    return response
+    """Route an authenticated request through the middleware and pipeline."""
+    return _middleware.preprocess(request)

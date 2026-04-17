@@ -24,8 +24,9 @@ from __future__ import annotations
 
 import json
 import re
-from collections import deque
 from typing import Any
+
+from pydantic import ValidationError
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_ollama import ChatOllama
@@ -38,19 +39,23 @@ from dev_assist.tools import file_reader, ripgrep, write_file
 # ---------------------------------------------------------------------------
 # Policy: no_read_loop
 #
-# Fires if the last 5 tool calls are all file_reader — the agent is stuck
-# reading the same files without making progress.
+# Fires the moment any file is read a second time.
+# A healthy agent reads each file once — the content stays in the conversation
+# history and can be referenced without re-reading. Re-reading the same file
+# means the agent forgot it or is circling without making progress.
 # ---------------------------------------------------------------------------
 
-_call_window: deque[str] = deque(maxlen=5)
+_seen_files: set[str] = set()
 
 
 @rule("no_read_loop")
 def check_no_read_loop(ctx: Any) -> bool:
-    tool_name = getattr(ctx, "requested_tool", "") or ""
-    _call_window.append(tool_name)
-    if len(_call_window) == 5 and all(t == "file_reader" for t in _call_window):
-        return False
+    if getattr(ctx, "requested_tool", "") == "file_reader":
+        path = (ctx.last_tool_args or {}).get("path", "")
+        if path in _seen_files:
+            return False
+        if path:
+            _seen_files.add(path)
     return True
 
 
@@ -89,8 +94,10 @@ Files involved: <paths>
 Fix: <diff or clear description>\
 """
 
+
 _ACTION_RE = re.compile(r"Action:\s*(\w+)", re.IGNORECASE)
-_INPUT_RE = re.compile(r"Action Input:\s*(\{.*?\}|\S+)", re.DOTALL | re.IGNORECASE)
+_INPUT_RE = re.compile(
+    r"Action Input:\s*(\{.*?\}|\S+)", re.DOTALL | re.IGNORECASE)
 
 
 def _system_prompt(tools: list[Any]) -> str:
@@ -176,7 +183,10 @@ def _react_loop(llm: ChatOllama, tools: list[Any], trace_text: str) -> str:
                 k: (v[0] if isinstance(v, list) and v else v)
                 for k, v in args.items()
             }
-            observation = str(tool.run(clean_args))
+            try:
+                observation = str(tool.run(clean_args))
+            except ValidationError as exc:
+                observation = f"[error] Invalid arguments for '{action}': {exc}"
 
         messages.append(AIMessage(content=content))
         messages.append(HumanMessage(content=f"Observation: {observation}"))
@@ -246,7 +256,8 @@ def _plan_loop(llm: ChatOllama, tools: list[Any], trace_text: str) -> str:
     tools_by_name = {t.name: t for t in tools}
 
     # Phase 1: plan
-    plan_response = llm.invoke([HumanMessage(content=_PLAN_PROMPT.format(trace=trace_text))])
+    plan_response = llm.invoke(
+        [HumanMessage(content=_PLAN_PROMPT.format(trace=trace_text))])
     plan = _parse_plan(plan_response.content)  # type: ignore[arg-type]
 
     # Phase 2: execute — deterministic, our code drives every tool call
@@ -276,8 +287,20 @@ def _plan_loop(llm: ChatOllama, tools: list[Any], trace_text: str) -> str:
     # Phase 3: analyze
     context = "\n\n---\n\n".join(gathered)
     analyze_response = llm.invoke([
-        HumanMessage(content=_ANALYZE_PROMPT.format(trace=trace_text, context=context))
+        HumanMessage(content=_ANALYZE_PROMPT.format(
+            trace=trace_text, context=context))
     ])
+
+    # Phase 4: apply fix — deterministic write_file call.
+    # Under `nanny run`: ToolDenied fires if write_file is not in [tools] allowed.
+    # In passthrough (uv run dev ...): actually writes the fix to disk.
+    # Using plan["files"][0] as the target — the primary file in the trace.
+    if plan.get("files"):
+        fix_target = plan["files"][0]
+        write_tool = tools_by_name.get("write_file")
+        if write_tool:
+            write_tool.run({"path": fix_target, "content": str(analyze_response.content)})
+
     return analyze_response.content  # type: ignore[return-value]
 
 

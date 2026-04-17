@@ -16,9 +16,11 @@ timeout = 60000
 [limits.debugger]
 # Activated by @agent("debugger") in agent.py.
 # Inherits from [limits] and overrides what differs.
+# timeout=60000 allows the full investigate+patch cycle; demo limit sets
+# that have timeout=30000 will still cap this to 30s for those scenarios.
 steps   = 30
 cost    = 100
-timeout = 30000
+timeout = 60000
 
 [limits.demo-budget]
 # Demo: BudgetExhausted — file_reader costs 5 each, ripgrep costs 8 each.
@@ -29,16 +31,27 @@ timeout = 30000
 
 [limits.demo-steps]
 # Demo: MaxStepsReached — cap at 3 steps so the agent hits the ceiling fast.
+# timeout=120000: 3 tool calls + 4 LLM calls at ~30s each = ~120s worst case.
 steps   = 3
 cost    = 100
-timeout = 30000
+timeout = 120000
 
 [limits.demo-rule]
-# Demo: RuleDenied (no_read_loop) — generous budget so only the rule fires.
-# The no_read_loop rule triggers after 5 consecutive file_reader calls.
+# RuleDenied (no_read_loop): generous budget gives the agent enough runway
+# to read all 5 files in the complex trace. Rule fires on the 5th total
+# file_reader call. timeout=90000: cold model load ~28s + 5 LLM calls ~5s each.
 steps   = 50
 cost    = 500
-timeout = 30000
+timeout = 90000
+
+[limits.demo-tool-denied]
+# ToolDenied: generous limits give the agent enough runway to diagnose the bug
+# and attempt write_file to apply the fix. write_file is absent from [tools] allowed
+# so ToolDenied fires before any file is written.
+# timeout=60000 matches [limits.debugger] so the full patch cycle can complete.
+steps   = 30
+cost    = 200
+timeout = 60000
 
 [tools]
 # file_reader and ripgrep are permitted.

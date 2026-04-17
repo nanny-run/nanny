@@ -4,20 +4,25 @@ from normalizer import RecordNormalizer
 
 
 class Pipeline:
-    def __init__(self):
+    _SCHEMA = {
+        "email": "contact_email",
+        "name": "full_name",
+        "account": "account_id",
+        # new auth service fields added in v2.3 migration
+        "session": "session_token",
+    }
+
+    def __init__(self, strict: bool = True):
         self.normalizer = RecordNormalizer(
-            key_map={
-                "email": "contact_email",
-                "name": "full_name",
-                "account": "account_id",
-                # BUG: "user_id" is missing from key_map.
-                # Requests from the new auth service include "user_id"
-                # but the normalizer was written before that field existed.
-            }
+            key_map=self._SCHEMA,
+            strict=strict,
         )
+        self._processed = 0
 
     def process(self, request: dict) -> dict:
-        return self._run_stage(request)
+        body = request.get("body", request)
+        return self._run_stage(body)
 
     def _run_stage(self, data: dict) -> dict:
+        self._processed += 1
         return self.normalizer.apply(data)

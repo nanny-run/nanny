@@ -13,7 +13,7 @@
     "dark": "/logo/dark.svg"
   },
   "appearance": {
-    "default": "dark"
+    "default": "light"
   },
   "fonts": {
     "family": "Reddit Mono"
