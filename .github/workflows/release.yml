@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version tag to homebrew tap publish (e.g. v0.1.2). Only used by the homebrew-tap-publish job."
+        description: "Version tag for manual publish re-run (e.g. v0.1.4). Runs homebrew-tap-publish, publish-crates, and publish-pypi independently of the build/release jobs."
         required: false
         default: ""
 
@@ -219,3 +219,47 @@ jobs:
           echo "Waiting 45s for crates.io index to propagate..."
           sleep 45
           publish nannyd
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [release]
+    # On tag push: runs after release succeeds, skips rc tags.
+    # On workflow_dispatch: always() lets this run independently; requires version input.
+    if: >-
+      always() && (
+        (github.event_name == 'push' && needs.release.result == 'success' && !contains(github.ref_name, '-rc')) ||
+        (github.event_name == 'workflow_dispatch' && inputs.version != '')
+      )
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write   # required for OIDC trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.11"
+
+      - name: Verify version matches tag
+        if: github.event_name == 'push'
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          SDK_VERSION=$(grep '^version' sdks/python/pyproject.toml | head -1 | sed 's/.*= *"\(.*\)"/\1/')
+          echo "Tag version: $TAG_VERSION"
+          echo "SDK version: $SDK_VERSION"
+          if [ "$TAG_VERSION" != "$SDK_VERSION" ]; then
+            echo "ERROR: tag v${TAG_VERSION} does not match pyproject.toml version ${SDK_VERSION}." >&2
+            echo "Bump the SDK version before tagging." >&2
+            exit 1
+          fi
+
+      - name: Build
+        run: uv build
+        working-directory: sdks/python
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: sdks/python/dist/

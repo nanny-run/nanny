@@ -59,7 +59,7 @@ This message is separate from the structured event log, which goes to stdout (or
 
 ## Event log
 
-Every run emits [NDJSON events](/concepts/event-log) to stdout. `ExecutionStarted` is always first; `ExecutionStopped` is always last:
+Every run emits [NDJSON events](/v0.1/concepts/event-log) to stdout. `ExecutionStarted` is always first; `ExecutionStopped` is always last:
 
 ```json
 {"event":"ExecutionStarted","ts":1711234567000,"limits":{"steps":100,"cost":1000,"timeout":30000},"limits_set":"[limits]","command":"python agent.py"}
@@ -82,4 +82,4 @@ nanny run > nanny.log
 - It does not interpret what your agent is doing. It only counts and times.
 - Timeout enforcement works with any binary in any language. Per-function cost metering and custom rules require SDK annotations.
 
-For per-function governance (marking individual tools and rules in code), see the [Rust SDK guide](/guides/rust-sdk).
+For per-function governance (marking individual tools and rules in code), see the [Rust SDK guide](/v0.1/guides/rust-sdk) or [Python SDK guide](/v0.1/guides/python-sdk).

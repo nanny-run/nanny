@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] — 2026-04-13
+
+### Added
+
+- **Python SDK** (`pip install nanny-sdk`) — brings the same `@tool`, `@rule`, and `@agent`
+  governance model to Python agents as decorators. Works with any Python agent framework —
+  LangChain, CrewAI, plain Python. All decorators are no-ops outside `nanny run`; zero
+  overhead in development and CI. Requires Python 3.11+.
+- **`dev_assist` example** — LangChain debug agent governed by Nanny. Given a stack trace,
+  reads the relevant source files and searches for related symbols using ripgrep. Demonstrates
+  `@tool(cost=N)`, `@rule("no_read_loop")`, and `@agent("debugger")` with both ReAct and
+  Plan-and-Execute modes (`uv run dev debug --trace <file> --mode react|plan`).
+- **`metrics_crew` example** — CrewAI four-agent incident analysis pipeline governed by
+  Nanny. Ingestion, analysis, visualization, and reporter agents work in sequence on a server
+  metrics CSV. Demonstrates per-role limits (`[limits.ingestion]`, `[limits.analysis]`,
+  `[limits.visualization]`, `[limits.reporter]`), per-role tool allowlists enforced via
+  `ToolDenied`, `@rule("no_analysis_loop")`, and Plotly HTML chart output.
+- **CI for Python SDK** — `ci-python.yml` runs `pytest`, `ruff`, and `mypy` on Ubuntu and
+  macOS across Python 3.11 and 3.13 on every push or PR touching `sdks/python/**`.
+- **PyPI publish** — `publish-pypi` job in `release.yml` uses OIDC trusted publishing (no
+  stored API token). Re-runnable independently via `workflow_dispatch` with a `version` input,
+  matching the existing pattern for `publish-crates` and `homebrew-tap-publish`.
+
 ## [0.1.3] — 2026-04-04
 
 ### Added
@@ -116,6 +139,7 @@ First public release of Nanny — an execution boundary for autonomous AI agents
   SHA256 checksums for each binary are computed and pushed to the homebrew tap automatically
   on every tagged release.
 
+[0.1.4]: https://github.com/nanny-run/nanny/releases/tag/v0.1.4
 [0.1.3]: https://github.com/nanny-run/nanny/releases/tag/v0.1.3
 [0.1.2]: https://github.com/nanny-run/nanny/releases/tag/v0.1.2
 [0.1.1]: https://github.com/nanny-run/nanny/releases/tag/v0.1.1

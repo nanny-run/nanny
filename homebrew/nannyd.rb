@@ -13,7 +13,7 @@
 class Nannyd < Formula
   desc "Execution boundary for autonomous AI agents"
   homepage "https://nanny.run"
-  version "0.1.3"
+  version "0.1.4"
   license "Apache-2.0"
 
   on_macos do

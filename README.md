@@ -14,12 +14,10 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="Apache 2.0" /></a>
   <a href="https://crates.io/crates/nannyd"><img src="https://img.shields.io/crates/v/nannyd?logo=rust&label=crates.io" alt="crates.io" /></a>
-  <!-- PyPI badge enabled when nanny-sdk ships (v0.1.4) -->
-  <!-- <a href="https://pypi.org/project/nanny-sdk/"><img src="https://img.shields.io/pypi/v/nanny-sdk?logo=python&label=pypi" alt="PyPI" /></a> -->
+  <a href="https://pypi.org/project/nanny-sdk/"><img src="https://img.shields.io/pypi/v/nanny-sdk?logo=python&label=pypi" alt="PyPI" /></a>
   <a href="https://github.com/nanny-run/nanny/releases"><img src="https://img.shields.io/github/v/release/nanny-run/nanny?logo=github&label=release" alt="GitHub Release" /></a>
-  <!-- <a href="https://github.com/nanny-run/nanny/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/nanny-run/nanny/ci.yml?logo=github&label=CI" alt="CI" /></a> -->
+  <a href="https://github.com/nanny-run/nanny/actions/workflows/ci-rust.yml"><img src="https://img.shields.io/github/actions/workflow/status/nanny-run/nanny/ci-rust.yml?logo=github&label=CI" alt="CI" /></a>
   <a href="https://github.com/nanny-run/nanny/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs Welcome" /></a>
-  <!-- <a href="https://x.com/nanny_run"><img src="https://img.shields.io/twitter/follow/nanny_run?logo=x&color=%23000000" alt="X" /></a> -->
 </p>
 
 <p align="center">
@@ -73,12 +71,12 @@ flowchart TD
 
 ## The Nanny ecosystem
 
-| Layer                      | What it does                                                                      |
-| -------------------------- | --------------------------------------------------------------------------------- |
-| **Nanny CLI**              | Hard timeout, step, and cost limits for any agent process in any language.        |
-| **Rust SDK**               | Per-function cost metering, allowlist enforcement, and custom rules — in-process. |
-| **Python SDK** _(v0.1.4)_  | The same `@tool`, `@rule`, `@agent` model as Python decorators.                   |
-| **Nanny Cloud** _(v0.1.6)_ | Durable audit logs, team dashboards, org-level budget aggregation.                |
+| Layer | What it does |
+| ----- | ------------ |
+| **Nanny CLI** | Hard timeout, step, and cost limits for any agent process in any language. |
+| **Rust SDK** | Per-function cost metering, allowlist enforcement, and custom rules — in-process. |
+| **Python SDK** | The same `@tool`, `@rule`, `@agent` model as Python decorators. |
+| **Nanny Cloud** _(v0.1.6)_ | Durable audit logs, team dashboards, org-level budget aggregation. |
 
 → Full docs at [docs.nanny.run](https://docs.nanny.run)
 
@@ -86,19 +84,23 @@ flowchart TD
 
 ## Sample applications
 
-Two complete Rust agent samples ship in `examples/rust/`. Both use [Ollama](https://ollama.com) — no API key required.
+Four complete agent samples ship in `examples/`. All use [Ollama](https://ollama.com) — no API key required.
 
-| Sample                               | What it does                                                                                             | Stop reasons demonstrated                     |
-| ------------------------------------ | -------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
-| [`webdingo`](examples/rust/webdingo) | Web research agent — fetches pages, synthesises a report. Classic spiral risk.                           | `BudgetExhausted`, `RuleDenied`               |
-| [`qabud`](examples/rust/qabud)       | Code review agent — reads source files, identifies issues, blocks sensitive files before they're opened. | `RuleDenied`, `ToolDenied`, `MaxStepsReached` |
+| Sample | What it does | Stop reasons demonstrated |
+| ------ | ------------ | ------------------------- |
+| [`examples/rust/webdingo`](examples/rust/webdingo) | Web research agent (Rust) — fetches pages, synthesises a report. Classic spiral risk. | `BudgetExhausted`, `RuleDenied` |
+| [`examples/rust/qabud`](examples/rust/qabud) | Code review agent (Rust) — reads source files, identifies issues, blocks sensitive files before they're opened. | `RuleDenied`, `ToolDenied`, `MaxStepsReached` |
+| [`examples/python/dev_assist`](examples/python/dev_assist) | Debug agent (LangChain) — given a stack trace, reads relevant files and searches for related symbols. | `BudgetExhausted`, `RuleDenied`, `ToolDenied` |
+| [`examples/python/metrics_crew`](examples/python/metrics_crew) | Incident pipeline (CrewAI) — four agents analyse server metrics, generate interactive charts, and write an incident report. | `BudgetExhausted`, `RuleDenied`, `ToolDenied` |
 
 ```bash
-# webdingo
+# Rust examples
 cd examples/rust/webdingo && nanny run -- "best Rust HTTP clients"
-
-# qabud
 cd examples/rust/qabud && nanny run -- ./src
+
+# Python examples
+cd examples/python/dev_assist && nanny run
+cd examples/python/metrics_crew && nanny run
 ```
 
 ---
@@ -142,7 +144,7 @@ SDKs are **project dependencies** — add them per project, not globally.
 cargo add nannyd
 ```
 
-**Python** _(v0.1.4 — coming soon)_
+**Python**
 
 ```sh
 pip install nanny-sdk
@@ -217,7 +219,7 @@ fn check_spiral(ctx: &PolicyContext) -> bool {
 /// Limits revert automatically on return, even if the function panics.
 #[nanny::agent("researcher")]
 async fn run_research(topic: &str) {
-    // ... Rig agent loop — search_web governed by nanny ...
+    // ... agent loop — search_web governed by nanny ...
 }
 ```
 
@@ -225,7 +227,49 @@ All macros are no-ops when running outside `nanny run` — no enforcement overhe
 
 ![Nanny demo — named agent scopes (planner → researcher → synthesizer) entering and exiting](assets/demo/webdingo-agent-scopes.gif)
 
-→ Full Rust SDK guide at [docs.nanny.run](https://docs.nanny.run)
+→ Full Rust SDK guide at [docs.nanny.run/guides/rust-sdk](https://docs.nanny.run/guides/rust-sdk)
+
+---
+
+## Python SDK — all three decorators
+
+For Python agents, the same model as the Rust SDK — as decorators:
+
+```python
+from nanny_sdk import tool, rule, agent
+
+@tool(cost=10)
+def search_web(query: str) -> str:
+    import httpx
+    return httpx.get(f"https://en.wikipedia.org/wiki/{query}").text
+
+@rule("no_spiral")
+def check_spiral(ctx) -> bool:
+    h = ctx.tool_call_history
+    return not (len(h) >= 3 and len(set(h[-3:])) == 1)
+
+@agent("researcher")
+def run_research(topic: str) -> list[str]:
+    # Runs under [limits.researcher] from nanny.toml
+    return [search_web(topic)]
+```
+
+Works with any framework — LangChain, CrewAI, plain Python. Stack decorators to combine framework registration with Nanny governance:
+
+```python
+from langchain_core.tools import tool as lc_tool
+from nanny_sdk import tool as nanny_tool
+
+@lc_tool                   # outer — LangChain registers for dispatch
+@nanny_tool(cost=5)        # inner — Nanny intercepts before the function runs
+def read_file(path: str) -> str:
+    with open(path) as f:
+        return f.read()
+```
+
+All decorators are no-ops when running outside `nanny run` — zero overhead in development and CI.
+
+→ Full Python SDK guide at [docs.nanny.run/guides/python-sdk](https://docs.nanny.run/guides/python-sdk)
 
 ---
 
@@ -251,7 +295,7 @@ nanny run | tee nanny.log
 
 ## Documentation
 
-Full reference at **[docs.nanny.run](https://docs.nanny.run)** — quickstart, concepts, CLI reference, `nanny.toml` schema, event log, and Rust SDK guide.
+Full reference at **[docs.nanny.run](https://docs.nanny.run)** — quickstart, concepts, CLI reference, `nanny.toml` schema, event log, Rust SDK guide, and Python SDK guide.
 
 ---
 

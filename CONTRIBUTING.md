@@ -114,7 +114,9 @@ These are permanent constraints, not temporary gaps. They protect the property t
 
 ## Codebase map
 
-All source lives in `crates/`. All six crates are published to crates.io — crates.io requires every dependency in the chain to be published. `nannyd` (`cli`) is the developer-facing crate: the one you `cargo add` or `cargo install`. The others are its published dependencies and are not intended to be used directly.
+The repository has two independent build systems: a Rust workspace under `crates/` and a Python package under `sdks/python/`. They share the same repo and version number but have no toolchain overlap — `cd sdks/python && uv sync && uv run pytest` runs without touching Cargo, and `cargo build --workspace` runs without touching Python.
+
+**Rust crates** — all six are published to crates.io. `nannyd` (`cli`) is the developer-facing crate. The others are its published dependencies and are not intended to be used directly.
 
 | Crate     | crates.io name  | Developer-facing | What it does                                                                                   |
 | --------- | --------------- | ---------------- | ---------------------------------------------------------------------------------------------- |
@@ -127,20 +129,30 @@ All source lives in `crates/`. All six crates are published to crates.io — cra
 
 **The dependency direction is strict:** `core` has no internal dependencies. Everything else depends on `core`. `core` never imports `runtime`, `bridge`, or `cli`.
 
+**Python SDK** — lives at `sdks/python/`. Published as `nanny-sdk` on PyPI. Toolchain: `uv` (package manager), `hatchling` (build backend), `pytest` + `pytest-httpserver` (tests), `ruff` (lint), `mypy` (type checking). The root `Cargo.toml` workspace does not include `sdks/` — there is no toolchain collision.
+
+| Path | What it is |
+| ---- | ---------- |
+| `sdks/python/nanny_sdk/` | The importable package (`from nanny_sdk import tool, rule, agent`) |
+| `sdks/python/tests/` | Unit tests — all use a `mock_bridge` fixture, no real bridge required |
+| `sdks/python/pyproject.toml` | Package metadata, build config, tool config (`ruff`, `mypy`, `pytest`) |
+
 If you are adding a new enforcement rule, it goes in `runtime`. If you are adding a new event type, it goes in `core/src/events/event.rs`. If you are changing CLI behaviour, it goes in `cli/src/main.rs`.
 
 ---
 
 ## Reference examples
 
-`examples/rust/` contains two complete Rust agents that exercise the full SDK:
+`examples/` contains complete agents that exercise the full SDK — two Rust and two Python:
 
-| Example                                            | What it demonstrates                                                           |
-| -------------------------------------------------- | ------------------------------------------------------------------------------ |
-| [`examples/rust/webdingo`](examples/rust/webdingo) | `#[nanny::tool]`, `#[nanny::agent]`, `nanny::http_get`, loop-detection rule    |
-| [`examples/rust/qabud`](examples/rust/qabud)       | `#[nanny::tool]`, content-based rule (`last_tool_args`), allowlist enforcement |
+| Example | What it demonstrates |
+| ------- | -------------------- |
+| [`examples/rust/webdingo`](examples/rust/webdingo) | `#[nanny::tool]`, `#[nanny::agent]`, `nanny::http_get`, loop-detection rule |
+| [`examples/rust/qabud`](examples/rust/qabud) | `#[nanny::tool]`, content-based rule (`last_tool_args`), allowlist enforcement |
+| [`examples/python/dev_assist`](examples/python/dev_assist) | `@tool`, `@rule`, `@agent` — LangChain debug agent, ReAct + Plan-and-Execute modes |
+| [`examples/python/metrics_crew`](examples/python/metrics_crew) | `@tool`, `@rule`, `@agent` — CrewAI multi-agent pipeline, per-role limits |
 
-Both use Ollama (local LLM) and depend on the published `nannyd = "0.1.3"` from crates.io. They are the best starting point for understanding how the pieces fit together before touching the crate internals.
+Rust examples use Ollama (local LLM) and depend on the published `nannyd` from crates.io. Python examples use Ollama and depend on the published `nanny-sdk` from PyPI. All four are the best starting point for understanding how the pieces fit together before touching the crate or SDK internals.
 
 ---
 
@@ -263,17 +275,20 @@ Every item below is a release participant. Missing any one of them produces a br
 | #   | What                          | How                                                                                                                                                                                             |
 | --- | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1   | **Workspace version**         | Bump `version` in `[workspace.package]` and all `version = "x.y.z"` entries in `[workspace.dependencies]` inside the root `Cargo.toml`. Run `cargo check --workspace` to confirm.               |
-| 2   | **Example app versions**      | Bump `version` in `examples/rust/qabud/Cargo.toml` and `examples/rust/webdingo/Cargo.toml` to match.                                                                                            |
+| 2   | **Example app versions**      | Bump `nannyd = "x.y.z"` in `examples/rust/qabud/Cargo.toml` and `examples/rust/webdingo/Cargo.toml` to match. Do this after publish — the new version must exist on crates.io first.            |
 | 3   | **Homebrew formula template** | Bump `version "x.y.z"` in `homebrew/nannyd.rb`. CI substitutes the SHA256s automatically; the version line must match so the template stays readable.                                           |
-| 4   | **`CHANGELOG.md` entry**      | Add `## [x.y.z] — YYYY-MM-DD` with `### Added` / `### Fixed` sections. The release workflow reads this file and uses it as the GitHub Release body. A missing entry means blank release notes.  |
-| 5   | **Tests pass**                | `cargo test --workspace` must be green on both Linux and macOS.                                                                                                                                 |
-| 6   | **Clippy clean**              | `cargo clippy --workspace -- -D warnings` must produce no errors.                                                                                                                               |
-| 7   | **Tag matches Cargo.toml**    | The `publish-crates` CI job validates this automatically and fails loudly — but verify locally first: the tag you push (e.g. `v0.1.3`) must equal `[workspace.package] version` (e.g. `0.1.3`). |
+| 4   | **Python SDK version**        | `version` in `sdks/python/pyproject.toml` must match the tag. The `publish-pypi` CI job validates this and fails loudly if they diverge.                                                        |
+| 5   | **`CHANGELOG.md` entry**      | Add `## [x.y.z] — YYYY-MM-DD` with `### Added` / `### Fixed` sections. The release workflow reads this file and uses it as the GitHub Release body. A missing entry means blank release notes.  |
+| 6   | **Rust tests pass**           | `cargo test --workspace` must be green on both Linux and macOS.                                                                                                                                 |
+| 7   | **Clippy clean**              | `cargo clippy --workspace -- -D warnings` must produce no errors.                                                                                                                               |
+| 8   | **Python SDK tests pass**     | `cd sdks/python && uv run pytest -q` must be green. `uv run mypy nanny_sdk` and `uv run ruff check .` must be clean.                                                                            |
+| 9   | **Tag matches Cargo.toml**    | The `publish-crates` CI job validates this automatically and fails loudly — but verify locally first: the tag you push (e.g. `v0.1.4`) must equal `[workspace.package] version` (e.g. `0.1.4`). |
 
 **What CI handles automatically (do not do manually):**
 
 - SHA256 computation and Homebrew tap update
 - `cargo publish` for all six crates in dependency order
+- Python SDK wheel built and published to PyPI via OIDC trusted publishing
 - GitHub Release artifact upload and release notes body
 
 ---
