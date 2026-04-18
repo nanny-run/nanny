@@ -139,15 +139,14 @@ def block_sensitive(ctx) -> bool:
 
 ## `@agent` — activate named limits for a scope
 
-Mark a function to run under a named limit set from `nanny.toml`.
-When the function is entered, Nanny switches to those limits; when it exits, limits revert:
+In a multi-agent system, each agent has a different role and a different risk profile. The analysis agent makes expensive API calls and deserves a tight cost ceiling. The reporter just writes a file and barely needs a budget at all. `@agent` activates the right named limit set when each role runs, then reverts automatically when it's done.
 
 ```python
 from nanny_sdk import agent
 
 @agent("researcher")
 def run_research(topic: str) -> list[str]:
-    # This runs under [limits.researcher] from nanny.toml
+    # Runs under [limits.researcher] from nanny.toml
     pages = [fetch_page(f"https://en.wikipedia.org/wiki/{topic}")]
     return pages
 ```
@@ -247,6 +246,88 @@ python agent.py
 
 ---
 
+## Multi-agent pattern
+
+The canonical use case: a pipeline where each agent has a specific role, a specific budget, and access to only the tools it needs. This is the `metrics_crew` pattern — four specialized agents, each governed independently.
+
+```python
+from nanny_sdk import tool, rule, agent
+from collections import deque
+
+# Each tool declares its cost. The decorator fires on every call
+# regardless of which agent invoked it.
+@tool(cost=10)
+def compute_stats(metric: str, path: str) -> dict: ...
+
+@tool(cost=10)
+def detect_anomalies(metric: str, path: str) -> list: ...
+
+@tool(cost=5)
+def write_report(content: str, output_path: str) -> str: ...
+
+# A rule that prevents the analysis agent from looping on the same computation.
+_recent: deque[str] = deque(maxlen=5)
+
+@rule("no_analysis_loop")
+def check_loop(ctx) -> bool:
+    tool = ctx.requested_tool or ""
+    _recent.append(tool)
+    return not (len(_recent) == 5 and all(t == "compute_stats" for t in _recent))
+
+# Each agent activates its own limit scope.
+@agent("analysis")
+def run_analysis(path: str):
+    # Governed by [limits.analysis]: steps=60, cost=200, timeout=60000
+    # Tool allowlist: ["compute_stats", "detect_anomalies"] only
+    # write_report() here would raise ToolDenied immediately
+    stats = compute_stats("cpu_usage", path)
+    anomalies = detect_anomalies("cpu_usage", path)
+    return anomalies
+
+@agent("reporter")
+def run_reporter(findings: list, output_dir: str):
+    # Governed by [limits.reporter]: steps=20, cost=50, timeout=30000
+    # Tool allowlist: ["write_report"] only
+    # compute_stats() here would raise ToolDenied immediately
+    return write_report(str(findings), f"{output_dir}/report.md")
+```
+
+```toml
+# nanny.toml
+[limits]
+steps   = 200
+cost    = 500
+timeout = 120000
+
+[limits.analysis]
+steps   = 60
+cost    = 200
+timeout = 60000
+
+[limits.reporter]
+steps   = 20
+cost    = 50
+timeout = 30000
+
+[tools]
+allowed = ["compute_stats", "detect_anomalies", "write_report"]
+```
+
+The key properties this gives you:
+
+- **Per-role budget:** hitting the analysis budget doesn't kill the reporter
+- **Least-privilege tool access:** each agent only receives the tools it needs; calling outside its role raises `ToolDenied` immediately
+- **Loop detection:** the `@rule` fires client-side before the bridge is contacted — the denied tool never runs and no cost is charged
+- **Full audit trail:** every tool call, every limit activation, every stop reason logged to NDJSON
+
+<Note>
+  **Scope:** All agents in this pattern run within a single Python process. This covers CrewAI, LangGraph, AutoGen, and any framework that orchestrates agents in a single runtime. Cross-process fleet enforcement is coming in v0.1.6.
+</Note>
+
+See [`examples/python/metrics_crew`](https://github.com/nanny-run/nanny/tree/main/examples/python/metrics_crew) for the complete working implementation of this pattern with four agents, Plotly chart generation, and a full incident report output.
+
+---
+
 ## Framework integration
 
 ### LangChain
@@ -283,4 +364,4 @@ def generate_chart(metric: str, output_dir: str) -> str:
     return output_path
 ```
 
-See [`examples/python/dev_assist`](https://github.com/nanny-run/nanny/tree/next/examples/python/dev_assist) for a complete LangChain integration and [`examples/python/metrics_crew`](https://github.com/nanny-run/nanny/tree/next/examples/python/metrics_crew) for a complete CrewAI integration.
+See [`examples/python/dev_assist`](https://github.com/nanny-run/nanny/tree/main/examples/python/dev_assist) for a complete LangChain integration and [`examples/python/metrics_crew`](https://github.com/nanny-run/nanny/tree/main/examples/python/metrics_crew) for the canonical multi-agent governance example with four specialized agents, per-role limits, and per-role tool allowlists.

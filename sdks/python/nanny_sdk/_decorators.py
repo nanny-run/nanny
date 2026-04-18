@@ -53,10 +53,20 @@ def tool(*, cost: int = 0) -> Callable[[F], F]:
         def _check_rules(str_args: dict[str, str]) -> None:
             """Evaluate all registered rules in registration order.
 
+            Fetches live counters from ``GET /status`` first so rules have
+            access to ``step_count``, ``tool_call_history``, etc. Falls back
+            to a zeroed ``PolicyContext`` if the status call fails — rules that
+            only use ``requested_tool`` / ``last_tool_args`` are unaffected.
+
             Raises ``RuleDenied`` on the first rule that returns ``False``.
-            The bridge is never contacted if a rule denies.
+            ``/tool/call`` is never reached if a rule denies.
             """
-            ctx = PolicyContext(last_tool_args=str_args, requested_tool=tool_name)
+            try:
+                ctx = _client.get_status()
+            except Exception:
+                ctx = PolicyContext()
+            ctx.last_tool_args = str_args
+            ctx.requested_tool = tool_name
             for rule_name, rule_fn in _RULES.items():
                 if not rule_fn(ctx):
                     _client.report_stop("RuleDenied")

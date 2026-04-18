@@ -4,6 +4,24 @@ Imagine a hospital emergency room. When a patient comes in, a team of specialist
 
 `metrics_crew` is a CrewAI pipeline that investigates a production incident from a server metrics CSV. Four agents work in sequence. Nanny plays the role of hospital administration: each specialist gets their own spending limit and their own tool access. When any limit is hit, the case closes immediately.
 
+This is the canonical example of least-privilege multi-agent governance with Nanny.
+
+---
+
+## The governance story
+
+In most multi-agent systems, governance is an afterthought. You get a global timeout and hope for the best. There's no per-role budget, no per-role tool access, no audit trail of which agent made which call.
+
+`metrics_crew` shows what proper multi-agent governance looks like:
+
+- **The analysis agent cannot call `write_report`.** If it tries — because the model hallucinated a tool call, or because you wired something wrong — `ToolDenied` fires immediately. The file is never written. The cost is never charged.
+- **The reporter agent cannot call `compute_stats`.** Same story. Wrong tool for the role, instant stop.
+- **If the analysis agent runs `compute_stats` five times in a row on the same metric**, the `no_analysis_loop` rule fires before the sixth call executes. The agent was stuck. Nanny stopped it. You get a log entry showing exactly why.
+- **Each agent has its own cost ceiling.** Hitting the analysis budget does not kill the reporter. The pipeline continues with the agents that haven't exhausted their limits.
+- **Every call is in the audit log.** Every `ToolAllowed`, every `StepCompleted`, every `ExecutionStopped` — structured NDJSON on stdout from the moment the process starts to the moment it ends.
+
+This is 200 lines of Python showing the full pattern. Read the source in `metrics_crew/crew.py`, `metrics_crew/agents/`, and `metrics_crew/tools/`.
+
 ---
 
 ## What it does

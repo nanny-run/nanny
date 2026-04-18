@@ -32,13 +32,17 @@
 
 ## What is Nanny?
 
-Agents spend money. They call tools in loops. They run forever. They go over budget.
+You deploy a multi-agent system on Friday. Monday morning your CFO sends a Slack: "Why did we spend $4,000 over the weekend?" One agent got stuck in a loop. Nobody stopped it. No audit trail. Nothing.
 
-Nanny is the thing that stops them.
+This is happening right now at hundreds of companies.
 
-You tell nanny "this agent is allowed 100 steps, 1000 cost units, and 30 seconds." The moment any limit is crossed, nanny kills the process immediately, emits a structured event log saying exactly why it stopped, and exits. No grace period. No recovery logic. No second chances.
+Nanny is the execution boundary that prevents it.
 
-Think of it as a **hard execution boundary** — deterministic, auditable, and structurally impossible for the agent to bypass.
+You tell Nanny what each agent is allowed to do — how many steps, how much budget, which tools, how long. The moment any limit is crossed, Nanny kills the process immediately, emits a structured log saying exactly what happened and why, and exits. No grace period. No recovery logic. No second chances.
+
+When you have multiple specialized agents — a researcher, an analyst, a reporter — Nanny gives each one its own budget, its own tool allowlist, and its own kill switch. The analysis agent cannot call the reporter's tools. A loop-detection rule stops any agent from running the same computation five times in a row. The moment any agent steps outside its role or hits its ceiling, it stops. You get a full audit trail of every call, every decision, and every stop reason.
+
+Think of it as a **hard execution boundary** — deterministic, auditable, and structurally impossible for any agent to bypass.
 
 ```mermaid
 flowchart TD
@@ -71,12 +75,12 @@ flowchart TD
 
 ## The Nanny ecosystem
 
-| Layer                      | What it does                                                                      |
-| -------------------------- | --------------------------------------------------------------------------------- |
-| **Nanny CLI**              | Hard timeout, step, and cost limits for any agent process in any language.        |
-| **Rust SDK**               | Per-function cost metering, allowlist enforcement, and custom rules — in-process. |
-| **Python SDK**             | The same `@tool`, `@rule`, `@agent` model as Python decorators.                   |
-| **Nanny Cloud** _(v0.1.6)_ | Durable audit logs, team dashboards, org-level budget aggregation.                |
+| Layer                      | What it does                                                                                                            |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| **Nanny CLI**              | Hard timeout, step, and cost limits for any agent process in any language.                                              |
+| **Rust SDK**               | Per-function cost metering, allowlist enforcement, and custom rules — in-process.                                       |
+| **Python SDK**             | Per-function and per-role governance for Python agents — each agent in your fleet gets its own budget, tool allowlist, and custom rules. |
+| **Nanny Cloud** _(v0.1.6)_ | Durable audit logs, team dashboards, org-level budget aggregation, and cross-process fleet enforcement.                 |
 
 → Full docs at [docs.nanny.run](https://docs.nanny.run)
 
@@ -91,7 +95,7 @@ Four complete agent samples ship in `examples/`. All use [Ollama](https://ollama
 | [`examples/rust/webdingo`](examples/rust/webdingo)             | Web research agent (Rust) — fetches pages, synthesises a report. Classic spiral risk.                                       | `BudgetExhausted`, `RuleDenied`               |
 | [`examples/rust/qabud`](examples/rust/qabud)                   | Code review agent (Rust) — reads source files, identifies issues, blocks sensitive files before they're opened.             | `RuleDenied`, `ToolDenied`, `MaxStepsReached` |
 | [`examples/python/dev_assist`](examples/python/dev_assist)     | Debug agent (LangChain) — given a stack trace, reads relevant files and searches for related symbols.                       | `BudgetExhausted`, `RuleDenied`, `ToolDenied` |
-| [`examples/python/metrics_crew`](examples/python/metrics_crew) | Incident pipeline (CrewAI) — four agents analyse server metrics, generate interactive charts, and write an incident report. | `BudgetExhausted`, `RuleDenied`, `ToolDenied` |
+| [`examples/python/metrics_crew`](examples/python/metrics_crew) | Multi-agent governance (CrewAI) — four specialized agents with per-role budgets, per-role tool allowlists, and a loop-detection rule. The analysis agent cannot call the reporter's tools. If it tries, `ToolDenied` fires. This is what least-privilege fleet governance looks like in 200 lines of Python. | `BudgetExhausted`, `RuleDenied`, `ToolDenied` |
 
 ```bash
 # Rust examples
@@ -102,6 +106,8 @@ cd examples/rust/qabud && nanny run -- ./src
 cd examples/python/dev_assist && nanny run
 cd examples/python/metrics_crew && nanny run
 ```
+
+> **Scope:** Nanny governs agents within a single process today. When all agents run in the same process — as in CrewAI, LangGraph, AutoGen, or any framework that orchestrates agents within one Python or Rust runtime — every agent is governed. Cross-process and cross-machine fleet enforcement is the [v0.1.6 cloud layer](#the-nanny-ecosystem).
 
 ---
 

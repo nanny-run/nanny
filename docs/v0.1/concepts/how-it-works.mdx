@@ -38,6 +38,48 @@ flowchart TD
 
 The moment any limit is crossed, Nanny kills the child process immediately — the process cannot catch, delay, or prevent the stop. An `ExecutionStopped` event is emitted with the reason, and Nanny exits with a non-zero status code.
 
+## Multi-agent governance
+
+When multiple agents run in the same process — as in CrewAI, LangGraph, AutoGen, or any framework that orchestrates agents within a single Python or Rust runtime — the enforcement model above applies to all of them simultaneously. A single `nanny run` governs the entire fleet.
+
+```mermaid
+flowchart TD
+    CMD(["$ nanny run"])
+    CMD --> NANNY
+
+    subgraph NANNY["Nanny — parent process"]
+        direction TB
+
+        subgraph CHILD["Child process — crew.kickoff()"]
+            direction LR
+            A1["@agent('ingestion')"]
+            A2["@agent('analysis')"]
+            A3["@agent('visualization')"]
+            A4["@agent('reporter')"]
+        end
+
+        subgraph ENFORCE[" "]
+            direction TB
+            STEPS["steps"]
+            COST["cost"]
+            ALLOW["allowlist"]
+            RULES["rules"]
+        end
+
+        A1 & A2 & A3 & A4 -- "tool call" --> ENFORCE
+        ENFORCE -- "✓  allowed" --> A1 & A2 & A3 & A4
+    end
+
+    ENFORCE -- "✗  limit reached → killed" --> DEAD(["process exits"])
+    DEAD --> LOG["ExecutionStopped\nreason · agent · tool · cost_spent\n→ stdout"]
+```
+
+Each agent activates its own named limit set via `@agent("role")`. Tool calls from any agent flow through the same enforcement bridge. Each agent's budget is tracked independently — hitting the analysis budget does not kill the reporter.
+
+**Scope:** All agents in the diagram run within one process. This covers any framework that orchestrates agents in a single runtime. Cross-process and cross-machine fleet enforcement is the [v0.1.6 cloud layer](https://nanny.run).
+
+---
+
 ## What Nanny enforces
 
 All three limits are enforced on every run:

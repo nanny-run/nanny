@@ -25,6 +25,7 @@ from typing import Any
 
 import httpx
 
+from nanny_sdk._context import PolicyContext
 from nanny_sdk.exceptions import (
     AgentCompleted,
     AgentNotFound,
@@ -131,6 +132,22 @@ def health() -> bool:
     resp.raise_for_status()
     data: dict[str, str] = resp.json()
     return data.get("state") == "running"
+
+
+def get_status() -> PolicyContext:
+    """GET /status — returns live execution counters as a ``PolicyContext``.
+
+    ``requested_tool`` and ``last_tool_args`` are not populated from ``/status``;
+    the ``@tool`` decorator sets them on the returned context before passing it
+    to rules.
+
+    The bridge response uses short wire names (``step``, ``cost_spent``) which
+    ``PolicyContext.from_dict()`` maps to Python field names automatically.
+    """
+    with _make_client(timeout=5.0) as c:
+        resp = c.get("/status", headers=_headers())
+    resp.raise_for_status()
+    return PolicyContext.from_dict(resp.json())
 
 
 def call_tool(tool_name: str, cost: int, args: dict[str, Any]) -> None:
