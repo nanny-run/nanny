@@ -15,7 +15,7 @@ from typing import Any, TypeVar
 
 from nanny_sdk import _client
 from nanny_sdk._context import PolicyContext
-from nanny_sdk.exceptions import RuleDenied
+from nanny_sdk.exceptions import BridgeUnavailable, RuleDenied
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -54,9 +54,12 @@ def tool(*, cost: int = 0) -> Callable[[F], F]:
             """Evaluate all registered rules in registration order.
 
             Fetches live counters from ``GET /status`` first so rules have
-            access to ``step_count``, ``tool_call_history``, etc. Falls back
-            to a zeroed ``PolicyContext`` if the status call fails — rules that
-            only use ``requested_tool`` / ``last_tool_args`` are unaffected.
+            access to ``step_count``, ``tool_call_history``, etc.
+
+            If the bridge is unreachable, raises ``BridgeUnavailable`` —
+            silently continuing with zeroed counters would let the agent run
+            ungoverned, violating the manifesto guarantee that Nanny fails
+            closed.
 
             Raises ``RuleDenied`` on the first rule that returns ``False``.
             ``/tool/call`` is never reached if a rule denies.
@@ -64,7 +67,8 @@ def tool(*, cost: int = 0) -> Callable[[F], F]:
             try:
                 ctx = _client.get_status()
             except Exception:
-                ctx = PolicyContext()
+                _client.report_stop("BridgeUnavailable")
+                raise BridgeUnavailable()
             ctx.last_tool_args = str_args
             ctx.requested_tool = tool_name
             for rule_name, rule_fn in _RULES.items():

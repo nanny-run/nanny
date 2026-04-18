@@ -29,6 +29,7 @@ from nanny_sdk._context import PolicyContext
 from nanny_sdk.exceptions import (
     AgentCompleted,
     AgentNotFound,
+    BridgeUnavailable,
     BudgetExhausted,
     MaxStepsReached,
     RuleDenied,

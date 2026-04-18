@@ -3,12 +3,6 @@
 Governance:
     @rule("no_analysis_loop")   — fires after 5 consecutive compute_stats calls
     @nanny_agent("analysis")    — activates [limits.analysis] scope for the run
-
-Framework propagation note:
-    NannyStop extends BaseException (not Exception), so it propagates through
-    CrewAI's broad ``except Exception`` handlers naturally — no patching needed.
-    The monkey-patching block below is preserved as a reference for the history
-    of why this works, and for any framework that catches BaseException explicitly.
 """
 
 from __future__ import annotations
@@ -34,40 +28,6 @@ from metrics_crew.agents import (
     viz_task,
 )
 from metrics_crew.config import DEFAULT_OUTPUT_DIR
-
-# ── NannyStop propagation patches (reference only — no longer needed) ──────────
-# NannyStop(BaseException) propagates through CrewAI's except Exception handlers
-# without any patching. Kept here to document the prior approach and as a
-# template if a future framework is found to catch BaseException explicitly.
-#
-# from crewai.tools.base_tool import BaseTool, Tool
-# from crewai.tools.structured_tool import CrewStructuredTool
-#
-# class _NannySignal(BaseException):
-#     """BaseException carrier — bypasses crewai's ``except Exception`` handlers."""
-#     def __init__(self, stop: NannyStop) -> None:
-#         super().__init__(str(stop))
-#         self.stop = stop
-#
-# # Patch 1: BaseTool.run — used by experimental/agent_executor.py (crewai 1.14+)
-# _orig_base_tool_run = BaseTool.run
-# def _nanny_aware_run(self: BaseTool, *args: Any, **kwargs: Any) -> Any:
-#     try:
-#         return _orig_base_tool_run(self, *args, **kwargs)
-#     except NannyStop as exc:
-#         raise _NannySignal(exc) from None
-# BaseTool.run = _nanny_aware_run  # type: ignore[method-assign]
-# Tool.run = _nanny_aware_run      # type: ignore[method-assign]
-#
-# # Patch 2: CrewStructuredTool.invoke — used by the legacy tool_usage.py path
-# _orig_crew_invoke = CrewStructuredTool.invoke
-# def _nanny_aware_invoke(self, input, config=None, **kwargs):
-#     try:
-#         return _orig_crew_invoke(self, input, config=config, **kwargs)
-#     except NannyStop as exc:
-#         raise _NannySignal(exc) from None
-# CrewStructuredTool.invoke = _nanny_aware_invoke  # type: ignore[method-assign]
-# ──────────────────────────────────────────────────────────────────────────────
 
 # ── Rule ──────────────────────────────────────────────────────────────────────
 
