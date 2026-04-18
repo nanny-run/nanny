@@ -7,8 +7,13 @@ Names match exactly — no prefix, no divergence.
 """
 
 
-class NannyStop(Exception):
-    """Base class for all Nanny stop signals."""
+class NannyStop(BaseException):
+    """Base class for all Nanny stop signals.
+
+    Extends BaseException (not Exception) so stop signals propagate through
+    broad ``except Exception`` handlers in agent frameworks (CrewAI, LangChain
+    AgentExecutor, etc.) without being silently swallowed.
+    """
 
 
 class MaxStepsReached(NannyStop):

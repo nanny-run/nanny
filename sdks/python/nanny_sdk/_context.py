@@ -22,11 +22,20 @@ class PolicyContext:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> PolicyContext:
+        """Parse a bridge response dict into a ``PolicyContext``.
+
+        Handles both the bridge wire format (``step``, ``cost_spent``) and the
+        Python field names (``step_count``, ``cost_units_spent``) — the ``/status``
+        endpoint uses the short wire names; direct dict construction uses the
+        Python names.
+        """
         return cls(
-            step_count=data.get("step_count", 0),
+            # Bridge sends "step"; Python field is "step_count"
+            step_count=data.get("step", data.get("step_count", 0)),
             elapsed_ms=data.get("elapsed_ms", 0),
             requested_tool=data.get("requested_tool"),
-            cost_units_spent=data.get("cost_units_spent", 0),
+            # Bridge sends "cost_spent"; Python field is "cost_units_spent"
+            cost_units_spent=data.get("cost_spent", data.get("cost_units_spent", 0)),
             tool_call_counts=data.get("tool_call_counts", {}),
             tool_call_history=data.get("tool_call_history", []),
             last_tool_args=data.get("last_tool_args", {}),

@@ -63,7 +63,7 @@ def test_all_public_symbols_importable_without_env_vars() -> None:
         AgentNotFound,
     )
     for exc in stop_exceptions:
-        assert issubclass(exc, Exception)
+        assert issubclass(exc, BaseException)
 
 
 # ---------------------------------------------------------------------------

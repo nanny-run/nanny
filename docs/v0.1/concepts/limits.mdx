@@ -40,32 +40,52 @@ cost = 1000
 
 ## Named limit sets
 
-A single `nanny.toml` can hold multiple limit sets for different workloads.
+In a multi-agent system, each agent has a different risk profile. The analysis agent makes expensive API calls — it deserves a tight cost ceiling. The reporter just writes a file — it barely needs a budget at all. Named limit sets let each role get exactly the ceiling it deserves, configured once in `nanny.toml`.
 
 ```toml
 [limits]
-steps   = 50
-cost    = 500
-timeout = 15000
-
-[limits.researcher]
+# Global ceiling — applies to any run not using a named set
 steps   = 200
-cost    = 5000
+cost    = 500
 timeout = 120000
 
-[limits.quick]
-timeout = 5000
+[limits.ingestion]
+steps   = 20
+cost    = 50
+timeout = 30000
+
+[limits.analysis]
+steps   = 60
+cost    = 200    # tighter — this agent makes expensive calls
+timeout = 60000
+
+[limits.visualization]
+steps   = 20
+cost    = 100
+timeout = 30000
+
+[limits.reporter]
+steps   = 20
+cost    = 50     # loose — this agent just writes a file
+timeout = 30000
 ```
 
-Named sets **inherit** from `[limits]` and override only the fields you declare.
-In the example above, `[limits.quick]` inherits `steps = 50` and `cost = 500`
-from the base and only changes `timeout`.
+Named sets **inherit** from `[limits]` and override only the fields you declare. In the example above, `[limits.ingestion]` inherits from the global `[limits]` and overrides all three fields. A set that only declares `timeout` would inherit `steps` and `cost` from the base.
 
-Activate a named set at runtime:
+Each agent activates its own set via the `@agent("role")` decorator:
+
+```python
+@agent("analysis")
+def run_analysis(path: str): ...    # governed by [limits.analysis]
+
+@agent("reporter")
+def run_reporter(output: str): ...  # governed by [limits.reporter]
+```
+
+Or activate a named set from the CLI for the entire run:
 
 ```bash
-nanny run --limits=researcher
-nanny run --limits=quick
+nanny run --limits=analysis
 ```
 
 ## What happens when a limit is hit

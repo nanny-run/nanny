@@ -98,8 +98,12 @@ def test_all_are_nanny_stop_subclasses() -> None:
     assert issubclass(RuleDenied, NannyStop)
 
 
-def test_all_are_exceptions() -> None:
-    assert issubclass(NannyStop, Exception)
+def test_all_are_base_exceptions() -> None:
+    """NannyStop extends BaseException (not Exception) so it propagates through
+    broad ``except Exception`` handlers in agent frameworks without being swallowed.
+    """
+    assert issubclass(NannyStop, BaseException)
+    assert not issubclass(NannyStop, Exception)
 
 
 # ---------------------------------------------------------------------------

@@ -3,15 +3,17 @@ title: Introduction
 description: What Nanny is, what it is not, and when to use it.
 ---
 
-Agents spend money. They call tools in loops. They run forever. They go over budget.
+You deploy a multi-agent system on Friday. Monday morning your CFO sends a Slack: "Why did we spend $4,000 over the weekend?" One agent got stuck in a loop. Nobody stopped it. No audit trail. Nothing.
 
-**Nanny is the thing that stops them.**
+This is happening right now at hundreds of companies.
 
-Nanny is an open-source, deterministic execution boundary for autonomous agents and long-running processes. You tell it how far an agent is allowed to go — in steps, cost units, and wall-clock time — and the moment any limit is crossed, nanny kills the process immediately and emits a structured log saying exactly why.
+**Nanny is the execution boundary that prevents it.**
+
+Nanny is an open-source, deterministic execution boundary for autonomous agents and multi-agent systems. You tell it how far each agent is allowed to go — in steps, cost units, wall-clock time, and which tools it can touch — and the moment any limit is crossed, Nanny kills the process immediately and emits a structured log saying exactly what happened and why.
 
 No grace period. No soft warnings. No recovery logic. No negotiation.
 
-That boundary is deterministic, auditable, and structurally impossible for the agent to bypass.
+That boundary is deterministic, auditable, and structurally impossible for any agent to bypass.
 
 ---
 
@@ -43,11 +45,36 @@ Nanny is for developers and teams running agents in production — or preparing 
 
 It is a good fit if you:
 
+- Are building **multi-agent systems** where different agents have different roles, tool access, and budget ceilings — and you need enforcement that fires per-role, not just globally
 - Are running **autonomous agents** that call external tools, browse the web, or write to APIs
 - Need hard guarantees that an agent **cannot exceed a cost budget or run indefinitely**
 - Want a **structured audit trail** of every tool call and stop reason for every execution
 - Are building with **CrewAI, LangChain, or any Python or Rust agent framework**
 - Want enforcement that is **not tied to any agent framework** — use CrewAI, LangGraph, or any Python or Rust framework without lock-in
+
+---
+
+## The multi-agent scenario
+
+A fintech team builds a system where a manager agent spawns 12 specialists: one checks regulations, one pulls market data, one drafts reports. They deploy on Friday. One agent gets stuck looping on a market data API call over the weekend. The team has no per-role kill switch and no audit trail of which agent made which call.
+
+With Nanny, each specialist has its own named limit set in `nanny.toml`:
+
+```toml
+[limits.analysis]
+steps   = 60
+cost    = 200     # tight — this agent makes expensive calls
+timeout = 60000
+
+[limits.reporter]
+steps   = 20
+cost    = 50      # loose — this agent just writes a file
+timeout = 30000
+```
+
+The analysis agent activates `[limits.analysis]` when it runs. The reporter activates `[limits.reporter]`. Each has its own tool allowlist — the analysis agent cannot call `write_report`, the reporter cannot call `compute_stats`. The moment any agent exceeds its ceiling or reaches for the wrong tool, Nanny stops it. The event log shows exactly which agent, which tool, which limit, and when.
+
+**Scope today:** This works for any multi-agent framework that runs agents within a single process — CrewAI, LangGraph, AutoGen, plain Python. See [`examples/python/metrics_crew`](https://github.com/nanny-run/nanny/tree/main/examples/python/metrics_crew) for the complete working example. Cross-process and cross-machine fleet enforcement is the v0.1.6 cloud layer.
 
 ---
 
@@ -64,7 +91,7 @@ nanny run --limits=researcher    # activates a named limit set
 
 **Rust SDK** — For Rust agents, go deeper. Annotate individual functions with `#[nanny::tool]`, `#[nanny::rule]`, and `#[nanny::agent]` to get per-function cost accounting, allowlist enforcement, and custom rules. See the [Rust SDK guide](/v0.1/guides/rust-sdk).
 
-**Python SDK** — The same model as the Rust SDK, as Python decorators. `@tool`, `@rule`, `@agent`. Works with LangChain, CrewAI, or any Python agent framework. See [Python SDK](/v0.1/guides/python-sdk).
+**Python SDK** — The same model as the Rust SDK, as Python decorators. `@tool`, `@rule`, `@agent`. Each agent in your fleet gets its own budget ceiling, tool allowlist, and custom rules. Works with LangChain, CrewAI, or any Python agent framework. See [Python SDK](/v0.1/guides/python-sdk).
 
 **Nanny Cloud** _(coming soon)_ — Durable audit logs, team dashboards, org-level budget aggregation, and managed enforcement across all your agents. The OSS runtime stays unchanged — Cloud is the observability and coordination layer above it.
 

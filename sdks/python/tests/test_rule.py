@@ -57,8 +57,13 @@ def test_rule_deny_raises_rule_denied(mock_bridge: HTTPServer) -> None:
     assert exc_info.value.rule_name == "no_everything"
 
 
-def test_rule_deny_bridge_never_called(mock_bridge: HTTPServer) -> None:
-    """When a rule denies, the bridge is never contacted."""
+def test_rule_deny_tool_call_never_made(mock_bridge: HTTPServer) -> None:
+    """When a rule denies, /tool/call is never reached.
+
+    /status is contacted to populate PolicyContext (and silently falls back
+    to zeroed counters if the mock returns 500 for it), but /tool/call must
+    never be registered or called.
+    """
 
     @rule("always_deny")
     def always_deny(ctx: PolicyContext) -> bool:
@@ -71,7 +76,8 @@ def test_rule_deny_bridge_never_called(mock_bridge: HTTPServer) -> None:
     with pytest.raises(RuleDenied):
         my_func()
 
-    # mock_bridge has no registered handlers — any unexpected request raises
+    # No /tool/call handler registered — check_assertions() confirms it was
+    # never expected (and therefore never reached).
     mock_bridge.check_assertions()
 
 
@@ -133,6 +139,75 @@ def test_rule_ctx_requested_tool(mock_bridge: HTTPServer) -> None:
 
     search_web("rust http clients")
     assert captured[0].requested_tool == "search_web"
+
+
+def test_rule_ctx_bridge_fields_populated_from_status(mock_bridge: HTTPServer) -> None:
+    """Bridge-tracked fields are populated from GET /status before rules run.
+
+    Uses ``expect_oneshot_request`` so this custom response takes priority over
+    the fixture's permanent zeroed-counter catch-all.
+    """
+    captured: list[PolicyContext] = []
+    mock_bridge.expect_oneshot_request("/status", method="GET").respond_with_json({
+        "state": "running",
+        "step": 7,
+        "cost_spent": 70,
+        "elapsed_ms": 3500,
+        "tool_call_counts": {"file_reader": 7},
+        "tool_call_history": ["file_reader"] * 7,
+    })
+    mock_bridge.expect_request("/tool/call", method="POST").respond_with_json(_allow())
+
+    @rule("capture")
+    def capture(ctx: PolicyContext) -> bool:
+        captured.append(ctx)
+        return True
+
+    @tool(cost=10)
+    def file_reader(path: str) -> str:
+        return ""
+
+    file_reader("src/main.rs")
+    ctx = captured[0]
+    # Bridge-tracked counters come from /status
+    assert ctx.step_count == 7
+    assert ctx.cost_units_spent == 70
+    assert ctx.elapsed_ms == 3500
+    assert ctx.tool_call_counts == {"file_reader": 7}
+    assert ctx.tool_call_history == ["file_reader"] * 7
+    # These are always set by the decorator, not /status
+    assert ctx.requested_tool == "file_reader"
+    assert ctx.last_tool_args == {"path": "src/main.rs"}
+    mock_bridge.check_assertions()
+
+
+def test_rule_ctx_status_failure_falls_back_gracefully(mock_bridge: HTTPServer) -> None:
+    """If GET /status fails, rules still run with zeroed bridge-tracked fields.
+
+    This covers the case where the mock returns 500 for an unregistered /status
+    path, but also any real-world transient bridge error.
+    """
+    # No /status handler — mock returns 500; graceful fallback to PolicyContext()
+    mock_bridge.expect_request("/tool/call", method="POST").respond_with_json(_allow())
+    captured: list[PolicyContext] = []
+
+    @rule("capture")
+    def capture(ctx: PolicyContext) -> bool:
+        captured.append(ctx)
+        return True
+
+    @tool(cost=0)
+    def my_func() -> str:
+        return "ok"
+
+    assert my_func() == "ok"
+    ctx = captured[0]
+    # Zeroed fallback for bridge-tracked fields
+    assert ctx.step_count == 0
+    assert ctx.cost_units_spent == 0
+    assert ctx.tool_call_history == []
+    # Decorator-set fields still populated
+    assert ctx.requested_tool == "my_func"
 
 
 # ---------------------------------------------------------------------------

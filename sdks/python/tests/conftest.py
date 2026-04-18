@@ -43,4 +43,15 @@ def mock_bridge(httpserver: HTTPServer, monkeypatch: pytest.MonkeyPatch) -> HTTP
     # Using expect_request (not expect_oneshot_request) so it handles any number of calls
     # and is NOT checked by check_assertions(), avoiding noise in allow-path tests.
     httpserver.expect_request("/stop", method="POST").respond_with_json({"status": "ok"})
+    # Permanent catch-all for GET /status — the @tool decorator fetches live counters
+    # before running rules. Tests that need specific counter values register a oneshot
+    # handler before calling the tool (oneshot handlers take priority over persistent ones).
+    httpserver.expect_request("/status", method="GET").respond_with_json({
+        "state": "running",
+        "step": 0,
+        "cost_spent": 0,
+        "elapsed_ms": 0,
+        "tool_call_counts": {},
+        "tool_call_history": [],
+    })
     return httpserver
