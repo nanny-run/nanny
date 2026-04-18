@@ -22,14 +22,22 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact: nanny-linux-x86_64
+            archive_ext: tar.gz
 
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact: nanny-macos-x86_64
+            archive_ext: tar.gz
 
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact: nanny-macos-arm64
+            archive_ext: tar.gz
+
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: nanny-windows-x86_64
+            archive_ext: zip
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -49,14 +57,19 @@ jobs:
         run: cargo build --release --bin nanny --target ${{ matrix.target }}
 
       - name: Package artifact
+        shell: bash
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../${{ matrix.artifact }}.tar.gz nanny
+          if [ "${{ matrix.archive_ext }}" = "zip" ]; then
+            7z a "../../../${{ matrix.artifact }}.zip" nanny.exe
+          else
+            tar czf "../../../${{ matrix.artifact }}.tar.gz" nanny
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}.tar.gz
+          path: ${{ matrix.artifact }}.${{ matrix.archive_ext }}
 
   release:
     name: Publish GitHub Release
@@ -86,7 +99,9 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*.tar.gz
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.zip
           body_path: /tmp/release-notes.md
           prerelease: ${{ contains(github.ref_name, '-') }}
 

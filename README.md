@@ -22,7 +22,7 @@
 
 <p align="center">
   <a href="https://docs.nanny.run">Documentation</a> ·
-  <a href="https://docs.nanny.run/quickstart">Quickstart</a> ·
+  <a href="https://docs.nanny.run/v0.1/quickstart">Quickstart</a> ·
   <a href="CHANGELOG.md">Changelog</a> ·
   <a href="https://github.com/nanny-run/nanny/issues">Report a Bug</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
@@ -75,12 +75,12 @@ flowchart TD
 
 ## The Nanny ecosystem
 
-| Layer                      | What it does                                                                                                            |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| **Nanny CLI**              | Hard timeout, step, and cost limits for any agent process in any language.                                              |
-| **Rust SDK**               | Per-function cost metering, allowlist enforcement, and custom rules — in-process.                                       |
+| Layer                      | What it does                                                                                                                             |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| **Nanny CLI**              | Hard timeout, step, and cost limits for any agent process in any language.                                                               |
+| **Rust SDK**               | Per-function cost metering, allowlist enforcement, and custom rules — in-process.                                                        |
 | **Python SDK**             | Per-function and per-role governance for Python agents — each agent in your fleet gets its own budget, tool allowlist, and custom rules. |
-| **Nanny Cloud** _(v0.1.6)_ | Durable audit logs, team dashboards, org-level budget aggregation, and cross-process fleet enforcement.                 |
+| **Nanny Cloud** _(v0.1.6)_ | Durable audit logs, team dashboards, org-level budget aggregation, and cross-process fleet enforcement.                                  |
 
 → Full docs at [docs.nanny.run](https://docs.nanny.run)
 
@@ -90,11 +90,11 @@ flowchart TD
 
 Four complete agent samples ship in `examples/`. All use [Ollama](https://ollama.com) — no API key required.
 
-| Sample                                                         | What it does                                                                                                                | Stop reasons demonstrated                     |
-| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
-| [`examples/rust/webdingo`](examples/rust/webdingo)             | Web research agent (Rust) — fetches pages, synthesises a report. Classic spiral risk.                                       | `BudgetExhausted`, `RuleDenied`               |
-| [`examples/rust/qabud`](examples/rust/qabud)                   | Code review agent (Rust) — reads source files, identifies issues, blocks sensitive files before they're opened.             | `RuleDenied`, `ToolDenied`, `MaxStepsReached` |
-| [`examples/python/dev_assist`](examples/python/dev_assist)     | Debug agent (LangChain) — given a stack trace, reads relevant files and searches for related symbols.                       | `BudgetExhausted`, `RuleDenied`, `ToolDenied` |
+| Sample                                                         | What it does                                                                                                                                                                                                                                                                                                 | Stop reasons demonstrated                     |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------- |
+| [`examples/rust/webdingo`](examples/rust/webdingo)             | Web research agent (Rust) — fetches pages, synthesises a report. Classic spiral risk.                                                                                                                                                                                                                        | `BudgetExhausted`, `RuleDenied`               |
+| [`examples/rust/qabud`](examples/rust/qabud)                   | Code review agent (Rust) — reads source files, identifies issues, blocks sensitive files before they're opened.                                                                                                                                                                                              | `RuleDenied`, `ToolDenied`, `MaxStepsReached` |
+| [`examples/python/dev_assist`](examples/python/dev_assist)     | Debug agent (LangChain) — given a stack trace, reads relevant files and searches for related symbols.                                                                                                                                                                                                        | `BudgetExhausted`, `RuleDenied`, `ToolDenied` |
 | [`examples/python/metrics_crew`](examples/python/metrics_crew) | Multi-agent governance (CrewAI) — four specialized agents with per-role budgets, per-role tool allowlists, and a loop-detection rule. The analysis agent cannot call the reporter's tools. If it tries, `ToolDenied` fires. This is what least-privilege fleet governance looks like in 200 lines of Python. | `BudgetExhausted`, `RuleDenied`, `ToolDenied` |
 
 ```bash
@@ -233,7 +233,7 @@ All macros are no-ops when running outside `nanny run` — no enforcement overhe
 
 ![Nanny demo — named agent scopes (planner → researcher → synthesizer) entering and exiting](assets/demo/webdingo-agent-scopes.gif)
 
-→ Full Rust SDK guide at [docs.nanny.run/guides/rust-sdk](https://docs.nanny.run/guides/rust-sdk)
+→ Full Rust SDK guide at [docs.nanny.run/v0.1/guides/rust-sdk](https://docs.nanny.run/v0.1/guides/rust-sdk)
 
 ---
 
@@ -275,7 +275,7 @@ def read_file(path: str) -> str:
 
 All decorators are no-ops when running outside `nanny run` — zero overhead in development and CI.
 
-→ Full Python SDK guide at [docs.nanny.run/guides/python-sdk](https://docs.nanny.run/guides/python-sdk)
+→ Full Python SDK guide at [docs.nanny.run/v0.1/guides/python-sdk](https://docs.nanny.run/v0.1/guides/python-sdk)
 
 ---
 
