@@ -35,6 +35,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **Python SDK exception parity** — `RuleDenied(rule_name)` and `ToolDenied(tool_name)` now
   carry their respective names as the first positional argument, matching the Rust
   `StopReason` variants exactly. `AgentNotFound` is raised on 404 from `/agent/enter`.
+- **Windows bridge uses OS-assigned port** — the TCP bridge previously bound to a hardcoded
+  port (`47374`), which prevented concurrent `nanny run` processes on the same Windows
+  machine — the second process would fail immediately with `WSAEADDRINUSE`. The bridge now
+  binds to port `0` and lets the OS assign a free ephemeral port per execution. The assigned
+  port is injected into the child process as `NANNY_BRIDGE_PORT` as before — nothing in the
+  SDK or agent code changes.
 
 ## [0.1.4] — 2026-04-13
 
