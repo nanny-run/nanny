@@ -1,8 +1,8 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/nanny-logo-dark.svg" />
-    <source media="(prefers-color-scheme: light)" srcset="assets/nanny-logo-light.svg" />
-    <img src="assets/nanny-logo-light.svg" alt="Nanny" height="80" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/nanny-run/nanny/next/assets/nanny-logo-dark.svg" />
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/nanny-run/nanny/next/assets/nanny-logo-light.svg" />
+    <img src="https://raw.githubusercontent.com/nanny-run/nanny/next/assets/nanny-logo-light.svg" alt="Nanny" height="80" />
   </picture>
 </p>
 
@@ -128,15 +128,17 @@ brew install nannyd
 curl -fsSL https://install.nanny.run | sh
 ```
 
-**All platforms — via Rust toolchain**
+Have Rust installed? `cargo install nannyd` also works.
 
-```sh
-cargo install nannyd
+**Windows**
+
+```powershell
+irm https://install.nanny.run/windows | iex
 ```
 
-Or download a pre-built binary directly from [GitHub Releases](https://github.com/nanny-run/nanny/releases).
+Installs to `%LOCALAPPDATA%\nanny\` and adds to PATH. Restart your terminal after installing.
 
-> **Windows note:** Process enforcement (hard kill on limit breach) requires Unix signal support and is not yet implemented on Windows. The CLI and SDK otherwise work correctly.
+Or download a pre-built binary directly from [GitHub Releases](https://github.com/nanny-run/nanny/releases).
 
 ---
 
@@ -194,7 +196,7 @@ timeout = 120000
 allowed = ["http_get", "read_file"]   # anything not listed is denied
 ```
 
-![Nanny demo — BudgetExhausted stops a web research agent mid-run](assets/demo/webdingo-budget-exhausted.gif)
+![Nanny demo — BudgetExhausted stops a web research agent mid-run](https://raw.githubusercontent.com/nanny-run/nanny/next/assets/demo/webdingo-budget-exhausted.gif)
 
 ---
 
@@ -231,7 +233,7 @@ async fn run_research(topic: &str) {
 
 All macros are no-ops when running outside `nanny run` — no enforcement overhead.
 
-![Nanny demo — named agent scopes (planner → researcher → synthesizer) entering and exiting](assets/demo/webdingo-agent-scopes.gif)
+![Nanny demo — named agent scopes (planner → researcher → synthesizer) entering and exiting](https://raw.githubusercontent.com/nanny-run/nanny/next/assets/demo/webdingo-agent-scopes.gif)
 
 → Full Rust SDK guide at [docs.nanny.run/v0.1/guides/rust-sdk](https://docs.nanny.run/v0.1/guides/rust-sdk)
 

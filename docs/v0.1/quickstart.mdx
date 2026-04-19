@@ -18,11 +18,15 @@ The Nanny CLI is a system tool — install it once and use `nanny run` from any 
     ```bash
     curl -fsSL https://install.nanny.run | sh
     ```
+
+    Have Rust installed? `cargo install nannyd` also works.
   </Tab>
-  <Tab title="Rust toolchain (all platforms)">
-    ```bash
-    cargo install nannyd
+  <Tab title="Windows">
+    ```powershell
+    irm https://install.nanny.run/windows | iex
     ```
+
+    Installs the binary to `%LOCALAPPDATA%\nanny\` and adds it to your PATH. Restart your terminal after installing.
   </Tab>
 </Tabs>
 

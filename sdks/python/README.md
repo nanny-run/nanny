@@ -1,3 +1,11 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/nanny-run/nanny/next/assets/nanny-logo-dark.svg" />
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/nanny-run/nanny/next/assets/nanny-logo-light.svg" />
+    <img src="https://raw.githubusercontent.com/nanny-run/nanny/next/assets/nanny-logo-light.svg" alt="Nanny" height="80" />
+  </picture>
+</p>
+
 # nanny-sdk
 
 Python SDK for [Nanny](https://github.com/nanny-run/nanny) — an execution boundary for autonomous AI agents.
@@ -69,6 +77,8 @@ Rules run before every `@tool` call. Return `False` to stop execution with `Rule
 
 ## `@agent` — activate named limits for a scope
 
+In a multi-agent system, each agent has a different role and a different risk profile. `@agent` activates the right named limit set when each role runs, then reverts automatically when it's done:
+
 ```python
 from nanny_sdk import agent
 
@@ -77,27 +87,32 @@ def run_research_loop(query: str) -> str:
     ...
 ```
 
-Activates `[limits.researcher]` from `nanny.toml` for the duration of the function. Limits revert on exit, including on exception.
+Activates `[limits.researcher]` from `nanny.toml` for the duration of the function. Limits revert on exit, including on exception. Each role runs under its own budget and tool allowlist — hitting the analysis ceiling does not affect the reporter, and the analysis agent cannot call the reporter's tools.
+
+![metrics_crew — ingestion, analysis, visualization, and reporter agent scopes entering and exiting](https://raw.githubusercontent.com/nanny-run/nanny/next/assets/demo/metrics-crew-agent-scopes.gif)
 
 ---
 
 ## `nanny.toml` example
 
 ```toml
-[limits]
-max_steps       = 50
-max_cost_units  = 200
-timeout_secs    = 120
-
-[limits.researcher]
-max_steps       = 30
-max_cost_units  = 100
-
-[tools]
-allowed = ["fetch_page", "search"]
+[runtime]
+mode = "local"
 
 [start]
 cmd = "uv run agent.py"
+
+[limits]
+steps   = 50
+cost    = 200
+timeout = 120000
+
+[limits.researcher]
+steps = 30
+cost  = 100
+
+[tools]
+allowed = ["fetch_page", "search"]
 ```
 
 ---
@@ -106,14 +121,16 @@ cmd = "uv run agent.py"
 
 When a limit is exceeded, a `NannyStop` exception is raised with one of these reasons:
 
-| Reason | Cause |
-|--------|-------|
-| `BudgetExhausted` | Cost ceiling reached |
-| `MaxStepsReached` | Step limit reached |
-| `TimeoutExpired` | Wall-clock limit reached |
-| `ToolDenied` | Tool not in the allowlist |
-| `RuleDenied` | A rule returned `False` |
-| `AgentCompleted` | Clean exit |
+| Reason              | Cause                                                                        |
+| ------------------- | ---------------------------------------------------------------------------- |
+| `BudgetExhausted`   | Cost ceiling reached                                                         |
+| `MaxStepsReached`   | Step limit reached                                                           |
+| `TimeoutExpired`    | Wall-clock limit reached                                                     |
+| `ToolDenied`        | Tool not in the allowlist                                                    |
+| `RuleDenied`        | A rule returned `False`                                                      |
+| `AgentCompleted`    | Clean exit                                                                   |
+| `AgentNotFound`     | Named limit set in `@agent` does not exist in `nanny.toml`                   |
+| `BridgeUnavailable` | Bridge was active but unreachable — fails closed, never continues ungoverned |
 
 ---
 
@@ -121,10 +138,13 @@ When a limit is exceeded, a `NannyStop` exception is raised with one of these re
 
 - Python 3.11+
 - `httpx` (only runtime dependency)
-- `nanny` CLI: `brew tap nanny-run/nanny && brew install nannyd`
+- `nanny` CLI:
+  - macOS: `brew tap nanny-run/nanny && brew install nannyd`
+  - Linux: `curl -fsSL https://install.nanny.run | sh`
+  - Windows: `irm https://install.nanny.run/windows | iex`
 
 ## Links
 
 - [GitHub](https://github.com/nanny-run/nanny)
 - [Documentation](https://docs.nanny.run)
-- [Changelog](https://github.com/nanny-run/nanny/blob/main/CHANGELOG.md)
+- [Changelog](https://github.com/nanny-run/nanny/blob/next/CHANGELOG.md)
