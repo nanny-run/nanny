@@ -173,13 +173,45 @@ fn cmd_uninstall() -> Result<()> {
     cmd_uninstall_impl(&exe)
 }
 
-// Windows locks running executables — the process cannot delete itself.
+// Windows locks running executables — the process cannot delete itself while running.
+// Spawn a detached, hidden PowerShell process that waits for nanny to exit, then
+// removes the binary, cleans the PATH entry, and removes the directory if empty.
 #[cfg(windows)]
-fn cmd_uninstall_impl(_exe: &Path) -> Result<()> {
-    println!("To uninstall Nanny, close this terminal and run:");
-    println!("  irm https://install.nanny.run/windows/uninstall | iex");
-    println!();
-    println!("This removes the binary and cleans up your PATH automatically.");
+fn cmd_uninstall_impl(exe: &Path) -> Result<()> {
+    use std::os::windows::process::CommandExt;
+
+    let exe_str = exe.to_string_lossy();
+    let install_dir = exe
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("cannot determine install directory"))?
+        .to_string_lossy()
+        .to_string();
+
+    let script = format!(
+        "Start-Sleep -Milliseconds 500; \
+        Remove-Item -Force -ErrorAction SilentlyContinue '{exe}'; \
+        $dir = '{dir}'; \
+        $p = [Environment]::GetEnvironmentVariable('PATH','User'); \
+        if ($p -like \"*$dir*\") {{ \
+            $new = ($p -split ';' | Where-Object {{ $_ -ne $dir }}) -join ';'; \
+            [Environment]::SetEnvironmentVariable('PATH',$new,'User') \
+        }}; \
+        if (-not (Get-ChildItem '$dir' -ErrorAction SilentlyContinue)) {{ \
+            Remove-Item -Force -Recurse '$dir' -ErrorAction SilentlyContinue \
+        }}",
+        exe = exe_str,
+        dir = install_dir,
+    );
+
+    const DETACHED_PROCESS: u32 = 0x00000008;
+    std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", &script])
+        .creation_flags(DETACHED_PROCESS)
+        .spawn()
+        .context("failed to spawn uninstall helper")?;
+
+    println!("nanny uninstalled from {exe_str}");
+    println!("Restart your terminal for PATH changes to take effect.");
     Ok(())
 }
 

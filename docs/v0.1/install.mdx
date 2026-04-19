@@ -78,13 +78,11 @@ nanny --version
     ```
   </Tab>
   <Tab title="Windows">
-    Windows locks running executables. Close your current terminal and run:
-
     ```powershell
-    irm https://install.nanny.run/windows/uninstall | iex
+    nanny uninstall
     ```
 
-    This removes the binary and cleans up your PATH automatically. You can also run `nanny uninstall` to print this command.
+    Spawns a background process that removes the binary and cleans up your PATH automatically. Restart your terminal after uninstalling.
   </Tab>
 </Tabs>
 

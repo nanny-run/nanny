@@ -54,10 +54,10 @@ nanny: stopped — BudgetExhausted
 
 ## Development
 
-This example uses the published `nannyd = "0.1.5"` crate from crates.io.
+This example uses the published `nannyd = "0.1.6"` crate from crates.io.
 During active development on the nanny crate itself, switch to a path dependency:
 
 ```toml
 # Cargo.toml
-nannyd = { path = "../../../crates/cli" }   # instead of nannyd = "0.1.5"
+nannyd = { path = "../../../crates/cli" }   # instead of nannyd = "0.1.6"
 ```

@@ -9,13 +9,7 @@ Removes the `nanny` binary from its current install location.
 nanny uninstall
 ```
 
-On Windows, the running executable cannot delete itself. `nanny uninstall` prints the uninstall command and exits. Close the terminal, then run it in a new window:
-
-```powershell
-irm https://install.nanny.run/windows/uninstall | iex
-```
-
-This removes the binary and cleans up your PATH automatically.
+Works on all platforms. On Windows, the running executable cannot delete itself — `nanny uninstall` spawns a hidden background process that waits for nanny to exit, then removes the binary and cleans up your PATH automatically. Restart your terminal after uninstalling.
 
 ---
 

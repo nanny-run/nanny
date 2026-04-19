@@ -8,7 +8,7 @@ dependencies = [
     "langchain-ollama>=0.2",
     "typer>=0.12",
     "rich>=13",
-    "nanny-sdk==0.1.5",
+    "nanny-sdk==0.1.6",
 ]
 
 [project.scripts]
