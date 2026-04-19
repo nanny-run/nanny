@@ -226,8 +226,19 @@ fn start_transport(
     shared: Arc<Mutex<BridgeState>>,
     registry: Arc<ToolRegistry>,
 ) -> Result<Bridge, BridgeError> {
-    let server = tiny_http::Server::http("127.0.0.1:47374")
+    // Bind to port 0 — the OS assigns a free ephemeral port per bridge instance.
+    // This supports concurrent `nanny run` processes on the same machine without
+    // conflict. The actual bound port is read back via server_addr() and injected
+    // into the child process environment as NANNY_BRIDGE_PORT — child processes
+    // never hardcode the port themselves.
+    let server = tiny_http::Server::http("127.0.0.1:0")
         .map_err(|e| BridgeError::Start(e.to_string()))?;
+
+    let port = server
+        .server_addr()
+        .to_ip()
+        .ok_or_else(|| BridgeError::Start("could not read bound TCP port".to_string()))?
+        .port();
 
     {
         let shared = shared.clone();
@@ -237,7 +248,7 @@ fn start_transport(
 
     Ok(Bridge {
         shared,
-        address: BridgeAddress::Tcp(47374),
+        address: BridgeAddress::Tcp(port),
         session_token: token,
     })
 }

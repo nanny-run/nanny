@@ -50,3 +50,13 @@ class RuleDenied(NannyStop):
     def __init__(self, rule_name: str) -> None:
         self.rule_name = rule_name
         super().__init__(f"rule denied: {rule_name!r}")
+
+
+class BridgeUnavailable(NannyStop):
+    """The bridge was active but unreachable during rule evaluation or a tool call.
+
+    Extends NannyStop (BaseException) so it propagates through broad
+    ``except Exception`` handlers in agent frameworks — the same reason all
+    stop signals use BaseException. Silently swallowing a bridge failure would
+    let the agent continue ungoverned, violating the manifesto guarantee.
+    """

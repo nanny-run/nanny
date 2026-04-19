@@ -4,7 +4,7 @@ The bridge uses different transports depending on the OS:
 
 - **Unix (macOS/Linux):** Unix domain socket at ``/tmp/nanny-<token>.sock``.
   The CLI injects ``NANNY_BRIDGE_SOCKET`` into the child process environment.
-- **Windows:** TCP loopback on a fixed port (47374).
+- **Windows:** TCP loopback on an OS-assigned port.
   The CLI injects ``NANNY_BRIDGE_PORT`` into the child process environment.
 
 ``NANNY_SESSION_TOKEN`` is always injected on both platforms.

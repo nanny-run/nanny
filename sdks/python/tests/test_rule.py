@@ -3,7 +3,7 @@
 import pytest
 from pytest_httpserver import HTTPServer
 
-from nanny_sdk import RuleDenied, rule, tool
+from nanny_sdk import BridgeUnavailable, RuleDenied, rule, tool
 from nanny_sdk._context import PolicyContext
 
 # ---------------------------------------------------------------------------
@@ -181,33 +181,29 @@ def test_rule_ctx_bridge_fields_populated_from_status(mock_bridge: HTTPServer) -
     mock_bridge.check_assertions()
 
 
-def test_rule_ctx_status_failure_falls_back_gracefully(mock_bridge: HTTPServer) -> None:
-    """If GET /status fails, rules still run with zeroed bridge-tracked fields.
+def test_rule_ctx_status_failure_fails_closed(mock_bridge: HTTPServer) -> None:
+    """If GET /status fails, the tool call is blocked and BridgeUnavailable is raised.
 
-    This covers the case where the mock returns 500 for an unregistered /status
-    path, but also any real-world transient bridge error.
+    Silently continuing with zeroed counters would let the agent run ungoverned —
+    a manifesto violation. The SDK must fail closed: bridge unreachable = stop.
     """
-    # No /status handler — mock returns 500; graceful fallback to PolicyContext()
-    mock_bridge.expect_request("/tool/call", method="POST").respond_with_json(_allow())
-    captured: list[PolicyContext] = []
+    # Override the default /status catch-all with a 500 response.
+    # Oneshot handlers take priority over persistent handlers in pytest-httpserver.
+    mock_bridge.expect_oneshot_request("/status", method="GET").respond_with_data(
+        "internal error", status=500, content_type="text/plain"
+    )
+    # /tool/call should never be reached — no handler registered
 
-    @rule("capture")
-    def capture(ctx: PolicyContext) -> bool:
-        captured.append(ctx)
+    @rule("should_not_run")
+    def should_not_run(ctx: PolicyContext) -> bool:  # pragma: no cover
         return True
 
     @tool(cost=0)
-    def my_func() -> str:
+    def my_func() -> str:  # pragma: no cover
         return "ok"
 
-    assert my_func() == "ok"
-    ctx = captured[0]
-    # Zeroed fallback for bridge-tracked fields
-    assert ctx.step_count == 0
-    assert ctx.cost_units_spent == 0
-    assert ctx.tool_call_history == []
-    # Decorator-set fields still populated
-    assert ctx.requested_tool == "my_func"
+    with pytest.raises(BridgeUnavailable):
+        my_func()
 
 
 # ---------------------------------------------------------------------------

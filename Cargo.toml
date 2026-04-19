@@ -10,7 +10,7 @@ members = [
 ]
 
 [workspace.package]
-version     = "0.1.4"
+version     = "0.1.5"
 edition     = "2021"
 license     = "Apache-2.0"
 repository  = "https://github.com/nanny-run/nanny"
@@ -19,11 +19,11 @@ authors     = ["Evans Ibok <evansibok@gmail.com>"]
 # Shared dependency versions — pin once, inherit everywhere.
 [workspace.dependencies]
 # Internal crates — path + version kept in sync with [workspace.package] version.
-nanny-core    = { path = "crates/core",    version = "0.1.4" }
-nanny-config  = { path = "crates/config",  version = "0.1.4" }
-nanny-macros  = { path = "crates/macros",  version = "0.1.4" }
-nanny-runtime = { path = "crates/runtime", version = "0.1.4" }
-nanny-bridge  = { path = "crates/bridge",  version = "0.1.4" }
+nanny-core    = { path = "crates/core",    version = "0.1.5" }
+nanny-config  = { path = "crates/config",  version = "0.1.5" }
+nanny-macros  = { path = "crates/macros",  version = "0.1.5" }
+nanny-runtime = { path = "crates/runtime", version = "0.1.5" }
+nanny-bridge  = { path = "crates/bridge",  version = "0.1.5" }
 # External dependencies
 serde        = { version = "1", features = ["derive"] }
 serde_json   = "1"

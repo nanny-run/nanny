@@ -11,6 +11,7 @@ from nanny_sdk._decorators import agent, rule, tool
 from nanny_sdk.exceptions import (
     AgentCompleted,
     AgentNotFound,
+    BridgeUnavailable,
     BudgetExhausted,
     MaxStepsReached,
     NannyStop,
@@ -33,4 +34,5 @@ __all__ = [
     "AgentNotFound",
     "ToolDenied",
     "RuleDenied",
+    "BridgeUnavailable",
 ]

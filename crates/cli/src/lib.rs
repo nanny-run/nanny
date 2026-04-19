@@ -253,25 +253,48 @@ mod runtime {
     // ── Rule evaluation ───────────────────────────────────────────────────────
 
     /// Evaluate all locally-registered rules for `tool_name`.
-    /// Returns the name of the first denying rule, or `None` if all allowed.
+    /// Returns the name of the first denying rule, or `None` if all pass.
     ///
-    /// Fetches `tool_call_counts` and `tool_call_history` from the bridge
-    /// `/status` endpoint — `BridgeState` is the single source of truth.
+    /// Fetches all live counters from the bridge `/status` endpoint before
+    /// evaluating rules — `BridgeState` is the single source of truth.
+    ///
+    /// Fails closed if the bridge is active but unreachable: rules cannot be
+    /// evaluated reliably against zeroed counters.
+    /// Manifesto: "silently continuing execution is always a bug."
     pub fn evaluate_local_rules(
         tool_name: &str,
         args: HashMap<String, String>,
     ) -> Option<&'static str> {
         let elapsed_ms = client_state().lock().unwrap().start.elapsed().as_millis() as u64;
 
-        // Fetch tracked counts from the bridge (authoritative state).
-        let (tool_call_counts, tool_call_history) = fetch_bridge_counts();
+        // Fetch all tracked counters from the bridge (authoritative state).
+        // If the bridge is active but unreachable, fail closed — same logic as
+        // call_tool, which returns ToolVerdict::Stop("BridgeUnavailable").
+        let status = match fetch_bridge_status() {
+            Some(s) => s,
+            None if is_active() => {
+                report_stop("BridgeUnavailable");
+                eprintln!("nanny: stopped — BridgeUnavailable (bridge unreachable during rule evaluation)");
+                std::process::exit(1);
+            }
+            // Passthrough mode (no bridge env vars) — zeros are correct; rules
+            // still run but counters will be empty, which is expected offline.
+            None => BridgeStatus {
+                step_count:        0,
+                cost_units_spent:  0,
+                tool_call_counts:  HashMap::new(),
+                tool_call_history: Vec::new(),
+            },
+        };
 
         let ctx = PolicyContext {
             requested_tool:    Some(tool_name.to_string()),
-            tool_call_counts,
-            tool_call_history,
+            tool_call_counts:  status.tool_call_counts,
+            tool_call_history: status.tool_call_history,
             last_tool_args:    args,
             elapsed_ms,
+            step_count:        status.step_count,
+            cost_units_spent:  status.cost_units_spent,
             ..PolicyContext::default()
         };
 
@@ -283,24 +306,41 @@ mod runtime {
         None
     }
 
-    /// Fetch tool_call_counts and tool_call_history from the bridge /status endpoint.
-    /// Returns empty defaults if the bridge is unreachable or returns unexpected data.
-    fn fetch_bridge_counts() -> (HashMap<String, u32>, Vec<String>) {
+    /// Counters fetched from the bridge `/status` endpoint.
+    struct BridgeStatus {
+        step_count:        u32,
+        cost_units_spent:  u64,
+        tool_call_counts:  HashMap<String, u32>,
+        tool_call_history: Vec<String>,
+    }
+
+    /// Fetch all live counters from the bridge /status endpoint.
+    /// Returns `None` if the bridge is unreachable or returns unexpected data.
+    /// Callers must check `is_active()` to decide whether to fail closed or use
+    /// zeroed defaults (passthrough mode).
+    fn fetch_bridge_status() -> Option<BridgeStatus> {
         let resp = match http_get("/status") {
             Some(r) if r.status == 200 => r,
-            _ => return (HashMap::new(), Vec::new()),
+            _ => return None,
         };
         let v: serde_json::Value = match serde_json::from_str(&resp.body) {
             Ok(v) => v,
-            Err(_) => return (HashMap::new(), Vec::new()),
+            Err(_) => return None,
         };
-        let counts = v.get("tool_call_counts")
+        // Bridge wire names: "step" → step_count, "cost_spent" → cost_units_spent
+        let step_count = v.get("step")
+            .and_then(|s| s.as_u64())
+            .unwrap_or(0) as u32;
+        let cost_units_spent = v.get("cost_spent")
+            .and_then(|c| c.as_u64())
+            .unwrap_or(0);
+        let tool_call_counts = v.get("tool_call_counts")
             .and_then(|c| serde_json::from_value(c.clone()).ok())
             .unwrap_or_default();
-        let history = v.get("tool_call_history")
+        let tool_call_history = v.get("tool_call_history")
             .and_then(|h| serde_json::from_value(h.clone()).ok())
             .unwrap_or_default();
-        (counts, history)
+        Some(BridgeStatus { step_count, cost_units_spent, tool_call_counts, tool_call_history })
     }
 
     // ── Tool call ─────────────────────────────────────────────────────────────

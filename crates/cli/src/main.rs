@@ -15,6 +15,7 @@ use nanny_bridge::{Bridge, BridgeAddress, ExecutionState};
 use nanny_core::agent::limits::Limits;
 use nanny_core::events::event::{ExecutionEvent, LimitsSnapshot, now_ms};
 use nanny_core::ledger::Ledger;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -84,22 +85,66 @@ fn main() {
     }
 }
 
+// ── Guard: single nanny.toml per directory ───────────────────────────────────
+
+/// Returns all files matching `nanny*.toml` in `dir`.
+/// A project must have exactly one — this enforces that rule.
+fn nanny_tomls_in_dir(dir: &Path) -> Result<Vec<PathBuf>> {
+    let entries = std::fs::read_dir(dir)
+        .with_context(|| format!("failed to read directory '{}'", dir.display()))?;
+    let matches = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_file()
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.starts_with("nanny") && n.ends_with(".toml"))
+                    .unwrap_or(false)
+        })
+        .collect();
+    Ok(matches)
+}
+
 // ── nanny init ────────────────────────────────────────────────────────────────
 
 fn cmd_init() -> Result<()> {
     let dest = PathBuf::from("nanny.toml");
+    let cwd = Path::new(".");
 
-    if dest.exists() {
+    let existing = nanny_tomls_in_dir(cwd)?;
+
+    if existing.len() > 1 {
+        let mut names: Vec<_> = existing
+            .iter()
+            .filter_map(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .collect();
+        names.sort();
         anyhow::bail!(
-            "nanny.toml already exists in this directory.\n\
-             Edit it directly or delete it and run `nanny init` again."
+            "multiple nanny configuration files found: {}\n\
+             A project must have exactly one nanny.toml. Remove the extras first.",
+            names.join(", ")
         );
     }
 
-    std::fs::write(&dest, nanny_config::default_toml())
-        .context("failed to write nanny.toml")?;
-
-    println!("Created nanny.toml — edit it to match your agent's requirements.");
+    if dest.exists() {
+        print!("nanny.toml already exists. Replace it with the default template?\nYour current configuration will be lost. [y/N] ");
+        std::io::stdout().flush().ok();
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).context("failed to read input")?;
+        if !matches!(input.trim().to_lowercase().as_str(), "y" | "yes") {
+            println!("Aborted. Your existing nanny.toml was not changed.");
+            return Ok(());
+        }
+        std::fs::write(&dest, nanny_config::default_toml())
+            .context("failed to write nanny.toml")?;
+        println!("Replaced existing nanny.toml with fresh defaults.");
+    } else {
+        std::fs::write(&dest, nanny_config::default_toml())
+            .context("failed to write nanny.toml")?;
+        println!("Created nanny.toml — edit it to match your agent's requirements.");
+    }
     println!();
     println!("Set [start] cmd to how you normally launch your agent, then:");
     println!("    nanny run");
@@ -141,6 +186,27 @@ fn cmd_uninstall() -> Result<()> {
 // ── nanny run ─────────────────────────────────────────────────────────────────
 
 fn cmd_run(config_path: &Path, limits_name: Option<&str>, extra_args: Vec<String>) -> Result<()> {
+    // Guard: exactly one nanny*.toml allowed per directory.
+    let config_dir = config_path
+        .parent()
+        .map(|p| if p == Path::new("") { Path::new(".") } else { p })
+        .unwrap_or(Path::new("."));
+    let existing = nanny_tomls_in_dir(config_dir)?;
+    if existing.len() > 1 {
+        let mut names: Vec<_> = existing
+            .iter()
+            .filter_map(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        anyhow::bail!(
+            "multiple nanny configuration files found in '{}': {}\n\
+             A project must have exactly one nanny.toml. Remove the extras.",
+            config_dir.display(),
+            names.join(", ")
+        );
+    }
+
     // Load and validate config — fail immediately if anything is wrong.
     let config = nanny_config::load(config_path)
         .with_context(|| format!("failed to load config from '{}'", config_path.display()))?;

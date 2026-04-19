@@ -13,23 +13,10 @@ nanny init
 
 ## What it does
 
-Creates a `nanny.toml` with conservative defaults that work for most agents out of the box:
+Creates a `nanny.toml` with conservative defaults that work for most agents out of the box.
+Set `[start].cmd` to your agent's entry point and adjust the limit values to match your requirements.
 
-```toml
-[runtime]
-mode = "local"
-
-[start]
-# How to launch your agent. nanny run reads this command.
-cmd = "python agent.py"
-
-[limits]
-steps   = 100
-cost    = 1000
-timeout = 30000
-```
-
-After running `nanny init`, set `[start].cmd` to your agent's entry point and adjust the limit values to match your requirements.
+The generated file includes inline comments for every field and links to the full `nanny.toml` reference.
 
 ---
 
@@ -43,10 +30,11 @@ After running `nanny init`, set `[start].cmd` to your agent's entry point and ad
 
 | Condition | Behaviour |
 | --------- | --------- |
-| `nanny.toml` already exists | Exits with an error. Does not overwrite. |
+| `nanny.toml` already exists | Prompts for confirmation. Overwrites on `y` or `yes`. Exits without changes on any other input. |
+| Multiple `nanny*.toml` files exist | Exits with an error listing the conflicting files. A project must have exactly one `nanny.toml`. |
 | No write permission in current directory | Exits with an error. |
 
-To reset a config, delete `nanny.toml` and run `nanny init` again.
+To reset a config to defaults, run `nanny init` and confirm when prompted.
 
 ---
 

@@ -81,6 +81,13 @@ max_calls     = 20
 cost_per_call = 10   # nanny.toml cost overrides the decorator default
 ```
 
+<Frame>
+  <img
+    src="https://raw.githubusercontent.com/nanny-run/nanny/next/assets/demo/metrics-crew-tool-denied.gif"
+    alt="metrics_crew — ToolDenied fires when the analysis agent calls write_report, a tool outside its allowlist"
+  />
+</Frame>
+
 ---
 
 ## `@rule` — declare an enforcement rule
@@ -129,11 +136,14 @@ def block_sensitive(ctx) -> bool:
     return ".env" not in path and "secret" not in path
 ```
 
-<Note>
-  `requested_tool` and `last_tool_args` are always populated. The counter fields
-  (`step_count`, `tool_call_counts`, `tool_call_history`, `elapsed_ms`) are
-  coming in a future release.
-</Note>
+All fields are live. Before each rule evaluation, the SDK fetches current counters from the bridge — `step_count`, `cost_units_spent`, `tool_call_counts`, and `tool_call_history` reflect the actual execution state at the moment your rule runs.
+
+<Frame>
+  <img
+    src="https://raw.githubusercontent.com/nanny-run/nanny/next/assets/demo/metrics-crew-rule-denied.gif"
+    alt="metrics_crew — RuleDenied fires on the loop-detection rule, stopping the analysis agent from repeating the same computation"
+  />
+</Frame>
 
 ---
 
@@ -162,6 +172,13 @@ timeout = 120000
 The named set inherits from `[limits]` and overrides only the declared fields.
 Works identically for async functions. Limits revert on exit whether the function returns normally or raises.
 
+<Frame>
+  <img
+    src="https://raw.githubusercontent.com/nanny-run/nanny/next/assets/demo/metrics-crew-agent-scopes.gif"
+    alt="metrics_crew running under nanny run — ingestion, analysis, visualization, and reporter agent scopes entering and exiting with structured NDJSON events"
+  />
+</Frame>
+
 ---
 
 ## What happens on stop
@@ -178,6 +195,7 @@ from nanny_sdk import (
     RuleDenied,
     AgentCompleted,
     AgentNotFound,
+    BridgeUnavailable,
 )
 ```
 
@@ -196,7 +214,16 @@ except NannyStop as e:
     print(f"Stopped: {type(e).__name__}")
 ```
 
+`BridgeUnavailable` is raised when the bridge is active but unreachable during rule evaluation or a tool call. Nanny fails closed — the agent does not continue ungoverned. Like all `NannyStop` subclasses it extends `BaseException`, so it propagates through broad `except Exception` handlers in agent frameworks without being swallowed.
+
 You do not need to handle stop reasons in most agent code. They propagate up the call stack and terminate the process via `nanny run`. Catching them is useful in test code and at the CLI entry point.
+
+<Frame>
+  <img
+    src="https://raw.githubusercontent.com/nanny-run/nanny/next/assets/demo/metrics-crew-budget-exhausted.gif"
+    alt="metrics_crew — BudgetExhausted stops the analysis agent when it hits its cost ceiling"
+  />
+</Frame>
 
 ---
 
@@ -319,6 +346,13 @@ The key properties this gives you:
 - **Least-privilege tool access:** each agent only receives the tools it needs; calling outside its role raises `ToolDenied` immediately
 - **Loop detection:** the `@rule` fires client-side before the bridge is contacted — the denied tool never runs and no cost is charged
 - **Full audit trail:** every tool call, every limit activation, every stop reason logged to NDJSON
+
+<Frame>
+  <img
+    src="https://raw.githubusercontent.com/nanny-run/nanny/next/assets/demo/metrics-crew-max-steps.gif"
+    alt="metrics_crew — MaxStepsReached stops the analysis agent after it exhausts its step allowance"
+  />
+</Frame>
 
 <Note>
   **Scope:** All agents in this pattern run within a single Python process. This covers CrewAI, LangGraph, AutoGen, and any framework that orchestrates agents in a single runtime. Cross-process fleet enforcement is coming in v0.1.6.

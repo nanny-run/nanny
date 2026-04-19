@@ -35,7 +35,7 @@ timeout = 5000
 # ── Tools ─────────────────────────────────────────────────────────────────────
 
 [tools]
-allowed = ["http_get", "read_file"]   # Allowlist. Empty = all tools allowed.
+allowed = ["http_get", "read_file"]   # Allowlist. Empty = all tools denied.
 
 # Per-tool config.
 [tools.http_get]
@@ -115,7 +115,7 @@ Named sets inherit all unset fields from `[limits]`. Activate with `--limits=res
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `allowed` | string array | `[]` | Tool allowlist. Empty array means all tools are allowed. |
+| `allowed` | string array | `[]` | Tool allowlist. Empty array means all tools are denied. List every tool name your agent is permitted to call. |
 
 ### Per-tool config
 
