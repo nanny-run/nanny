@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] — 2026-04-19
+
+### Added
+
+- **Windows binary** — `nanny-windows-x86_64.zip` published to GitHub Releases. Install via
+  `irm https://install.nanny.run/windows | iex` (PowerShell).
+- **`install.ps1`** — Windows install script: detects arch, downloads the `.zip` from GitHub
+  Releases, extracts to `%LOCALAPPDATA%\nanny\`, and adds it to the user PATH persistently.
+- **`install.nanny.run`** — live install subdomain. `curl -fsSL https://install.nanny.run | sh`
+  installs on macOS/Linux. `irm https://install.nanny.run/windows | iex` installs on Windows.
+
+### Fixed
+
+- **`fetch_bridge_status` fails closed** — `evaluate_local_rules` previously fell back to
+  zeroed counters when the bridge was unreachable mid-execution. It now fails closed: if the
+  bridge is active (`NANNY_BRIDGE_SOCKET` or `NANNY_BRIDGE_PORT` is set) and `/status` is
+  unreachable, the process exits immediately with `BridgeUnavailable`. Silently continuing
+  rule evaluation against empty counters is always a bug. Passthrough mode (no bridge env
+  vars) retains zeroed defaults — correct behaviour when running outside `nanny run`.
+- **`PolicyContext` counter fields populated from bridge** — `step_count` and
+  `cost_units_spent` were previously always zero in rule callbacks. Both fields are now
+  fetched from the bridge `/status` endpoint before every rule evaluation, giving `@rule`
+  and `#[nanny::rule]` functions accurate live counters. Affects Rust SDK and Python SDK.
+- **Python `@rule` decorator** — rule functions decorated with `@rule` now receive a fully
+  populated `PolicyContext` including `step_count`, `cost_units_spent`, `tool_call_counts`,
+  and `tool_call_history`. Previously counters were zeroed, making count-based rule logic
+  unreliable. `RuleDenied` now raises correctly with the rule name as the exception argument.
+- **Python SDK exception parity** — `RuleDenied(rule_name)` and `ToolDenied(tool_name)` now
+  carry their respective names as the first positional argument, matching the Rust
+  `StopReason` variants exactly. `AgentNotFound` is raised on 404 from `/agent/enter`.
+
 ## [0.1.4] — 2026-04-13
 
 ### Added
@@ -139,6 +170,7 @@ First public release of Nanny — an execution boundary for autonomous AI agents
   SHA256 checksums for each binary are computed and pushed to the homebrew tap automatically
   on every tagged release.
 
+[0.1.5]: https://github.com/nanny-run/nanny/releases/tag/v0.1.5
 [0.1.4]: https://github.com/nanny-run/nanny/releases/tag/v0.1.4
 [0.1.3]: https://github.com/nanny-run/nanny/releases/tag/v0.1.3
 [0.1.2]: https://github.com/nanny-run/nanny/releases/tag/v0.1.2
