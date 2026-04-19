@@ -77,20 +77,32 @@ uv run metrics-crew analyze --data fixtures/sample_metrics.csv
 
 ## Nanny features demonstrated
 
-| Feature | What it does |
-| ------- | ------------ |
-| `@tool(cost=N)` on each tool | Each tool call charges its declared cost against the active budget |
-| Per-role limits | `[limits.ingestion]`, `[limits.analysis]`, `[limits.visualization]`, `[limits.reporter]` — each agent gets its own ceiling |
-| Per-role tool allowlists | Each agent only receives the tools it needs; calling another role's tool raises `ToolDenied` |
-| `@rule("no_analysis_loop")` | Stops if `compute_stats` is called 5+ times in a row — prevents the analysis agent from looping on the same metric |
+| Feature                      | What it does                                                                                                               |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `@tool(cost=N)` on each tool | Each tool call charges its declared cost against the active budget                                                         |
+| Per-role limits              | `[limits.ingestion]`, `[limits.analysis]`, `[limits.visualization]`, `[limits.reporter]` — each agent gets its own ceiling |
+| Per-role tool allowlists     | Each agent only receives the tools it needs; calling another role's tool raises `ToolDenied`                               |
+| `@rule("no_analysis_loop")`  | Stops if `compute_stats` is called 5+ times in a row — prevents the analysis agent from looping on the same metric         |
+
+---
+
+## Demos
+
+Multi-agent scopes entering and exiting with live NDJSON enforcement events:
+
+![metrics_crew running under nanny run — budget exhausted stops the analysis agent mid-run](../../../assets/demo/metrics-crew-budget-exhausted.gif)
+
+`ToolDenied` — analysis agent reaches for the reporter's `write_report` tool and is stopped immediately:
+
+![metrics_crew — ToolDenied fires when the analysis agent calls write_report](../../../assets/demo/metrics-crew-tool-denied.gif)
 
 ---
 
 ## Stop reasons you may see
 
-| Reason | What caused it |
-| ------ | -------------- |
-| `BudgetExhausted` | Hit the cost ceiling during analysis before all signals were checked |
-| `RuleDenied: no_analysis_loop` | Analysis agent kept re-running `compute_stats` on the same metric |
-| `ToolDenied` | An agent tried to call a tool outside its allowlist (e.g. analysis agent calling `write_report`) |
-| `AgentCompleted` | All four agents finished within their limits; charts and report produced |
+| Reason                         | What caused it                                                                                   |
+| ------------------------------ | ------------------------------------------------------------------------------------------------ |
+| `BudgetExhausted`              | Hit the cost ceiling during analysis before all signals were checked                             |
+| `RuleDenied: no_analysis_loop` | Analysis agent kept re-running `compute_stats` on the same metric                                |
+| `ToolDenied`                   | An agent tried to call a tool outside its allowlist (e.g. analysis agent calling `write_report`) |
+| `AgentCompleted`               | All four agents finished within their limits; charts and report produced                         |
