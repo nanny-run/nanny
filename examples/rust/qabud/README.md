@@ -53,10 +53,10 @@ The agent reads files and streams the NDJSON event log to stdout in real time:
 
 ## Development
 
-This example uses the published `nannyd = "0.1.6"` crate from crates.io.
+This example uses the published `nannyd = "0.1.7"` crate from crates.io.
 During active development on the nanny crate itself, switch to a path dependency:
 
 ```toml
 # Cargo.toml
-nannyd = { path = "../../../crates/cli" }   # instead of nannyd = "0.1.6"
+nannyd = { path = "../../../crates/cli" }   # instead of nannyd = "0.1.7"
 ```

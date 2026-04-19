@@ -74,7 +74,7 @@ timeout = 30000
 
 The analysis agent activates `[limits.analysis]` when it runs. The reporter activates `[limits.reporter]`. Each has its own tool allowlist — the analysis agent cannot call `write_report`, the reporter cannot call `compute_stats`. The moment any agent exceeds its ceiling or reaches for the wrong tool, Nanny stops it. The event log shows exactly which agent, which tool, which limit, and when.
 
-**Scope today:** This works for any multi-agent framework that runs agents within a single process — CrewAI, LangGraph, AutoGen, plain Python. See [`examples/python/metrics_crew`](https://github.com/nanny-run/nanny/tree/main/examples/python/metrics_crew) for the complete working example. Cross-process and cross-machine fleet enforcement is the v0.1.6 cloud layer.
+**Scope today:** This works for any multi-agent framework that runs agents within a single process — CrewAI, LangGraph, AutoGen, plain Python. See [`examples/python/metrics_crew`](https://github.com/nanny-run/nanny/tree/main/examples/python/metrics_crew) for the complete working example. Cross-process and cross-machine fleet enforcement is the v0.2.0 cloud layer.
 
 ---
 
