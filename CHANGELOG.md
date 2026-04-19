@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.6] - unreleased
+## [0.1.6] - 2026-04-19
 
 ### Fixed
 
@@ -204,6 +204,7 @@ First public release of Nanny — an execution boundary for autonomous AI agents
   SHA256 checksums for each binary are computed and pushed to the homebrew tap automatically
   on every tagged release.
 
+[0.1.6]: https://github.com/nanny-run/nanny/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/nanny-run/nanny/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/nanny-run/nanny/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/nanny-run/nanny/compare/v0.1.2...v0.1.3
