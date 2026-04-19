@@ -28,6 +28,20 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+      - name: Verify static CRT (Windows only)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $bin = "target\debug\nanny.exe"
+          # Static CRT check — VCRUNTIME140.dll must not appear in the PE import table.
+          $bytes = [System.IO.File]::ReadAllBytes($bin)
+          $ascii = [System.Text.Encoding]::ASCII.GetString($bytes)
+          if ($ascii -match "VCRUNTIME140\.dll") {
+            Write-Error "FAIL: nanny.exe imports VCRUNTIME140.dll — +crt-static not applied"
+            exit 1
+          }
+          Write-Host "PASS: static CRT confirmed — no VCRUNTIME140.dll dependency"
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest

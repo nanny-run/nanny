@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] - unreleased
+
+### Fixed
+
+- **`nanny uninstall` works on Windows** — Windows locks running executables, so
+  `nanny uninstall` now spawns a detached, hidden PowerShell process that waits for nanny
+  to exit, then removes the binary, cleans the PATH registry entry, and removes the install
+  directory if empty. No internet connection required, no second command needed.
+- **Static MSVC CRT** — the Windows binary is now built with `+crt-static`, linking the
+  Visual C++ runtime statically. No `VCRUNTIME140.dll` or VC++ Redistributable required on
+  the target machine.
+
 ## [0.1.5] - 2026-04-19
 
 ### Added

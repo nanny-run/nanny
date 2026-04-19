@@ -170,15 +170,61 @@ fn cmd_uninstall() -> Result<()> {
         std::process::exit(1);
     }
 
+    cmd_uninstall_impl(&exe)
+}
+
+// Windows locks running executables — the process cannot delete itself while running.
+// Spawn a detached, hidden PowerShell process that waits for nanny to exit, then
+// removes the binary, cleans the PATH entry, and removes the directory if empty.
+#[cfg(windows)]
+fn cmd_uninstall_impl(exe: &Path) -> Result<()> {
+    use std::os::windows::process::CommandExt;
+
+    let exe_str = exe.to_string_lossy();
+    let install_dir = exe
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("cannot determine install directory"))?
+        .to_string_lossy()
+        .to_string();
+
+    let script = format!(
+        "Start-Sleep -Milliseconds 500; \
+        Remove-Item -Force -ErrorAction SilentlyContinue '{exe}'; \
+        $dir = '{dir}'; \
+        $p = [Environment]::GetEnvironmentVariable('PATH','User'); \
+        if ($p -like \"*$dir*\") {{ \
+            $new = ($p -split ';' | Where-Object {{ $_ -ne $dir }}) -join ';'; \
+            [Environment]::SetEnvironmentVariable('PATH',$new,'User') \
+        }}; \
+        if (-not (Get-ChildItem '$dir' -ErrorAction SilentlyContinue)) {{ \
+            Remove-Item -Force -Recurse '$dir' -ErrorAction SilentlyContinue \
+        }}",
+        exe = exe_str,
+        dir = install_dir,
+    );
+
+    const DETACHED_PROCESS: u32 = 0x00000008;
+    std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", &script])
+        .creation_flags(DETACHED_PROCESS)
+        .spawn()
+        .context("failed to spawn uninstall helper")?;
+
+    println!("nanny uninstalled from {exe_str}");
+    println!("Restart your terminal for PATH changes to take effect.");
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn cmd_uninstall_impl(exe: &Path) -> Result<()> {
     println!("Removing {}", exe.display());
-    std::fs::remove_file(&exe).with_context(|| {
+    std::fs::remove_file(exe).with_context(|| {
         format!(
             "failed to remove '{}'\nIf this is a permissions issue, try: sudo rm {}",
             exe.display(),
             exe.display()
         )
     })?;
-
     println!("nanny uninstalled.");
     Ok(())
 }

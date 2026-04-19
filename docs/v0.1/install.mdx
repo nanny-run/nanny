@@ -64,11 +64,27 @@ nanny --version
 
 ## Uninstall
 
-```bash
-nanny uninstall
-```
+<Tabs>
+  <Tab title="macOS">
+    ```bash
+    nanny uninstall
+    ```
 
-Removes the binary from its current install location. On macOS, if Nanny was installed via Homebrew, this redirects you to `brew uninstall nannyd` to keep Homebrew metadata consistent.
+    If installed via Homebrew, this redirects you to `brew uninstall nannyd` to keep Homebrew metadata consistent.
+  </Tab>
+  <Tab title="Linux">
+    ```bash
+    nanny uninstall
+    ```
+  </Tab>
+  <Tab title="Windows">
+    ```powershell
+    nanny uninstall
+    ```
+
+    Spawns a background process that removes the binary and cleans up your PATH automatically. Restart your terminal after uninstalling.
+  </Tab>
+</Tabs>
 
 ---
 
@@ -94,5 +110,6 @@ Removes the binary from its current install location. On macOS, if Nanny was ins
     **Windows Defender blocks the download**
 
     The binary is unsigned. If Defender quarantines it, add an exclusion for `%LOCALAPPDATA%\nanny\` or download the `.zip` directly from the [GitHub Releases](https://github.com/nanny-run/nanny/releases) page and extract manually.
+
   </Tab>
 </Tabs>

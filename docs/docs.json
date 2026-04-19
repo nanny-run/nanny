@@ -33,7 +33,8 @@
     { "source": "/quickstart", "destination": "/v0.1/quickstart" },
     { "source": "/v0.1.3/:slug*", "destination": "/v0.1/:slug*" },
     { "source": "/v0.1.4/:slug*", "destination": "/v0.1/:slug*" },
-    { "source": "/v0.1.5/:slug*", "destination": "/v0.1/:slug*" }
+    { "source": "/v0.1.5/:slug*", "destination": "/v0.1/:slug*" },
+    { "source": "/v0.1.6/:slug*", "destination": "/v0.1/:slug*" }
   ],
   "navigation": {
     "versions": [
