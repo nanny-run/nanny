@@ -170,15 +170,29 @@ fn cmd_uninstall() -> Result<()> {
         std::process::exit(1);
     }
 
+    cmd_uninstall_impl(&exe)
+}
+
+// Windows locks running executables — the process cannot delete itself.
+#[cfg(windows)]
+fn cmd_uninstall_impl(_exe: &Path) -> Result<()> {
+    println!("To uninstall Nanny, close this terminal and run:");
+    println!("  irm https://install.nanny.run/windows/uninstall | iex");
+    println!();
+    println!("This removes the binary and cleans up your PATH automatically.");
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn cmd_uninstall_impl(exe: &Path) -> Result<()> {
     println!("Removing {}", exe.display());
-    std::fs::remove_file(&exe).with_context(|| {
+    std::fs::remove_file(exe).with_context(|| {
         format!(
             "failed to remove '{}'\nIf this is a permissions issue, try: sudo rm {}",
             exe.display(),
             exe.display()
         )
     })?;
-
     println!("nanny uninstalled.");
     Ok(())
 }
