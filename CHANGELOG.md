@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.5] — 2026-04-19
+## [0.1.5] - 2026-04-19
 
 ### Added
 
@@ -16,8 +16,24 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **`install.nanny.run`** — live install subdomain. `curl -fsSL https://install.nanny.run | sh`
   installs on macOS/Linux. `irm https://install.nanny.run/windows | iex` installs on Windows.
 
+### Changed
+
+- **`nanny init` overwrites with prompt** — previously exited with an error when `nanny.toml`
+  already existed. It now prompts: "Replace it with the default template? Your current
+  configuration will be lost. [y/N]". Answers `y` or `yes` overwrite; anything else exits
+  without changes. To reset a config, run `nanny init` and confirm.
+- **One `nanny.toml` per project enforced** — `nanny init` and `nanny run` now error immediately
+  if multiple files matching `nanny*.toml` are found in the project directory, listing the
+  offending filenames. A project must have exactly one `nanny.toml`.
+- **`nanny init` template improved** — the generated `nanny.toml` now includes inline comments
+  for every field, start command examples for Python, Rust, and Node, and a link to the full
+  `nanny.toml` reference at `docs.nanny.run`.
+
 ### Fixed
 
+- **`[tools] allowed = []` documented correctly** — the `nanny.toml` reference page incorrectly
+  stated "Empty array means all tools are allowed." An empty `allowed` list denies every tool
+  call. The reference, the generated template, and inline comments now state this correctly.
 - **`fetch_bridge_status` fails closed** — `evaluate_local_rules` previously fell back to
   zeroed counters when the bridge was unreachable mid-execution. It now fails closed: if the
   bridge is active (`NANNY_BRIDGE_SOCKET` or `NANNY_BRIDGE_PORT` is set) and `/status` is
@@ -42,7 +58,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   port is injected into the child process as `NANNY_BRIDGE_PORT` as before — nothing in the
   SDK or agent code changes.
 
-## [0.1.4] — 2026-04-13
+## [0.1.4] - 2026-04-13
 
 ### Added
 
@@ -65,7 +81,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   stored API token). Re-runnable independently via `workflow_dispatch` with a `version` input,
   matching the existing pattern for `publish-crates` and `homebrew-tap-publish`.
 
-## [0.1.3] — 2026-04-04
+## [0.1.3] - 2026-04-04
 
 ### Added
 
@@ -88,7 +104,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   failure is an audit event, not a hard stop. Whether to abort or recover is the agent's
   decision. Limits enforcement (budget, steps, timeout, allowlist) remains a hard stop.
 
-## [0.1.2] — 2026-03-30
+## [0.1.2] - 2026-03-30
 
 ### Added
 
@@ -130,13 +146,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `[start].cmd` is parsed with shell quoting rules (via `shlex`) so paths with spaces
   work correctly; unterminated quotes produce a clear error rather than a silent failure.
 
-## [0.1.1] — 2026-03-26
+## [0.1.1] - 2026-03-26
 
 ### Fixed
 
 - Added `readme` field to `nannyd` crate manifest so the README displays on crates.io.
 
-## [0.1.0] — 2026-03-26
+## [0.1.0] - 2026-03-26
 
 First public release of Nanny — an execution boundary for autonomous AI agents.
 
@@ -176,9 +192,9 @@ First public release of Nanny — an execution boundary for autonomous AI agents
   SHA256 checksums for each binary are computed and pushed to the homebrew tap automatically
   on every tagged release.
 
-[0.1.5]: https://github.com/nanny-run/nanny/releases/tag/v0.1.5
-[0.1.4]: https://github.com/nanny-run/nanny/releases/tag/v0.1.4
-[0.1.3]: https://github.com/nanny-run/nanny/releases/tag/v0.1.3
-[0.1.2]: https://github.com/nanny-run/nanny/releases/tag/v0.1.2
-[0.1.1]: https://github.com/nanny-run/nanny/releases/tag/v0.1.1
+[0.1.5]: https://github.com/nanny-run/nanny/compare/v0.1.4...v0.1.5
+[0.1.4]: https://github.com/nanny-run/nanny/compare/v0.1.3...v0.1.4
+[0.1.3]: https://github.com/nanny-run/nanny/compare/v0.1.2...v0.1.3
+[0.1.2]: https://github.com/nanny-run/nanny/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/nanny-run/nanny/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/nanny-run/nanny/releases/tag/v0.1.0
