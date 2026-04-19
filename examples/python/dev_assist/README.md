@@ -74,20 +74,28 @@ uv run dev debug --trace fixtures/sample_trace.txt --mode plan
 
 ## Nanny features demonstrated
 
-| Feature | What it does |
-| ------- | ------------ |
-| `@tool(cost=5)` on `file_reader` | Each file read charges 5 cost units; tracked against the budget |
-| `@tool(cost=8)` on `ripgrep` | Each search charges 8 cost units |
-| `@rule("no_read_loop")` | Stops the agent if the last 5 calls were all `file_reader` — loop detected |
-| `@agent("debugger")` | Activates `[limits.debugger]` from `nanny.toml` on entry; reverts on exit |
+| Feature                          | What it does                                                               |
+| -------------------------------- | -------------------------------------------------------------------------- |
+| `@tool(cost=5)` on `file_reader` | Each file read charges 5 cost units; tracked against the budget            |
+| `@tool(cost=8)` on `ripgrep`     | Each search charges 8 cost units                                           |
+| `@rule("no_read_loop")`          | Stops the agent if the last 5 calls were all `file_reader` — loop detected |
+| `@agent("debugger")`             | Activates `[limits.debugger]` from `nanny.toml` on entry; reverts on exit  |
+
+---
+
+## Demo
+
+`ToolDenied` — agent attempts `write_file`, which is not in the allowlist:
+
+![dev_assist — ToolDenied fires when the agent calls write_file](../../../assets/demo/dev-assist-tool-denied.gif)
 
 ---
 
 ## Stop reasons you may see
 
-| Reason | What caused it |
-| ------ | -------------- |
-| `BudgetExhausted` | Hit the cost ceiling before finishing the diagnosis |
+| Reason                     | What caused it                                               |
+| -------------------------- | ------------------------------------------------------------ |
+| `BudgetExhausted`          | Hit the cost ceiling before finishing the diagnosis          |
 | `RuleDenied: no_read_loop` | Agent kept re-reading the same files without making progress |
-| `ToolDenied` | Agent tried `write_file` — not in the allowlist |
-| `AgentCompleted` | Diagnosis produced within all limits |
+| `ToolDenied`               | Agent tried `write_file` — not in the allowlist              |
+| `AgentCompleted`           | Diagnosis produced within all limits                         |

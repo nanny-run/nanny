@@ -36,6 +36,10 @@ Verify the installation:
 nanny --version
 ```
 
+For upgrade paths, uninstall, and troubleshooting on each platform, see [Installing Nanny](/v0.1/install).
+
+The CLI is the enforcement engine. The SDK instruments your functions. You need both: `nanny run` owns the process lifecycle and enforces limits; `@tool`, `@rule`, and `@agent` report tool calls and activate named limit sets from inside your agent code.
+
 ## Initialise a config
 
 Run this in the root of your project:
