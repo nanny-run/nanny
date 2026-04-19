@@ -174,43 +174,40 @@ fn cmd_uninstall() -> Result<()> {
 }
 
 // Windows locks running executables — the process cannot delete itself while running.
-// Spawn a detached, hidden PowerShell process that waits for nanny to exit, then
-// removes the binary, cleans the PATH entry, and removes the directory if empty.
+// self_replace::self_delete() uses the FILE_FLAG_DELETE_ON_CLOSE + spawned-child
+// pattern (the same approach rustup uses) to reliably delete the binary after
+// the current process exits, without job object or quoting issues.
 #[cfg(windows)]
 fn cmd_uninstall_impl(exe: &Path) -> Result<()> {
-    use std::os::windows::process::CommandExt;
-
-    let exe_str = exe.to_string_lossy();
     let install_dir = exe
         .parent()
-        .ok_or_else(|| anyhow::anyhow!("cannot determine install directory"))?
-        .to_string_lossy()
-        .to_string();
+        .ok_or_else(|| anyhow::anyhow!("cannot determine install directory"))?;
 
-    let script = format!(
-        "Start-Sleep -Milliseconds 500; \
-        Remove-Item -Force -ErrorAction SilentlyContinue '{exe}'; \
-        $dir = '{dir}'; \
-        $p = [Environment]::GetEnvironmentVariable('PATH','User'); \
-        if ($p -like \"*$dir*\") {{ \
-            $new = ($p -split ';' | Where-Object {{ $_ -ne $dir }}) -join ';'; \
-            [Environment]::SetEnvironmentVariable('PATH',$new,'User') \
-        }}; \
-        if (-not (Get-ChildItem '$dir' -ErrorAction SilentlyContinue)) {{ \
-            Remove-Item -Force -Recurse '$dir' -ErrorAction SilentlyContinue \
-        }}",
-        exe = exe_str,
-        dir = install_dir,
-    );
+    // Schedule binary deletion — takes effect once this process exits.
+    self_replace::self_delete().context("failed to schedule binary deletion")?;
 
-    const DETACHED_PROCESS: u32 = 0x00000008;
-    std::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", &script])
-        .creation_flags(DETACHED_PROCESS)
-        .spawn()
-        .context("failed to spawn uninstall helper")?;
+    // Clean up the PATH registry entry and the install directory.
+    // This is a plain registry write — no need for a detached process.
+    let dir = install_dir.to_string_lossy();
+    let _ = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            &format!(
+                "$p = [Environment]::GetEnvironmentVariable('PATH','User'); \
+                 $new = ($p -split ';' | Where-Object {{ $_ -ne '{dir}' }}) -join ';'; \
+                 [Environment]::SetEnvironmentVariable('PATH',$new,'User'); \
+                 if (-not (Get-ChildItem '{dir}' -ErrorAction SilentlyContinue)) {{ \
+                     Remove-Item -Force -Recurse '{dir}' -ErrorAction SilentlyContinue \
+                 }}"
+            ),
+        ])
+        .status();
 
-    println!("nanny uninstalled from {exe_str}");
+    println!("nanny uninstalled from {}", exe.display());
     println!("Restart your terminal for PATH changes to take effect.");
     Ok(())
 }

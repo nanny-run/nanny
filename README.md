@@ -80,7 +80,7 @@ flowchart TD
 | **Nanny CLI**              | Hard timeout, step, and cost limits for any agent process in any language.                                                               |
 | **Rust SDK**               | Per-function cost metering, allowlist enforcement, and custom rules — in-process.                                                        |
 | **Python SDK**             | Per-function and per-role governance for Python agents — each agent in your fleet gets its own budget, tool allowlist, and custom rules. |
-| **Nanny Cloud** _(v0.1.6)_ | Durable audit logs, team dashboards, org-level budget aggregation, and cross-process fleet enforcement.                                  |
+| **Nanny Cloud** _(v0.2.0)_ | Durable audit logs, team dashboards, org-level budget aggregation, and cross-process fleet enforcement.                                  |
 
 → Full docs at [docs.nanny.run](https://docs.nanny.run)
 
@@ -107,7 +107,7 @@ cd examples/python/dev_assist && nanny run
 cd examples/python/metrics_crew && nanny run
 ```
 
-> **Scope:** Nanny governs agents within a single process today. When all agents run in the same process — as in CrewAI, LangGraph, AutoGen, or any framework that orchestrates agents within one Python or Rust runtime — every agent is governed. Cross-process and cross-machine fleet enforcement is the [v0.1.6 cloud layer](#the-nanny-ecosystem).
+> **Scope:** Nanny governs agents within a single process today. When all agents run in the same process — as in CrewAI, LangGraph, AutoGen, or any framework that orchestrates agents within one Python or Rust runtime — every agent is governed. Cross-process and cross-machine fleet enforcement is the [v0.2.0 cloud layer](#the-nanny-ecosystem).
 
 ---
 

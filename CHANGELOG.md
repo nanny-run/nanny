@@ -5,14 +5,14 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.6] - 2026-04-19
+## [0.1.7] - 2026-04-19
 
 ### Fixed
 
-- **`nanny uninstall` works on Windows** — Windows locks running executables, so
-  `nanny uninstall` now spawns a detached, hidden PowerShell process that waits for nanny
-  to exit, then removes the binary, cleans the PATH registry entry, and removes the install
-  directory if empty. No internet connection required, no second command needed.
+- **`nanny uninstall` works on Windows** — uses the `self-replace` crate
+  (`FILE_FLAG_DELETE_ON_CLOSE` + spawned child, the same pattern rustup uses) to reliably
+  delete the binary after the process exits. PATH registry entry and install directory are
+  cleaned up in the same command. No internet required, no second command needed.
 - **Static MSVC CRT** — the Windows binary is now built with `+crt-static`, linking the
   Visual C++ runtime statically. No `VCRUNTIME140.dll` or VC++ Redistributable required on
   the target machine.
@@ -204,7 +204,7 @@ First public release of Nanny — an execution boundary for autonomous AI agents
   SHA256 checksums for each binary are computed and pushed to the homebrew tap automatically
   on every tagged release.
 
-[0.1.6]: https://github.com/nanny-run/nanny/compare/v0.1.5...v0.1.6
+[0.1.7]: https://github.com/nanny-run/nanny/compare/v0.1.5...v0.1.7
 [0.1.5]: https://github.com/nanny-run/nanny/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/nanny-run/nanny/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/nanny-run/nanny/compare/v0.1.2...v0.1.3
