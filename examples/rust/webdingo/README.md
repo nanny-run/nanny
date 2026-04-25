@@ -22,9 +22,10 @@ Demonstrates the complete Nanny developer workflow:
 cd examples/rust/webdingo
 cp .env.example .env
 # Edit .env and set GROQ_API_KEY=<your_key_from_console.groq.com>
+cargo build --release
 ```
 
-The first `nanny run` compiles the project (`cargo run --release`) before starting — allow 30-60 seconds on the first run. Subsequent runs start immediately.
+Build before the first `nanny run`. Nanny's timeout starts when the process launches — if `cargo` compiles during the governed run, the timeout fires before the agent does anything. Building once upfront means `nanny run` launches the already-compiled binary immediately every time.
 
 ## Run
 
