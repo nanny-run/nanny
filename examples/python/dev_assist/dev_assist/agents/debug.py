@@ -1,55 +1,53 @@
-"""Debug agent for dev_assist.
+"""Debug agent for dev_assist — LangGraph StateGraph.
 
-Given a stack trace, the agent diagnoses the root cause and suggests a fix.
-Two execution modes are available:
+Architecture: explicit Python-driven nodes.
+    Python calls every tool (file_reader, ripgrep) directly in graph nodes.
+    @nanny_tool fires on every call — enforcement is guaranteed regardless
+    of model. The LLM is used only in diagnose_node for pure synthesis.
 
-  react  (default) — self-controlled ReAct loop.
-    Model outputs Thought/Action/Observation cycles in text.
-    Our code parses each step and calls tools directly, so @nanny_tool
-    intercepts every tool call regardless of model API capabilities.
+Execution order:
+    extract_node      — Python extracts file paths and search patterns from the trace
+    read_files_node   — Python calls file_reader for each extracted path
+    search_node       — Python calls ripgrep for each extracted pattern
+    diagnose_node     — LLM synthesises a diagnosis from all gathered context
 
-  plan   — Plan-and-Execute.
-    Phase 1: single LLM call produces a structured JSON plan (files + searches).
-    Phase 2: deterministic code executes each step in the plan.
-    Phase 3: single LLM call synthesises a diagnosis from the gathered context.
-    The model cannot add steps during execution — enforcement surface is fixed.
-
-Both modes use the same @nanny_tool-decorated tools and the same @agent scope.
-Nanny governs every tool call in both modes; only the execution structure differs.
-
-Model: llama3.1:8b via Ollama (local, no API key needed).
+Governance:
+    @rule("no_read_loop")    — fires when the same file is read more than once.
+                               Duplicate frames in the trace trigger this naturally,
+                               making the sample trace a reliable demo without any
+                               nanny.toml edits.
+    @nanny_agent("debugger") — activates [limits.debugger] scope for the run.
 """
 
 from __future__ import annotations
 
-import json
 import re
-from typing import Any
+from typing import Any, TypedDict
 
-from pydantic import ValidationError
+from langchain_core.messages import HumanMessage
+from langchain_groq import ChatGroq
+from langgraph.graph import END, START, StateGraph
 
-from langchain_core.messages import AIMessage, HumanMessage
-from langchain_ollama import ChatOllama
-from nanny_sdk import agent as nanny_agent
-from nanny_sdk import rule
+from nanny_sdk import agent as nanny_agent, rule
+from nanny_sdk.exceptions import NannyStop  # noqa: F401 — propagates through graph naturally
 
-from dev_assist.config import MAX_STEPS, MODEL, OLLAMA_BASE_URL
-from dev_assist.tools import file_reader, ripgrep, write_file
+from dev_assist.config import MODEL
+from dev_assist.tools import file_reader, ripgrep
 
-# ---------------------------------------------------------------------------
-# Policy: no_read_loop
-#
-# Fires the moment any file is read a second time.
-# A healthy agent reads each file once — the content stays in the conversation
-# history and can be referenced without re-reading. Re-reading the same file
-# means the agent forgot it or is circling without making progress.
-# ---------------------------------------------------------------------------
+# ── Rule ──────────────────────────────────────────────────────────────────────
 
 _seen_files: set[str] = set()
 
 
 @rule("no_read_loop")
 def check_no_read_loop(ctx: Any) -> bool:
+    """Deny if the same file is read more than once.
+
+    A healthy agent reads each file once — the content stays in state and
+    can be referenced during diagnosis without re-reading. Firing on the
+    second read catches both runaway loops and redundant duplicate frames
+    extracted from the stack trace.
+    """
     if getattr(ctx, "requested_tool", "") == "file_reader":
         path = (ctx.last_tool_args or {}).get("path", "")
         if path in _seen_files:
@@ -59,172 +57,104 @@ def check_no_read_loop(ctx: Any) -> bool:
     return True
 
 
-# ---------------------------------------------------------------------------
-# Shared helpers
-# ---------------------------------------------------------------------------
+# ── State ─────────────────────────────────────────────────────────────────────
 
-_PY_PATH_RE = re.compile(r'File "([^"]+\.(?:py|ts|js|go|rs|java))"')
+
+class DebugState(TypedDict):
+    trace: str                   # input: full stack trace text
+    file_paths: list[str]        # file paths extracted from trace (duplicates preserved)
+    search_patterns: list[str]   # exception class / key identifiers to search for
+    files_read: str              # concatenated file_reader results
+    search_results: str          # concatenated ripgrep results
+    diagnosis: str               # final LLM synthesis
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+_PATH_RE = re.compile(r'File "([^"]+\.(?:py|ts|js|go|rs|java))"')
+_EXC_RE  = re.compile(r"^([A-Z][A-Za-z0-9_]+):\s", re.MULTILINE)
+_VAL_RE  = re.compile(r"(?:KeyError|AttributeError):\s*['\"]?(\w+)['\"]?")
 
 
 def _extract_file_paths(trace: str) -> list[str]:
-    """Pull unique source file paths out of a stack trace."""
-    return list(dict.fromkeys(_PY_PATH_RE.findall(trace)))
+    """Extract file paths from a stack trace, preserving duplicates.
 
-
-# ---------------------------------------------------------------------------
-# Mode 1: ReAct loop
-# ---------------------------------------------------------------------------
-
-_REACT_SYSTEM = """\
-You are a debug assistant. Diagnose bugs by reading the actual source files.
-
-Tools:
-{tool_list}
-
-For every step, respond in exactly this format:
-Thought: <what you need to do next>
-Action: <tool name — one of: {tool_names}>
-Action Input: <JSON object matching the tool's arguments>
-
-When you have enough information to give a diagnosis, respond with:
-Thought: I now have enough information
-Final Answer:
-Root cause: <one sentence>
-Files involved: <paths>
-Fix: <diff or clear description>\
-"""
-
-
-_ACTION_RE = re.compile(r"Action:\s*(\w+)", re.IGNORECASE)
-_INPUT_RE = re.compile(
-    r"Action Input:\s*(\{.*?\}|\S+)", re.DOTALL | re.IGNORECASE)
-
-
-def _system_prompt(tools: list[Any]) -> str:
-    tool_list = "\n".join(
-        f"  {t.name} — {t.description.strip()}  args: {json.dumps(t.args)}"
-        for t in tools
-    )
-    tool_names = ", ".join(t.name for t in tools)
-    return _REACT_SYSTEM.format(tool_list=tool_list, tool_names=tool_names)
-
-
-def _parse_step(text: str) -> tuple[str | None, dict[str, Any]]:
-    """Extract (action_name, kwargs) from a ReAct step."""
-    action_m = _ACTION_RE.search(text)
-    if not action_m:
-        return None, {}
-    action = action_m.group(1).strip()
-
-    input_m = _INPUT_RE.search(text)
-    args: dict[str, Any] = {}
-    if input_m:
-        raw = input_m.group(1).strip()
-        try:
-            parsed = json.loads(raw)
-            if isinstance(parsed, dict):
-                args = parsed
-        except json.JSONDecodeError:
-            if action == "file_reader":
-                args = {"path": raw}
-            elif action == "ripgrep":
-                args = {"pattern": raw}
-
-    return action, args
-
-
-def _react_loop(llm: ChatOllama, tools: list[Any], trace_text: str) -> str:
-    """Self-controlled ReAct loop.
-
-    We parse the model's text output and call tool.run() directly — @nanny_tool
-    always intercepts regardless of whether the model supports structured tool-calling.
-    NannyStop exceptions propagate here and bubble up to cli/main.py.
+    Duplicates are intentional: @rule("no_read_loop") fires when the same
+    path is attempted a second time, so the sample_trace.txt (which has
+    pipeline.py and normalizer.py in two frames each) makes the demo
+    deterministic without any manual nanny.toml edits.
     """
-    tools_by_name = {t.name: t for t in tools}
-
-    paths = _extract_file_paths(trace_text)
-    if paths:
-        path_lines = "\n".join(f"  - {p}" for p in paths)
-        user_msg = (
-            f"These files appear in the stack trace:\n{path_lines}\n\n"
-            f"Read them and diagnose the bug.\n\nStack trace:\n{trace_text}"
-        )
-    else:
-        user_msg = f"Diagnose this error:\n\n{trace_text}"
-
-    from langchain_core.messages import SystemMessage
-
-    messages: list[Any] = [
-        SystemMessage(content=_system_prompt(tools)),
-        HumanMessage(content=user_msg),
-    ]
-
-    for _ in range(MAX_STEPS):
-        response = llm.invoke(messages)
-        content: str = response.content  # type: ignore[assignment]
-
-        if "Final Answer:" in content:
-            return content.split("Final Answer:", 1)[1].strip()
-
-        action, args = _parse_step(content)
-        if action is None:
-            return content
-
-        tool = tools_by_name.get(action)
-        if tool is None:
-            observation = (
-                f"[error] Unknown tool '{action}'. "
-                f"Available tools: {list(tools_by_name)}"
-            )
-        else:
-            # Sanitize: some models pass a list where a scalar is expected.
-            # Take the first element so LangChain's schema validation passes.
-            clean_args = {
-                k: (v[0] if isinstance(v, list) and v else v)
-                for k, v in args.items()
-            }
-            try:
-                observation = str(tool.run(clean_args))
-            except ValidationError as exc:
-                observation = f"[error] Invalid arguments for '{action}': {exc}"
-
-        messages.append(AIMessage(content=content))
-        messages.append(HumanMessage(content=f"Observation: {observation}"))
-
-    return "[stopped — max steps reached without a final answer]"
+    return _PATH_RE.findall(trace)
 
 
-# ---------------------------------------------------------------------------
-# Mode 2: Plan-and-Execute
-# ---------------------------------------------------------------------------
+def _extract_search_patterns(trace: str) -> list[str]:
+    """Extract the exception class name and the key error value from the trace."""
+    patterns: list[str] = []
+    for m in _EXC_RE.finditer(trace):
+        cls = m.group(1)
+        if cls not in patterns:
+            patterns.append(cls)
+    val_m = _VAL_RE.search(trace)
+    if val_m and val_m.group(1) not in patterns:
+        patterns.append(val_m.group(1))
+    return patterns[:3]  # cap at 3 — one ripgrep call per pattern
 
-_PLAN_PROMPT = """\
-You are a debug assistant. Given the stack trace below, produce a JSON plan
-listing which files to read and which symbols to search for.
 
-Output ONLY valid JSON — no explanation, no markdown fences:
-{{
-  "files": ["path/to/file.py"],
-  "searches": [{{"pattern": "SymbolName", "path": "."}}]
-}}
+# ── Nodes ─────────────────────────────────────────────────────────────────────
 
-Rules:
-- files: paths that appear in the stack trace (up to 5)
-- searches: symbols, function names, or error messages to locate (up to 3)
-- If a path is not in the trace, do not invent one
 
-Stack trace:
-{trace}"""
+def extract_node(state: DebugState) -> dict[str, Any]:
+    """Extract file paths and search patterns from the stack trace.
 
-_ANALYZE_PROMPT = """\
-You are a debug assistant. Diagnose the error below using the file contents
-and search results provided.
+    Pure Python — no tool calls. Populates file_paths and search_patterns
+    so the subsequent nodes know exactly what to read and search.
+    """
+    return {
+        "file_paths":       _extract_file_paths(state["trace"]),
+        "search_patterns":  _extract_search_patterns(state["trace"]),
+    }
+
+
+def read_files_node(state: DebugState) -> dict[str, Any]:
+    """Read each source file referenced in the stack trace.
+
+    Python drives every file_reader call — @nanny_tool fires on every call.
+    Paths are iterated in extraction order including duplicates.
+    @rule("no_read_loop") fires when the same path is attempted twice.
+    NannyStop propagates out of the LangGraph execution naturally.
+    """
+    parts: list[str] = []
+    for path in state["file_paths"]:
+        content = file_reader(path=path)
+        parts.append(f"### {path}\n{content}")
+    return {"files_read": "\n\n---\n\n".join(parts)}
+
+
+def search_node(state: DebugState) -> dict[str, Any]:
+    """Search the codebase for key symbols extracted from the stack trace.
+
+    Python drives every ripgrep call — @nanny_tool fires on every call.
+    NannyStop propagates out of the LangGraph execution naturally.
+    """
+    parts: list[str] = []
+    for pattern in state["search_patterns"]:
+        result = ripgrep(pattern=pattern, path=".")
+        parts.append(f"### rg {pattern!r}\n{result}")
+    return {"search_results": "\n\n---\n\n".join(parts)}
+
+
+_DIAGNOSE_PROMPT = """\
+You are a debug assistant. Diagnose the error below using the source files \
+and search results provided. Be concise and precise.
 
 Stack trace:
 {trace}
 
-Gathered context:
-{context}
+Source files:
+{files}
+
+Search results:
+{searches}
 
 Respond with:
 Root cause: <one sentence>
@@ -232,96 +162,66 @@ Files involved: <paths>
 Fix: <diff or clear description>"""
 
 
-def _parse_plan(text: str) -> dict[str, Any]:
-    """Extract JSON plan from model output, tolerating markdown fences."""
-    text = re.sub(r"```(?:json)?\s*", "", text).strip().rstrip("`").strip()
-    m = re.search(r"\{.*\}", text, re.DOTALL)
-    if m:
-        try:
-            return json.loads(m.group())
-        except json.JSONDecodeError:
-            pass
-    return {"files": [], "searches": []}
+def diagnose_node(state: DebugState) -> dict[str, Any]:
+    """Synthesise a diagnosis from the gathered context.
 
-
-def _plan_loop(llm: ChatOllama, tools: list[Any], trace_text: str) -> str:
-    """Plan-and-Execute mode.
-
-    Phase 1 — Plan: one LLM call → structured JSON (files + searches).
-    Phase 2 — Execute: deterministic code calls each tool in order.
-               @nanny_tool intercepts every call — enforcement is identical
-               to the ReAct loop; only the execution structure differs.
-    Phase 3 — Analyze: one LLM call with all gathered context → diagnosis.
+    Pure LLM reasoning — no tool calls. Uses ChatGroq for reliable,
+    structured output. Nanny limits fire before this node if a tool
+    call was denied or a budget/step limit was reached.
     """
-    tools_by_name = {t.name: t for t in tools}
-
-    # Phase 1: plan
-    plan_response = llm.invoke(
-        [HumanMessage(content=_PLAN_PROMPT.format(trace=trace_text))])
-    plan = _parse_plan(plan_response.content)  # type: ignore[arg-type]
-
-    # Phase 2: execute — deterministic, our code drives every tool call
-    gathered: list[str] = []
-
-    for path in plan.get("files", [])[:5]:
-        tool = tools_by_name.get("file_reader")
-        if tool:
-            result = str(tool.run({"path": path}))
-            gathered.append(f"### {path}\n{result}")
-
-    for search in plan.get("searches", [])[:3]:
-        tool = tools_by_name.get("ripgrep")
-        if tool and isinstance(search, dict):
-            result = str(tool.run({
-                "pattern": search.get("pattern", ""),
-                "path": search.get("path", "."),
-            }))
-            gathered.append(f"### rg {search.get('pattern', '')!r}\n{result}")
-
-    if not gathered:
-        return (
-            "Plan produced no files or searches to inspect. "
-            "Try --mode react for a more exploratory analysis."
-        )
-
-    # Phase 3: analyze
-    context = "\n\n---\n\n".join(gathered)
-    analyze_response = llm.invoke([
-        HumanMessage(content=_ANALYZE_PROMPT.format(
-            trace=trace_text, context=context))
-    ])
-
-    # Phase 4: apply fix — deterministic write_file call.
-    # Under `nanny run`: ToolDenied fires if write_file is not in [tools] allowed.
-    # In passthrough (uv run dev ...): actually writes the fix to disk.
-    # Using plan["files"][0] as the target — the primary file in the trace.
-    if plan.get("files"):
-        fix_target = plan["files"][0]
-        write_tool = tools_by_name.get("write_file")
-        if write_tool:
-            write_tool.run({"path": fix_target, "content": str(analyze_response.content)})
-
-    return analyze_response.content  # type: ignore[return-value]
+    llm = ChatGroq(model=MODEL, temperature=0)
+    prompt = _DIAGNOSE_PROMPT.format(
+        trace=state["trace"],
+        files=state["files_read"] or "(none — no file paths found in trace)",
+        searches=state["search_results"] or "(none — no patterns extracted)",
+    )
+    response = llm.invoke([HumanMessage(content=prompt)])
+    return {"diagnosis": str(response.content)}
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
+# ── Graph ─────────────────────────────────────────────────────────────────────
+
+def _build_graph() -> Any:
+    g = StateGraph(DebugState)
+    g.add_node("extract",    extract_node)
+    g.add_node("read_files", read_files_node)
+    g.add_node("search",     search_node)
+    g.add_node("diagnose",   diagnose_node)
+    g.add_edge(START,        "extract")
+    g.add_edge("extract",    "read_files")
+    g.add_edge("read_files", "search")
+    g.add_edge("search",     "diagnose")
+    g.add_edge("diagnose",   END)
+    return g.compile()
+
+
+_graph = _build_graph()
+
+
+# ── Public API ────────────────────────────────────────────────────────────────
 
 
 @nanny_agent("debugger")
-def run_debug(trace_text: str, mode: str = "react") -> str:
+def run_debug(trace_text: str) -> str:
     """Analyse a stack trace and return a diagnosis.
 
-    Args:
-        trace_text: The full stack trace or error log to diagnose.
-        mode: Execution mode — "react" (default) or "plan".
+    Runs the LangGraph pipeline: extract → read_files → search → diagnose.
+    Python drives every tool call — @nanny_tool fires on file_reader and
+    ripgrep. The LLM only synthesises in diagnose_node.
 
-    Raises a NannyStop subclass if the agent is stopped early.
+    Raises a NannyStop subclass if the agent is stopped early by governance.
     The caller (cli/main.py) handles those and presents a user-facing message.
     """
-    llm = ChatOllama(model=MODEL, base_url=OLLAMA_BASE_URL, temperature=0)
-    tools = [file_reader, ripgrep, write_file]
-    if mode == "plan":
-        return _plan_loop(llm, tools, trace_text)
-    return _react_loop(llm, tools, trace_text)
+    _seen_files.clear()  # reset per-run so repeated CLI invocations start fresh
+
+    initial_state: DebugState = {
+        "trace":            trace_text,
+        "file_paths":       [],
+        "search_patterns":  [],
+        "files_read":       "",
+        "search_results":   "",
+        "diagnosis":        "",
+    }
+
+    final_state = _graph.invoke(initial_state)
+    return final_state.get("diagnosis", "[no diagnosis produced]")

@@ -465,11 +465,21 @@ fn handle_tool_call(
             let reason_name = stop_reason_name(reason).to_string();
             {
                 let mut guard = shared.lock().unwrap();
-                append_event(&mut guard, ExecutionEvent::ToolDenied {
-                    ts: now_ms(),
-                    tool: call.tool.clone(),
-                    reason: reason_name.clone(),
-                });
+                // Emit the correct event variant based on why the tool was denied:
+                // ToolDenied  = allowlist violation (LimitsPolicy, fires first)
+                // RuleDenied  = rule or max_calls violation (RuleEvaluator, fires after allowlist)
+                let event = match reason {
+                    StopReason::RuleDenied { rule_name } => ExecutionEvent::RuleDenied {
+                        ts: now_ms(),
+                        tool: call.tool.clone(),
+                        rule_name: rule_name.clone(),
+                    },
+                    _ => ExecutionEvent::ToolDenied {
+                        ts: now_ms(),
+                        tool: call.tool.clone(),
+                    },
+                };
+                append_event(&mut guard, event);
                 mark_stopped(&mut guard, &reason_name);
             }
             BridgeResp::json(200, serde_json::to_string(&denial_from(reason)).unwrap())

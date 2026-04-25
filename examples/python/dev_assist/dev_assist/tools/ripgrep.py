@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import subprocess
 
-from langchain_core.tools import tool as lc_tool
 from nanny_sdk import tool as nanny_tool
 
 _RG_LINE_LIMIT = 50
-_RG_TIMEOUT_S = 15
+_RG_TIMEOUT_S  = 15
 
 
-@lc_tool
 @nanny_tool(cost=8)
 def ripgrep(pattern: str, path: str = ".") -> str:
     """Search for a symbol, function name, or pattern across source files.

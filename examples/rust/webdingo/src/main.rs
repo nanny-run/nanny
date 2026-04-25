@@ -19,9 +19,9 @@
 
 use anyhow::Result;
 use nanny::PolicyContext;
-use rig::client::{CompletionClient, Nothing, ProviderClient};
+use rig::client::{CompletionClient, ProviderClient};
 use rig::completion::Prompt;
-use rig::providers::ollama;
+use rig::providers::openai;
 
 // ── Nanny rule ────────────────────────────────────────────────────────────────
 
@@ -42,6 +42,24 @@ fn detect_loop(ctx: &PolicyContext) -> bool {
     true
 }
 
+// ── Groq client ──────────────────────────────────────────────────────────────
+//
+// Groq provides a free-tier OpenAI-compatible API — reliable structured output,
+// no credit card required. Get a key at console.groq.com, then:
+//   cp .env.example .env   and fill in GROQ_API_KEY.
+//
+// Offline/local fallback: swap openai::Client::from_url(...) for
+//   rig::providers::ollama::Client::from_val(rig::client::Nothing)
+// and change the model string to "mistral" or "qwen2.5:7b".
+
+fn groq_client() -> openai::Client {
+    let api_key = std::env::var("GROQ_API_KEY").unwrap_or_else(|_| {
+        eprintln!("GROQ_API_KEY not set — copy .env.example to .env and add your key");
+        std::process::exit(1);
+    });
+    openai::Client::from_url(&api_key, "https://api.groq.com/openai/v1")
+}
+
 // ── Agent 1: Planner ──────────────────────────────────────────────────────────
 //
 // Governed by [limits.planner] — tight budget, no tools.
@@ -49,9 +67,8 @@ fn detect_loop(ctx: &PolicyContext) -> bool {
 
 #[nanny::agent("planner")]
 async fn plan(topic: &str) -> Result<Vec<String>> {
-    let client = ollama::Client::from_val(Nothing);
-    let agent = client
-        .agent(ollama::MISTRAL)
+    let agent = groq_client()
+        .agent("llama-3.3-70b-versatile")
         .preamble(
             "You are a research planner. Given a topic, respond with 3 to 5 \
              specific URLs that would provide useful information about it. \
@@ -105,9 +122,8 @@ async fn research(topic: &str, urls: Vec<String>) -> Result<Vec<String>> {
         return Ok(vec![]);
     }
 
-    let client = ollama::Client::from_val(Nothing);
-    let summariser = client
-        .agent(ollama::MISTRAL)
+    let summariser = groq_client()
+        .agent("llama-3.3-70b-versatile")
         .preamble(
             "You are a research assistant. Given a URL and its raw content, \
              extract the 2-3 most relevant sentences about the research topic. \
@@ -164,9 +180,8 @@ async fn synthesize(topic: &str, sources: Vec<String>) -> Result<String> {
         sources.join("\n\n---\n\n")
     };
 
-    let client = ollama::Client::from_val(Nothing);
-    let agent = client
-        .agent(ollama::MISTRAL)
+    let agent = groq_client()
+        .agent("llama-3.3-70b-versatile")
         .preamble(
             "You are a technical writer. Given research notes and a topic, write \
              a clear, well-structured report in markdown. Only include information \

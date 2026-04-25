@@ -1,3 +1,6 @@
+# Secrets — never commit
+.env
+
 # Generated output — produced at runtime, not committed
 reports/*.html
 reports/*.md

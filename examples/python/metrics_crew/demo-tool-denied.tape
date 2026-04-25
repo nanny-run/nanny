@@ -19,11 +19,22 @@ Type "cd examples/python/metrics_crew"
 Enter
 Sleep 400ms
 
-# PRE-RECORDING: manually remove "detect_anomalies" from [tools] allowed in nanny.toml,
-# then restore it after recording. ToolDenied fires when the analysis agent calls it
-# after compute_stats. Demonstrates: allowlist enforcement, ToolDenied stop reason.
+# Step 1 — Remove detect_anomalies from the tool allowlist.
+# When the analysis agent calls detect_anomalies, Nanny checks the allowlist,
+# finds it missing, and fires ToolDenied before the function body runs.
+Type "sed -i.bak '/\"detect_anomalies\"/d' nanny.toml"
+Enter
+Sleep 300ms
+
+# Step 2 — Run the pipeline. ToolDenied fires at the detect_anomalies_task.
+# With single-tool tasks the LLM must call detect_anomalies — it cannot
+# route around it. Enforcement is deterministic regardless of model.
 Type "nanny run"
 Enter
 
 Sleep 120s
 
+# Step 3 — Restore nanny.toml after recording.
+Type "git checkout nanny.toml && rm -f nanny.toml.bak"
+Enter
+Sleep 500ms

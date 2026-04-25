@@ -1,3 +1,6 @@
+# Secrets — never commit
+.env
+
 # Python / uv
 __pycache__/
 *.py[cod]

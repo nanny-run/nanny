@@ -116,6 +116,6 @@ def _stop_copy(exc: Exception, kind: str) -> tuple[str, str]:
     if kind == "TimeoutExpired":
         return (
             "Analysis timed out.",
-            "Ollama may be slow or the trace is too large. Try again or raise the timeout.",
+            "The request took too long. Try again or raise the timeout in nanny.toml.",
         )
     return (f"Analysis stopped unexpectedly: {exc}", "")

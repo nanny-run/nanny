@@ -8,6 +8,11 @@ etc.) can be added without breaking the interface.
 from __future__ import annotations
 
 import typer
+from dotenv import load_dotenv
+
+# Load .env if present — no-op when vars are already set (CI/CD, production).
+# Developers: copy .env.example → .env and fill in GROQ_API_KEY.
+load_dotenv()
 
 from nanny_sdk.exceptions import NannyStop
 
