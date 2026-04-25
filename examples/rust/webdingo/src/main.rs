@@ -19,9 +19,9 @@
 
 use anyhow::Result;
 use nanny::PolicyContext;
-use rig::client::{CompletionClient, ProviderClient};
+use rig::client::CompletionClient;
 use rig::completion::Prompt;
-use rig::providers::openai;
+use rig::providers::groq;
 
 // ── Nanny rule ────────────────────────────────────────────────────────────────
 
@@ -48,16 +48,16 @@ fn detect_loop(ctx: &PolicyContext) -> bool {
 // no credit card required. Get a key at console.groq.com, then:
 //   cp .env.example .env   and fill in GROQ_API_KEY.
 //
-// Offline/local fallback: swap openai::Client::from_url(...) for
+// Offline/local fallback: swap groq::Client::new(...) for
 //   rig::providers::ollama::Client::from_val(rig::client::Nothing)
-// and change the model string to "mistral" or "qwen2.5:7b".
+// and change the model string to "qwen2.5:7b" or similar.
 
-fn groq_client() -> openai::Client {
+fn groq_client() -> groq::Client {
     let api_key = std::env::var("GROQ_API_KEY").unwrap_or_else(|_| {
         eprintln!("GROQ_API_KEY not set — copy .env.example to .env and add your key");
         std::process::exit(1);
     });
-    openai::Client::from_url(&api_key, "https://api.groq.com/openai/v1")
+    groq::Client::new(&api_key).expect("failed to create Groq client")
 }
 
 // ── Agent 1: Planner ──────────────────────────────────────────────────────────
@@ -72,6 +72,8 @@ async fn plan(topic: &str) -> Result<Vec<String>> {
         .preamble(
             "You are a research planner. Given a topic, respond with 3 to 5 \
              specific URLs that would provide useful information about it. \
+             Prefer docs.rs, lib.rs, and official documentation pages — avoid \
+             crates.io pages as they do not serve readable content. \
              Return ONLY the URLs, one per line, no bullet points, no explanations.",
         )
         .max_tokens(256)
@@ -103,6 +105,33 @@ async fn plan(topic: &str) -> Result<Vec<String>> {
 
     eprintln!("planner: identified {} URL(s) to investigate", urls.len());
     Ok(urls)
+}
+
+// ── HTML → plain text ────────────────────────────────────────────────────────
+//
+// Strip HTML tags and collapse whitespace before sending page content to the
+// LLM. Raw HTML wastes tokens on markup and hides the actual text near the
+// end of large pages after truncation.
+
+fn strip_html(html: &str) -> String {
+    let mut out = String::with_capacity(html.len() / 3);
+    let mut in_tag = false;
+    let mut last_was_space = false;
+    for ch in html.chars() {
+        match ch {
+            '<' => { in_tag = true; }
+            '>' => {
+                in_tag = false;
+                if !last_was_space { out.push(' '); last_was_space = true; }
+            }
+            _ if in_tag => {}
+            c if c.is_whitespace() => {
+                if !last_was_space { out.push(' '); last_was_space = true; }
+            }
+            c => { out.push(c); last_was_space = false; }
+        }
+    }
+    out.trim().to_string()
 }
 
 // ── Agent 2: Researcher ────────────────────────────────────────────────────────
@@ -154,9 +183,16 @@ async fn research(topic: &str, urls: Vec<String>) -> Result<Vec<String>> {
 
         eprintln!("researcher: fetched {} ({} chars)", url, raw.len());
 
+        // Strip HTML tags first — raw markup wastes tokens on boilerplate and
+        // buries the real text. After stripping, truncate to ~8 000 chars
+        // (~2 000 tokens) to stay safely within Groq's 12 000 TPM free-tier limit.
+        let text = strip_html(&raw);
+        const MAX_CONTENT_CHARS: usize = 8_000;
+        let content: String = text.chars().take(MAX_CONTENT_CHARS).collect();
+
         // LLM summarises the fetched content only.
         let prompt = format!(
-            "Research topic: {topic}\n\nURL: {url}\n\nContent:\n{raw}\n\n\
+            "Research topic: {topic}\n\nURL: {url}\n\nContent:\n{content}\n\n\
              Extract the most relevant information about the topic."
         );
         let summary = summariser.prompt(&prompt).await?;

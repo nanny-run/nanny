@@ -16,7 +16,7 @@ Governance:
                                Duplicate frames in the trace trigger this naturally,
                                making the sample trace a reliable demo without any
                                nanny.toml edits.
-    @nanny_agent("debugger") — activates [limits.debugger] scope for the run.
+    @agent("debugger") — activates [limits.debugger] scope for the run.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from langchain_core.messages import HumanMessage
 from langchain_groq import ChatGroq
 from langgraph.graph import END, START, StateGraph
 
-from nanny_sdk import agent as nanny_agent, rule
+from nanny_sdk import agent, rule
 from nanny_sdk.exceptions import NannyStop  # noqa: F401 — propagates through graph naturally
 
 from dev_assist.config import MODEL
@@ -62,8 +62,10 @@ def check_no_read_loop(ctx: Any) -> bool:
 
 class DebugState(TypedDict):
     trace: str                   # input: full stack trace text
-    file_paths: list[str]        # file paths extracted from trace (duplicates preserved)
-    search_patterns: list[str]   # exception class / key identifiers to search for
+    # file paths extracted from trace (duplicates preserved)
+    file_paths: list[str]
+    # exception class / key identifiers to search for
+    search_patterns: list[str]
     files_read: str              # concatenated file_reader results
     search_results: str          # concatenated ripgrep results
     diagnosis: str               # final LLM synthesis
@@ -72,8 +74,8 @@ class DebugState(TypedDict):
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 _PATH_RE = re.compile(r'File "([^"]+\.(?:py|ts|js|go|rs|java))"')
-_EXC_RE  = re.compile(r"^([A-Z][A-Za-z0-9_]+):\s", re.MULTILINE)
-_VAL_RE  = re.compile(r"(?:KeyError|AttributeError):\s*['\"]?(\w+)['\"]?")
+_EXC_RE = re.compile(r"^([A-Z][A-Za-z0-9_]+):\s", re.MULTILINE)
+_VAL_RE = re.compile(r"(?:KeyError|AttributeError):\s*['\"]?(\w+)['\"]?")
 
 
 def _extract_file_paths(trace: str) -> list[str]:
@@ -201,7 +203,7 @@ _graph = _build_graph()
 # ── Public API ────────────────────────────────────────────────────────────────
 
 
-@nanny_agent("debugger")
+@agent("debugger")
 def run_debug(trace_text: str) -> str:
     """Analyse a stack trace and return a diagnosis.
 

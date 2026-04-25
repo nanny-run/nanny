@@ -10,8 +10,11 @@ dependencies = [
     "typer>=0.12",
     "rich>=13",
     "python-dotenv>=1.0",
-    "nanny-sdk==0.1.7",
+    "nanny-sdk",
 ]
+
+[tool.uv.sources]
+nanny-sdk = { path = "../../../sdks/python" }
 
 [project.scripts]
 metrics-crew = "metrics_crew.cli.main:app"

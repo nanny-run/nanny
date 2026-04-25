@@ -4,10 +4,10 @@ Registered so the agent can attempt it; ToolDenied fires before
 the file is ever written. Demonstrates allowlist enforcement.
 """
 
-from nanny_sdk import tool as nanny_tool
+from nanny_sdk import tool
 
 
-@nanny_tool(cost=5)
+@tool(cost=5)
 def write_file(path: str, content: str) -> str:
     """Write content to a file at path."""
     with open(path, "w") as f:

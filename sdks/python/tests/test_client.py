@@ -37,3 +37,25 @@ def test_health_not_ok(mock_bridge: HTTPServer) -> None:
         {"state": "stopped", "reason": "MaxStepsReached"}
     )
     assert client.health() is False
+
+
+def test_report_stop_rule_posts_correct_payload(mock_bridge: HTTPServer) -> None:
+    """report_stop_rule posts reason, tool, and rule_name to /stop."""
+    mock_bridge.expect_oneshot_request(
+        "/stop",
+        method="POST",
+        json={"reason": "RuleDenied", "tool": "read_file", "rule_name": "no_sensitive_files"},
+    ).respond_with_json({"status": "ok"})
+
+    client.report_stop_rule("read_file", "no_sensitive_files")
+
+    mock_bridge.check_assertions()
+
+
+def test_report_stop_rule_ignores_bridge_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """report_stop_rule is fire-and-forget — bridge unreachable must not raise."""
+    monkeypatch.setenv("NANNY_BRIDGE_PORT", "19999")  # nothing listening here
+    monkeypatch.setenv("NANNY_SESSION_TOKEN", "test-token")
+
+    # Must not raise even though no bridge is running
+    client.report_stop_rule("read_file", "no_sensitive_files")

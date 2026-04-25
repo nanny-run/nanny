@@ -93,3 +93,44 @@ uv run dev debug --trace fixtures/sample_trace.txt
 | `RuleDenied: no_read_loop` | Agent kept re-reading the same files without making progress |
 | `ToolDenied`               | Agent tried `write_file` — not in the allowlist              |
 | `AgentCompleted`           | Diagnosis produced within all limits                         |
+
+## Development
+
+This example uses the published `nanny-sdk` package from PyPI.
+During active development on the nanny SDK itself, switch to a path dependency:
+
+```toml
+# pyproject.toml
+[tool.uv.sources]
+nanny-sdk = { path = "../../../sdks/python" }   # instead of nanny-sdk==<version>
+```
+
+Then run `uv sync` to install from the local source.
+
+The `[tool.uv.sources]` override wires this example to the local SDK. The `nanny` CLI binary (which contains the bridge) is separate — reinstall it from local source so both are in sync:
+
+```sh
+# from the workspace root (nanny/)
+
+# If nanny was installed via Homebrew, unlink it first so the local build takes precedence:
+brew unlink nannyd
+
+cargo install --path crates/cli --force
+```
+
+To switch back to the published version, remove the `[tool.uv.sources]` block and pin the version in `dependencies`:
+
+```toml
+# pyproject.toml
+dependencies = [
+    ...
+    "nanny-sdk==0.1.8",   # pin to the published release
+]
+```
+
+Then run `uv sync` again. Also restore the published `nanny` CLI:
+
+```sh
+cargo uninstall nannyd
+brew link nannyd   # if originally installed via Homebrew
+```

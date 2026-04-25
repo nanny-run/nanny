@@ -203,3 +203,21 @@ def report_stop(reason: str) -> None:
             c.post("/stop", json={"reason": reason}, headers=_headers())
     except Exception:
         pass
+
+
+def report_stop_rule(tool_name: str, rule_name: str) -> None:
+    """POST /stop with RuleDenied metadata so the bridge can emit the NDJSON event.
+
+    Client-side rule denials never reach ``/tool/call``, so the bridge has no
+    other opportunity to append a ``RuleDenied`` event to the stream.
+    Silently ignored if the bridge is unreachable — best-effort only.
+    """
+    try:
+        with _make_client(timeout=2.0) as c:
+            c.post(
+                "/stop",
+                json={"reason": "RuleDenied", "tool": tool_name, "rule_name": rule_name},
+                headers=_headers(),
+            )
+    except Exception:
+        pass

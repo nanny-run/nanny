@@ -1438,6 +1438,7 @@ dependencies = [
     { name = "nanny-sdk" },
     { name = "pandas" },
     { name = "plotly" },
+    { name = "python-dotenv" },
     { name = "rich" },
     { name = "typer" },
 ]
@@ -1450,9 +1451,10 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "crewai", specifier = ">=0.80" },
-    { name = "nanny-sdk", specifier = "==0.1.7" },
+    { name = "nanny-sdk", directory = "../../../sdks/python" },
     { name = "pandas", specifier = ">=2" },
     { name = "plotly", specifier = ">=5" },
+    { name = "python-dotenv", specifier = ">=1.0" },
     { name = "rich", specifier = ">=13" },
     { name = "typer", specifier = ">=0.12" },
 ]
@@ -1687,13 +1689,21 @@ wheels = [
 [[package]]
 name = "nanny-sdk"
 version = "0.1.7"
-source = { registry = "https://pypi.org/simple" }
+source = { directory = "../../../sdks/python" }
 dependencies = [
     { name = "httpx" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/da/4b/e23ac1291a6c69691d5ef8baec7134c5b8373e86daa8ae78099d95b5f225/nanny_sdk-0.1.7.tar.gz", hash = "sha256:83fa6cb08bee7886a356fb1207f77444b38abc7ebdc05494a7d5491d6328afa0", size = 38414, upload-time = "2026-04-19T22:27:08.472Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/5b/46/456a4d9a14444663c5b52768a16c9ad07dca6ca551d4b5eb5830162fd475/nanny_sdk-0.1.7-py3-none-any.whl", hash = "sha256:2902da2fe9e1315e76c845d0c0be1e83cbf2b9bb03bd4b79edcf0189ccc08f04", size = 10030, upload-time = "2026-04-19T22:27:07.181Z" },
+
+[package.metadata]
+requires-dist = [{ name = "httpx", specifier = ">=0.27" }]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "mypy", specifier = ">=1.9" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=0.23" },
+    { name = "pytest-httpserver", specifier = ">=1.0" },
+    { name = "ruff", specifier = ">=0.4" },
 ]
 
 [[package]]

@@ -1074,8 +1074,6 @@ dependencies = [
 [[package]]
 name = "nanny-bridge"
 version = "0.1.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52e01869954b88b3f8fe20202b79fcd0fc108d98c2e69854c84d8c66f19b3f6f"
 dependencies = [
  "nanny-core",
  "nanny-runtime",
@@ -1089,8 +1087,6 @@ dependencies = [
 [[package]]
 name = "nanny-config"
 version = "0.1.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1552f43eb0dfb7b10ecefa398aed8066e00f5f87b9dde44dd230e9647bac8ad4"
 dependencies = [
  "serde",
  "thiserror 1.0.69",
@@ -1100,8 +1096,6 @@ dependencies = [
 [[package]]
 name = "nanny-core"
 version = "0.1.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b66390690a96e345a3502acace16d4dd7a78605d898e7a0584678677d870f866"
 dependencies = [
  "serde",
  "serde_json",
@@ -1111,8 +1105,6 @@ dependencies = [
 [[package]]
 name = "nanny-macros"
 version = "0.1.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "95e3296e8d2cb8cc17c068455335147ac17f611a16b61fba7b04570152b5bee6"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1122,8 +1114,6 @@ dependencies = [
 [[package]]
 name = "nanny-runtime"
 version = "0.1.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "952344b33b61fdc701fefa3873ebd013663c48a4028d6c8d4ef7fb55ea98eaeb"
 dependencies = [
  "nanny-core",
  "serde",
@@ -1135,8 +1125,6 @@ dependencies = [
 [[package]]
 name = "nannyd"
 version = "0.1.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b24b1a3c7c78ae40d94f5131f135985355468289bc470f2b9342fc2bba3a08fb"
 dependencies = [
  "anyhow",
  "clap",

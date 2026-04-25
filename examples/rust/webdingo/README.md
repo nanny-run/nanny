@@ -61,10 +61,28 @@ nanny: stopped — BudgetExhausted
 
 ## Development
 
-This example uses the published `nannyd = "0.1.8"` crate from crates.io.
+This example uses the published `nannyd = "<version>"` crate from crates.io.
 During active development on the nanny crate itself, switch to a path dependency:
 
 ```toml
 # Cargo.toml
 nannyd = { path = "../../../crates/cli" }   # instead of nannyd = "0.1.8"
+```
+
+The path dep wires this example to the local SDK library. The `nanny` CLI binary (which contains the bridge) is separate — reinstall it from local source so both are in sync:
+
+```sh
+# from the workspace root (nanny/)
+
+# If nanny was installed via Homebrew, unlink it first so the local build takes precedence:
+brew unlink nannyd
+
+cargo install --path crates/cli --force
+```
+
+To revert to the published version, restore `nannyd = "0.1.8"` in `Cargo.toml`, then:
+
+```sh
+cargo uninstall nannyd
+brew link nannyd   # if originally installed via Homebrew
 ```

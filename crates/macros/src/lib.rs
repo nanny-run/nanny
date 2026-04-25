@@ -118,7 +118,7 @@ fn expand_tool(input: ItemFn, cost: u64) -> syn::Result<TokenStream2> {
             #(#arg_entries)*
 
             if let Some(__rule_name) = ::nanny::__private::evaluate_local_rules(#fn_str, __nanny_tool_args) {
-                ::nanny::__private::report_stop("RuleDenied");
+                ::nanny::__private::report_stop_rule(#fn_str, __rule_name);
                 ::std::eprintln!("nanny: stopped — RuleDenied: {}", __rule_name);
                 ::std::process::exit(1);
             }

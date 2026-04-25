@@ -18,9 +18,9 @@ mod collector;
 mod rules;
 
 use anyhow::Result;
-use rig::client::{CompletionClient, ProviderClient};
+use rig::client::CompletionClient;
 use rig::completion::Prompt;
-use rig::providers::openai;
+use rig::providers::groq;
 
 // ── Nanny-governed tool ───────────────────────────────────────────────────────
 
@@ -84,17 +84,18 @@ async fn run_review(dir: &str) -> Result<String> {
 
     let combined = reviewed.join("\n\n---\n\n");
 
-    // Groq: free-tier OpenAI-compatible API — reliable output, no credit card.
+    // Groq: free-tier API — reliable output, no credit card.
     // Get a key at console.groq.com, copy .env.example → .env, fill in GROQ_API_KEY.
     //
-    // Offline/local fallback: swap for
+    // Offline/local fallback: swap groq::Client::new(...) for
     //   rig::providers::ollama::Client::from_val(rig::client::Nothing)
     // and change the model string to "qwen2.5:7b" or similar.
     let api_key = std::env::var("GROQ_API_KEY").unwrap_or_else(|_| {
         eprintln!("GROQ_API_KEY not set — copy .env.example to .env and add your key");
         std::process::exit(1);
     });
-    let agent = openai::Client::from_url(&api_key, "https://api.groq.com/openai/v1")
+    let agent = groq::Client::new(&api_key)
+        .expect("failed to create Groq client")
         .agent("llama-3.3-70b-versatile")
         .preamble(
             "You are a senior Rust engineer performing a code review. \

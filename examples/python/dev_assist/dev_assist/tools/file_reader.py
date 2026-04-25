@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from nanny_sdk import tool as nanny_tool
+from nanny_sdk import tool
 
 _FILE_CHAR_LIMIT = 8_000
 
 
-@nanny_tool(cost=5)
+@tool(cost=5)
 def file_reader(path: str) -> str:
     """Read a source file from disk and return its full contents.
 
