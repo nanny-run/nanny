@@ -48,9 +48,12 @@ Output: HTML charts in `reports/` and an incident report Markdown file.
 
 ```bash
 cd examples/python/metrics_crew
-pip install nanny-sdk
+cp .env.example .env
+# Edit .env and set GROQ_API_KEY=<your_key_from_console.groq.com>
 uv sync
 ```
+
+`uv sync` installs all dependencies including `nanny-sdk`. No separate `pip install` needed.
 
 ---
 

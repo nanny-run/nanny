@@ -16,6 +16,16 @@ Demonstrates the complete Nanny developer workflow:
 
 **Offline fallback:** edit one line in `src/main.rs` to swap the Groq client for Ollama (instructions are in the comment above `groq_client()`). Then `ollama pull qwen2.5:7b && ollama serve`.
 
+## Setup
+
+```sh
+cd examples/rust/webdingo
+cp .env.example .env
+# Edit .env and set GROQ_API_KEY=<your_key_from_console.groq.com>
+```
+
+The first `nanny run` compiles the project (`cargo run --release`) before starting — allow 30-60 seconds on the first run. Subsequent runs start immediately.
+
 ## Run
 
 ```sh
