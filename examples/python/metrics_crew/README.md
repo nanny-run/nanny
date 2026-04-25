@@ -40,8 +40,7 @@ Output: HTML charts in `reports/` and an incident report Markdown file.
 ## Prerequisites
 
 - **`nanny` CLI** — macOS: `brew tap nanny-run/nanny && brew install nannyd` · Linux: `curl -fsSL https://install.nanny.run | sh` · Windows: `irm https://install.nanny.run/windows | iex` · or `cargo install nannyd`
-- **Ollama** — `brew install ollama && ollama serve` (keep it running in a separate terminal)
-- **`llama3.1:8b` model** — `ollama pull llama3.1:8b`
+- **Groq API key** — free tier at [console.groq.com](https://console.groq.com) (no credit card required). Copy `.env.example` to `.env` and fill in `GROQ_API_KEY`.
 
 ---
 

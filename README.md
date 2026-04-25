@@ -88,13 +88,13 @@ flowchart TD
 
 ## Sample applications
 
-Four complete agent samples ship in `examples/`. All use [Ollama](https://ollama.com) — no API key required.
+Four complete agent samples ship in `examples/`. All use [Groq](https://console.groq.com) (`llama-3.3-70b-versatile`) — free tier, no credit card required. Copy `.env.example` → `.env` in each example directory and add your `GROQ_API_KEY`.
 
 | Sample                                                         | What it does                                                                                                                                                                                                                                                                                                 | Stop reasons demonstrated                     |
 | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------- |
 | [`examples/rust/webdingo`](examples/rust/webdingo)             | Web research agent (Rust) — fetches pages, synthesises a report. Classic spiral risk.                                                                                                                                                                                                                        | `BudgetExhausted`, `RuleDenied`               |
 | [`examples/rust/qabud`](examples/rust/qabud)                   | Code review agent (Rust) — reads source files, identifies issues, blocks sensitive files before they're opened.                                                                                                                                                                                              | `RuleDenied`, `ToolDenied`, `MaxStepsReached` |
-| [`examples/python/dev_assist`](examples/python/dev_assist)     | Debug agent (LangChain) — given a stack trace, reads relevant files and searches for related symbols.                                                                                                                                                                                                        | `BudgetExhausted`, `RuleDenied`, `ToolDenied` |
+| [`examples/python/dev_assist`](examples/python/dev_assist)     | Debug agent (LangGraph) — given a stack trace, reads relevant files and searches for related symbols. Python drives every tool call; LLM only synthesises the diagnosis.                                                                                                                                     | `BudgetExhausted`, `RuleDenied`, `ToolDenied` |
 | [`examples/python/metrics_crew`](examples/python/metrics_crew) | Multi-agent governance (CrewAI) — four specialized agents with per-role budgets, per-role tool allowlists, and a loop-detection rule. The analysis agent cannot call the reporter's tools. If it tries, `ToolDenied` fires. This is what least-privilege fleet governance looks like in 200 lines of Python. | `BudgetExhausted`, `RuleDenied`, `ToolDenied` |
 
 ```bash
@@ -262,14 +262,25 @@ def run_research(topic: str) -> list[str]:
     return [search_web(topic)]
 ```
 
-Works with any framework — LangChain, CrewAI, plain Python. Stack decorators to combine framework registration with Nanny governance:
+Works with any framework — LangGraph, CrewAI, LangChain, plain Python. In Python-driven pipelines (LangGraph nodes, plain Python loops, CrewAI tasks), use `@nanny_tool` alone — your code calls the function directly and Nanny intercepts every call:
+
+```python
+from nanny_sdk import tool as nanny_tool
+
+@nanny_tool(cost=5)
+def read_file(path: str) -> str:
+    with open(path) as f:
+        return f.read()
+```
+
+When a framework uses its own decorator for tool registration (e.g. LangChain's `@tool`), stack it outside `@nanny_tool` so the framework sees its own wrapper and Nanny intercepts the inner call:
 
 ```python
 from langchain_core.tools import tool as lc_tool
 from nanny_sdk import tool as nanny_tool
 
-@lc_tool                   # outer — LangChain registers for dispatch
-@nanny_tool(cost=5)        # inner — Nanny intercepts before the function runs
+@lc_tool                   # outer — LangChain registers this for LLM dispatch
+@nanny_tool(cost=5)        # inner — Nanny intercepts before the function body runs
 def read_file(path: str) -> str:
     with open(path) as f:
         return f.read()

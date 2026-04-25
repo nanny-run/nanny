@@ -12,13 +12,9 @@ Demonstrates the complete Nanny developer workflow:
 
 - Rust toolchain (`curl https://sh.rustup.rs -sSf | sh`)
 - `nanny` CLI — macOS: `brew tap nanny-run/nanny && brew install nannyd` · Linux: `curl -fsSL https://install.nanny.run | sh` · Windows: `irm https://install.nanny.run/windows | iex` · or `cargo install nannyd`
-- [Ollama](https://ollama.com) running locally with `llama3.2` pulled:
+- **Groq API key** — free tier at [console.groq.com](https://console.groq.com) (no credit card required). Copy `.env.example` to `.env` and fill in `GROQ_API_KEY`.
 
-```sh
-brew install ollama
-ollama serve          # in a separate terminal, or run as a service
-ollama pull llama3.2
-```
+**Offline fallback:** edit one line in `src/main.rs` to swap the Groq client for Ollama (instructions are in the comment above `run_review()`). Then `ollama pull qwen2.5:7b && ollama serve`.
 
 ## Run
 
@@ -53,10 +49,10 @@ The agent reads files and streams the NDJSON event log to stdout in real time:
 
 ## Development
 
-This example uses the published `nannyd = "0.1.7"` crate from crates.io.
+This example uses the published `nannyd = "0.1.8"` crate from crates.io.
 During active development on the nanny crate itself, switch to a path dependency:
 
 ```toml
 # Cargo.toml
-nannyd = { path = "../../../crates/cli" }   # instead of nannyd = "0.1.7"
+nannyd = { path = "../../../crates/cli" }   # instead of nannyd = "0.1.8"
 ```

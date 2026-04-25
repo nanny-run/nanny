@@ -149,10 +149,10 @@ If you are adding a new enforcement rule, it goes in `runtime`. If you are addin
 | ------- | -------------------- |
 | [`examples/rust/webdingo`](examples/rust/webdingo) | `#[nanny::tool]`, `#[nanny::agent]`, `nanny::http_get`, loop-detection rule |
 | [`examples/rust/qabud`](examples/rust/qabud) | `#[nanny::tool]`, content-based rule (`last_tool_args`), allowlist enforcement |
-| [`examples/python/dev_assist`](examples/python/dev_assist) | `@tool`, `@rule`, `@agent` — LangChain debug agent, ReAct + Plan-and-Execute modes |
-| [`examples/python/metrics_crew`](examples/python/metrics_crew) | `@tool`, `@rule`, `@agent` — CrewAI multi-agent pipeline, per-role limits |
+| [`examples/python/dev_assist`](examples/python/dev_assist) | `@tool`, `@rule`, `@agent` — LangGraph debug agent (Groq), Python-driven StateGraph nodes |
+| [`examples/python/metrics_crew`](examples/python/metrics_crew) | `@tool`, `@rule`, `@agent` — CrewAI multi-agent pipeline (Groq), single-tool tasks, per-role limits |
 
-Rust examples use Ollama (local LLM) and depend on the published `nannyd` from crates.io. Python examples use Ollama and depend on the published `nanny-sdk` from PyPI. All four are the best starting point for understanding how the pieces fit together before touching the crate or SDK internals.
+All four examples use Groq (`llama-3.3-70b-versatile`, free tier) and depend on the published crates (`nannyd` from crates.io, `nanny-sdk` from PyPI). Copy `.env.example` → `.env` in each directory and set `GROQ_API_KEY`. Each example also documents a one-line swap to Ollama for offline use. All four are the best starting point for understanding how the pieces fit together before touching the crate or SDK internals.
 
 ---
 

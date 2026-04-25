@@ -2,32 +2,27 @@
 
 Imagine hiring a detective to investigate a crime scene. The detective reads evidence, follows leads, and delivers a verdict. But without any rules, this detective might spend hours re-reading the same file or chasing every reference forever — racking up an enormous bill in the process.
 
-`dev_assist` is a LangChain agent that reads a Python stack trace, hunts down the relevant source files, and diagnoses the bug. Nanny plays the role of the detective agency: it sets a case budget and a deadline. When either runs out, the case closes — no exceptions.
+`dev_assist` is a LangGraph agent that reads a Python stack trace, hunts down the relevant source files, and diagnoses the bug. Nanny plays the role of the detective agency: it sets a case budget and a deadline. When either runs out, the case closes — no exceptions.
 
 ---
 
 ## What it does
 
-Given a stack trace file, the agent:
+Given a stack trace file, the agent runs a four-node LangGraph pipeline:
 
-1. Extracts file paths mentioned in the trace
-2. Reads those files using a governed `file_reader` tool (`@tool(cost=5)`)
-3. Searches the codebase for related symbols using ripgrep (`@tool(cost=8)`)
-4. Asks a local LLM (Ollama) to diagnose the bug based on what it found
-5. Prints the diagnosis to the terminal
+1. **Extract** — pulls file paths and symbol names from the trace (pure Python, no tools)
+2. **Read files** — reads each extracted path using a governed `file_reader` tool (`@tool(cost=5)`)
+3. **Search** — searches for related symbols using ripgrep (`@tool(cost=8)`)
+4. **Diagnose** — asks Groq (`llama-3.3-70b-versatile`) to diagnose the bug based on what was found
 
-Two modes:
-
-- `--mode react` (default) — the agent reasons step-by-step, deciding what to read next as it goes
-- `--mode plan` — the agent plans first (which files, which searches), then executes deterministically
+Python drives every tool call directly. The LLM only reasons in the final synthesis step — enforcement is guaranteed regardless of model behavior.
 
 ---
 
 ## Prerequisites
 
 - **`nanny` CLI** — macOS: `brew tap nanny-run/nanny && brew install nannyd` · Linux: `curl -fsSL https://install.nanny.run | sh` · Windows: `irm https://install.nanny.run/windows | iex` · or `cargo install nannyd`
-- **Ollama** — `brew install ollama && ollama serve` (keep it running in a separate terminal)
-- **`llama3.1:8b` model** — `ollama pull llama3.1:8b`
+- **Groq API key** — free tier at [console.groq.com](https://console.groq.com) (no credit card required). Copy `.env.example` to `.env` and fill in `GROQ_API_KEY`.
 
 ---
 
@@ -53,10 +48,7 @@ To trigger a specific stop reason, edit `nanny.toml` and lower the relevant limi
 
 ```bash
 # Trigger BudgetExhausted — lower the cost ceiling
-nanny run --limits=budget-demo
-
-# Trigger RuleDenied — run against a file that makes the agent loop
-nanny run --limits=loop-demo
+nanny run --limits=debugger
 ```
 
 ---
@@ -67,7 +59,6 @@ All decorators are no-ops outside `nanny run`. The agent runs normally with no b
 
 ```bash
 uv run dev debug --trace fixtures/sample_trace.txt
-uv run dev debug --trace fixtures/sample_trace.txt --mode plan
 ```
 
 ---

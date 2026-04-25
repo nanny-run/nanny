@@ -74,13 +74,14 @@ When the Rust SDK macros or Python SDK decorators are active, additional events 
 |-------|-------------|
 | `StepCompleted` | After each agent step |
 | `ToolAllowed` | When Nanny permits a tool call |
-| `ToolDenied` | When Nanny blocks a tool call (not in allowlist, or rule fired) |
+| `ToolDenied` | When a tool call is blocked because the tool is not in the allowlist |
+| `RuleDenied` | When a tool call is blocked by a custom rule or a per-tool `max_calls` limit |
 | `ToolFailed` | When a permitted tool fails at runtime (network error, bad args, etc.) |
 | `AgentScopeEntered` | When a `#[nanny::agent("name")]` function is entered |
 | `AgentScopeExited` | When a `#[nanny::agent("name")]` function returns |
 
-`ToolFailed` is distinct from `ToolDenied` — the tool was allowed but encountered an error.
-No cost is charged on tool failure.
+`ToolDenied` and `RuleDenied` are distinct denial events — `ToolDenied` means the tool was not permitted at all; `RuleDenied` means the tool was permitted but a rule blocked this specific call.
+`ToolFailed` is different from both — the tool was allowed and called, but encountered a runtime error. No cost is charged on failure.
 
 ## Using the log
 
@@ -90,8 +91,8 @@ The event log is designed to be piped into standard tools:
 # Count total steps
 cat nanny.log | grep StepCompleted | wc -l
 
-# Find all denied tools
-cat nanny.log | jq 'select(.event == "ToolDenied")'
+# Find all denied tool calls (allowlist blocks and rule denials)
+cat nanny.log | jq 'select(.event == "ToolDenied" or .event == "RuleDenied")'
 
 # Check why a run stopped
 cat nanny.log | jq 'select(.event == "ExecutionStopped") | .reason'
