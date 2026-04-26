@@ -43,10 +43,10 @@ The agent fetches pages and streams the NDJSON event log to stdout in real time:
 
 ```
 {"event":"ExecutionStarted","ts":1700000000000,...}
-{"event":"ToolCalled","tool":"fetch_url","cost":20,...}
-{"event":"ToolAllowed","tool":"fetch_url",...}
+{"event":"ToolAllowed","ts":1700000001000,"tool":"fetch_url"}
+{"event":"StepCompleted","ts":1700000001100,"step":1}
 ...
-{"event":"ExecutionStopped","reason":"BudgetExhausted","steps":15,"cost_spent":300,...}
+{"event":"ExecutionStopped","ts":1700000018400,"reason":"BudgetExhausted","steps":15,"cost_spent":300,"elapsed_ms":18400}
 nanny: stopped — BudgetExhausted
 ```
 

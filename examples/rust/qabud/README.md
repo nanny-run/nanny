@@ -44,10 +44,10 @@ The agent reads files and streams the NDJSON event log to stdout in real time:
 
 ```
 {"event":"ExecutionStarted","ts":1700000000000,...}
-{"event":"ToolCalled","tool":"read_file","cost":10,...}
-{"event":"ToolAllowed","tool":"read_file",...}
+{"event":"ToolAllowed","ts":1700000001000,"tool":"read_file"}
+{"event":"StepCompleted","ts":1700000001100,"step":1}
 ...
-{"event":"ExecutionStopped","reason":"AgentCompleted","steps":8,"cost_spent":80,...}
+{"event":"ExecutionStopped","ts":1700000010000,"reason":"AgentCompleted","steps":8,"cost_spent":80,"elapsed_ms":10000}
 ```
 
 **Stop reasons you may see:**

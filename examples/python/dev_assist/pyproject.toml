@@ -10,11 +10,8 @@ dependencies = [
     "typer>=0.12",
     "rich>=13",
     "python-dotenv>=1.0",
-    "nanny-sdk",
+    "nanny-sdk==0.1.8",
 ]
-
-[tool.uv.sources]
-nanny-sdk = { path = "../../../sdks/python" }
 
 [project.scripts]
 dev = "dev_assist.cli.main:app"
