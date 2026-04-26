@@ -9,10 +9,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
-- **All example apps now use Groq** (`llama-3.3-70b-versatile`) instead of Ollama. Groq has a
-  free tier (14,400 requests/day, no credit card required) and reliable structured function
-  calling via the OpenAI-compatible API. Each example ships an `.env.example` and documents a
-  one-line swap back to Ollama for offline use.
+- **Example apps switch from Ollama to hosted providers** — `webdingo`, `qabud`, and `dev_assist`
+  now use Groq (`llama-3.3-70b-versatile`): free tier, no credit card required, reliable structured
+  function calling. `metrics_crew` uses OpenAI (`gpt-4.1-nano`): the 12-task CrewAI pipeline
+  accumulates context across tasks and needs a larger context window than Groq's free tier provides.
+  Each example ships an `.env.example` and documents a one-line swap back to Ollama for offline use.
 - **`dev_assist` rewritten as a LangGraph agent** — replaced the LangChain legacy ReAct agent
   with a LangGraph `StateGraph` with four explicit Python nodes: extract, read files, search,
   diagnose. Python drives every tool call directly; the LLM only reasons in the final synthesis

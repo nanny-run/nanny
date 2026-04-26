@@ -25,4 +25,4 @@ Sleep 400ms
 Type "nanny run --limits=demo-steps"
 Enter
 
-Sleep 110s
+Sleep 15s

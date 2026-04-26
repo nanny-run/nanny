@@ -19,11 +19,22 @@ Type "cd examples/python/dev_assist"
 Enter
 Sleep 400ms
 
-# ToolDenied — write_file is absent from [tools] allowed.
-# Plan mode reads the trace files, diagnoses the bug, then deterministically
-# calls write_file to apply the fix. ToolDenied fires before any file is written.
+# Step 1 — Remove write_file from the tool allowlist.
+# When apply_patch_node calls write_file, Nanny checks the allowlist,
+# finds it missing, and fires ToolDenied before the file body runs.
+Type "sed -i.bak '/\"write_file\"/d' nanny.toml"
+Enter
+Sleep 300ms
+
+# Step 2 — Run the pipeline. ToolDenied fires at apply_patch_node.
+# read_files_node deduplicates paths so max_calls is never exhausted first.
 # Demonstrates: allowlist enforcement, ToolDenied stop reason, @nanny_tool interception.
-Type "nanny run --limits=demo-tool-denied -- --mode plan"
+Type "nanny run --limits=demo-tool-denied"
 Enter
 
-Sleep 70s
+Sleep 25s
+
+# Step 3 — Restore nanny.toml after recording.
+Type "git checkout nanny.toml && rm -f nanny.toml.bak"
+Enter
+Sleep 500ms

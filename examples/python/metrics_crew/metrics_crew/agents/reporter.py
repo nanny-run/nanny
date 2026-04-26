@@ -14,12 +14,12 @@ Exports:
     write_report_task()— factory for the report drafting and saving task.
 """
 
-from crewai import Agent, LLM, Task
+from crewai import Agent, Task
 
-from metrics_crew.config import DEFAULT_OUTPUT_DIR, MODEL
+from metrics_crew.config import DEFAULT_OUTPUT_DIR, make_llm
 from metrics_crew.tools import write_report
 
-_llm = LLM(model=MODEL)
+_llm = make_llm()
 
 reporter_agent = Agent(
     role="Incident Reporter",

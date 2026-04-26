@@ -94,10 +94,10 @@ def _stop_copy(exc: Exception, kind: str) -> tuple[str, str]:
         )
     if kind == "RuleDenied":
         rule = getattr(exc, "rule_name", "") or "unknown"
-        if rule == "no_read_loop":
+        if rule == "file_reader.max_calls":
             return (
-                "The agent got stuck reading the same files repeatedly.",
-                "Try a more specific trace or a narrower file path.",
+                "The agent read too many files and was stopped.",
+                "Try a more specific trace, or raise max_calls in nanny.toml.",
             )
         return (
             "The agent was stopped by a policy rule.",

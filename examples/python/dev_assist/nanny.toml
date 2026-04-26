@@ -37,26 +37,28 @@ cost    = 100
 timeout = 120000
 
 [limits.demo-rule]
-# RuleDenied (no_read_loop): generous budget gives the agent enough runway
-# to read all 5 files in the complex trace. Rule fires on the 5th total
-# file_reader call. timeout=90000: cold model load ~28s + 5 LLM calls ~5s each.
+# RuleDenied (file_reader.max_calls): demo-rule-denied tape lowers max_calls to 3
+# via sed before running, so RuleDenied fires on the 4th file_reader call.
+# Generous budget so the agent has runway to reach the cap.
+# timeout=90000: cold model load ~28s + up to 3 file reads + 3 LLM calls.
 steps   = 50
 cost    = 500
 timeout = 90000
 
 [limits.demo-tool-denied]
 # ToolDenied: generous limits give the agent enough runway to diagnose the bug
-# and attempt write_file to apply the fix. write_file is absent from [tools] allowed
-# so ToolDenied fires before any file is written.
-# timeout=60000 matches [limits.debugger] so the full patch cycle can complete.
+# and reach apply_patch_node. demo-tool-denied tape removes write_file from
+# [tools] allowed via sed before running, so ToolDenied fires before any file
+# is written. timeout=60000 matches [limits.debugger] for the full patch cycle.
 steps   = 30
 cost    = 200
 timeout = 60000
 
 [tools]
-# file_reader and ripgrep are permitted.
-# write_file is intentionally absent — ToolDenied fires if the LLM hallucinates it.
-allowed = ["file_reader", "ripgrep"]
+# file_reader, ripgrep, and write_file are all permitted in normal operation.
+# demo-tool-denied tape removes write_file from this list via sed before running,
+# so ToolDenied fires when apply_patch_node calls it.
+allowed = ["file_reader", "ripgrep", "write_file"]
 
 [tools.file_reader]
 max_calls     = 15

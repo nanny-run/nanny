@@ -40,7 +40,7 @@ Output: HTML charts in `reports/` and an incident report Markdown file.
 ## Prerequisites
 
 - **`nanny` CLI** — macOS: `brew tap nanny-run/nanny && brew install nannyd` · Linux: `curl -fsSL https://install.nanny.run | sh` · Windows: `irm https://install.nanny.run/windows | iex` · or `cargo install nannyd`
-- **Groq API key** — free tier at [console.groq.com](https://console.groq.com) (no credit card required). Copy `.env.example` to `.env` and fill in `GROQ_API_KEY`.
+- **OpenAI API key** — get yours at [platform.openai.com/api-keys](https://platform.openai.com/api-keys). Copy `.env.example` to `.env` and fill in `OPENAI_API_KEY`.
 
 ---
 
@@ -49,7 +49,7 @@ Output: HTML charts in `reports/` and an incident report Markdown file.
 ```bash
 cd examples/python/metrics_crew
 cp .env.example .env
-# Edit .env and set GROQ_API_KEY=<your_key_from_console.groq.com>
+# Edit .env and set OPENAI_API_KEY=<your_key_from_platform.openai.com>
 uv sync
 ```
 

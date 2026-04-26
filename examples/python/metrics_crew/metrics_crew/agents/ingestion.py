@@ -13,12 +13,12 @@ Exports:
     load_metrics_task()    — factory for the dataset loading task.
 """
 
-from crewai import Agent, LLM, Task
+from crewai import Agent, Task
 
-from metrics_crew.config import MODEL
+from metrics_crew.config import make_llm
 from metrics_crew.tools import load_metrics, validate_schema
 
-_llm = LLM(model=MODEL)
+_llm = make_llm()
 
 ingestion_agent = Agent(
     role="Data Ingestion Specialist",

@@ -30,7 +30,7 @@ Task chain (sequential):
 Governance:
     @rule("no_analysis_loop")   — fires if compute_stats is called 5× in a row
                                   (safeguard against runaway analysis loops)
-    @nanny_agent("analysis")    — activates [limits.analysis] scope for the run
+    @agent("analysis")    — activates [limits.analysis] scope for the run
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ from typing import Any
 
 from crewai import Crew, Process
 
-from nanny_sdk import agent as nanny_agent, rule
+from nanny_sdk import agent, rule
 from nanny_sdk.exceptions import NannyStop  # noqa: F401 — re-exported for callers
 
 from metrics_crew.agents import (
@@ -95,7 +95,7 @@ class PipelineResult:
 # ── Pipeline entry point ──────────────────────────────────────────────────────
 
 
-@nanny_agent("analysis")
+@agent("analysis")
 def run_pipeline(
     data_path: str,
     output_dir: str = DEFAULT_OUTPUT_DIR,
@@ -112,15 +112,18 @@ def run_pipeline(
 
     # ── Phase 1: Ingestion ────────────────────────────────────────────────────
     t_validate = validate_schema_task(data_path)
-    t_load     = load_metrics_task(data_path, context=[t_validate])
+    t_load = load_metrics_task(data_path, context=[t_validate])
 
     # ── Phase 2: Analysis ─────────────────────────────────────────────────────
-    t_stats_cpu       = compute_stats_task("cpu",        data_path, context=[t_load])
-    t_stats_error     = compute_stats_task("error_rate", data_path, context=[t_load])
-    t_anomalies_cpu   = detect_anomalies_task("cpu",        data_path, context=[t_load])
-    t_anomalies_error = detect_anomalies_task("error_rate", data_path, context=[t_load])
-    t_correlate       = correlate_signals_task(data_path, context=[t_load])
-    t_synthesis       = synthesis_task(
+    t_stats_cpu = compute_stats_task("cpu",        data_path, context=[t_load])
+    t_stats_error = compute_stats_task(
+        "error_rate", data_path, context=[t_load])
+    t_anomalies_cpu = detect_anomalies_task(
+        "cpu",        data_path, context=[t_load])
+    t_anomalies_error = detect_anomalies_task(
+        "error_rate", data_path, context=[t_load])
+    t_correlate = correlate_signals_task(data_path, context=[t_load])
+    t_synthesis = synthesis_task(
         context=[
             t_stats_cpu, t_stats_error,
             t_anomalies_cpu, t_anomalies_error,
@@ -129,9 +132,12 @@ def run_pipeline(
     )
 
     # ── Phase 3: Visualisation ────────────────────────────────────────────────
-    t_chart_cpu     = generate_chart_task("cpu",        data_path, output_dir, context=[t_synthesis])
-    t_chart_error   = generate_chart_task("error_rate", data_path, output_dir, context=[t_synthesis])
-    t_chart_latency = generate_chart_task("latency",    data_path, output_dir, context=[t_synthesis])
+    t_chart_cpu = generate_chart_task(
+        "cpu",        data_path, output_dir, context=[t_synthesis])
+    t_chart_error = generate_chart_task(
+        "error_rate", data_path, output_dir, context=[t_synthesis])
+    t_chart_latency = generate_chart_task(
+        "latency",    data_path, output_dir, context=[t_synthesis])
 
     # ── Phase 4: Report ───────────────────────────────────────────────────────
     t_report = write_report_task(
@@ -153,7 +159,6 @@ def run_pipeline(
         verbose=True,
     )
 
-    # NannyStop(BaseException) propagates through crew.kickoff() naturally.
     result = crew.kickoff()
 
     # The last task is write_report_task — its output is the saved file path.

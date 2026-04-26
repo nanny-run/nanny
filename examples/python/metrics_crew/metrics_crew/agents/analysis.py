@@ -20,12 +20,12 @@ Exports:
     synthesis_task()        — factory for the pure-synthesis reasoning task.
 """
 
-from crewai import Agent, LLM, Task
+from crewai import Agent, Task
 
-from metrics_crew.config import MODEL
+from metrics_crew.config import make_llm
 from metrics_crew.tools import compute_stats, correlate_signals, detect_anomalies
 
-_llm = LLM(model=MODEL)
+_llm = make_llm()
 
 analysis_agent = Agent(
     role="Metrics Analyst",

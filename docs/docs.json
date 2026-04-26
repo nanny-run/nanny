@@ -7,13 +7,13 @@
     "light": "#ff8800",
     "dark": "#a64f00"
   },
-  "favicon": "/favicon.svg",
+  "favicon": "/logo/favicon.svg",
   "logo": {
     "light": "/logo/light.svg",
     "dark": "/logo/dark.svg"
   },
   "appearance": {
-    "default": "light"
+    "default": "dark"
   },
   "fonts": {
     "family": "Reddit Sans"

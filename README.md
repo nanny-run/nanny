@@ -88,7 +88,7 @@ flowchart TD
 
 ## Sample applications
 
-Four complete agent samples ship in `examples/`. All use [Groq](https://console.groq.com) (`llama-3.3-70b-versatile`) — free tier, no credit card required. Copy `.env.example` → `.env` in each example directory and add your `GROQ_API_KEY`.
+Four complete agent samples ship in `examples/`. Three use [Groq](https://console.groq.com) (`llama-3.3-70b-versatile`, free tier — no credit card required); `metrics_crew` uses OpenAI (`gpt-4.1-nano`). Copy `.env.example` → `.env` in each example directory and add the relevant API key.
 
 | Sample                                                         | What it does                                                                                                                                                                                                                                                                                                 | Stop reasons demonstrated                     |
 | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------- |

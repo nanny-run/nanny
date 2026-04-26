@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "metrics_crew — CrewAI incident analysis pipeline governed by Nanny"
 requires-python = ">=3.11"
 dependencies = [
-    "crewai>=0.80",
+    "crewai[litellm]>=0.80",
     "pandas>=2",
     "plotly>=5",
     "typer>=0.12",

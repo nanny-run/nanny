@@ -32,7 +32,7 @@ Sleep 300ms
 Type "nanny run"
 Enter
 
-Sleep 90s
+Sleep 35s
 
 # Step 3 — Restore nanny.toml after recording.
 Type "git checkout nanny.toml && rm -f nanny.toml.bak"

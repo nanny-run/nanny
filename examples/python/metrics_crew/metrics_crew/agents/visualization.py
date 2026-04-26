@@ -14,12 +14,12 @@ Exports:
     generate_chart_task() — factory for one chart generation task.
 """
 
-from crewai import Agent, LLM, Task
+from crewai import Agent, Task
 
-from metrics_crew.config import DEFAULT_OUTPUT_DIR, MODEL
+from metrics_crew.config import DEFAULT_OUTPUT_DIR, make_llm
 from metrics_crew.tools import generate_chart
 
-_llm = LLM(model=MODEL)
+_llm = make_llm()
 
 viz_agent = Agent(
     role="Visualization Engineer",
