@@ -25,4 +25,4 @@ Sleep 400ms
 Type 'nanny run --limits=budget-demo -- "best Rust HTTP clients"'
 Enter
 
-Sleep 80s
+Sleep 35s

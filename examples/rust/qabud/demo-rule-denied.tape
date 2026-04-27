@@ -26,4 +26,4 @@ Sleep 400ms
 Type "nanny run --limits=rule-demo"
 Enter
 
-Sleep 60s
+Sleep 35s
