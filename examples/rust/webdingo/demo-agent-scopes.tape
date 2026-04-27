@@ -24,4 +24,4 @@ Sleep 400ms
 Type 'nanny run --limits=agent-scopes-demo -- "best Rust HTTP clients"'
 Enter
 
-Sleep 95s
+Sleep 35s

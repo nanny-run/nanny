@@ -75,12 +75,12 @@ flowchart TD
 
 ## The Nanny ecosystem
 
-| Layer                      | What it does                                                                                                                             |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| **Nanny CLI**              | Hard timeout, step, and cost limits for any agent process in any language.                                                               |
-| **Rust SDK**               | Per-function cost metering, allowlist enforcement, and custom rules — in-process.                                                        |
-| **Python SDK**             | Per-function and per-role governance for Python agents — each agent in your fleet gets its own budget, tool allowlist, and custom rules. |
-| **Nanny Cloud** _(v0.2.0)_ | Durable audit logs, team dashboards, org-level budget aggregation, and cross-process fleet enforcement.                                  |
+| Layer                           | What it does                                                                                                                             |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| **Nanny CLI**                   | Hard timeout, step, and cost limits for any agent process in any language.                                                               |
+| **Rust SDK**                    | Per-function cost metering, allowlist enforcement, and custom rules — in-process.                                                        |
+| **Python SDK**                  | Per-function and per-role governance for Python agents — each agent in your fleet gets its own budget, tool allowlist, and custom rules. |
+| **Nanny Cloud** _(Coming soon)_ | Durable audit logs, team dashboards, org-level budget aggregation, and cross-process fleet enforcement.                                  |
 
 → Full docs at [docs.nanny.run](https://docs.nanny.run)
 
