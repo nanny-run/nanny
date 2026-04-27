@@ -1,8 +1,8 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/nanny-run/nanny/next/assets/nanny-logo-dark.svg" />
-    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/nanny-run/nanny/next/assets/nanny-logo-light.svg" />
-    <img src="https://raw.githubusercontent.com/nanny-run/nanny/next/assets/nanny-logo-light.svg" alt="Nanny" height="80" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/nanny-run/nanny/main/assets/nanny-logo-dark.svg" />
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/nanny-run/nanny/main/assets/nanny-logo-light.svg" />
+    <img src="https://raw.githubusercontent.com/nanny-run/nanny/main/assets/nanny-logo-light.svg" alt="Nanny" height="80" />
   </picture>
 </p>
 
@@ -196,7 +196,7 @@ timeout = 120000
 allowed = ["http_get", "read_file"]   # anything not listed is denied
 ```
 
-![Nanny demo — BudgetExhausted stops a web research agent mid-run](https://raw.githubusercontent.com/nanny-run/nanny/next/assets/demo/webdingo-budget-exhausted.gif)
+![Nanny demo — BudgetExhausted stops a web research agent mid-run](https://raw.githubusercontent.com/nanny-run/nanny/main/assets/demo/webdingo-budget-exhausted.gif)
 
 ---
 
@@ -233,7 +233,7 @@ async fn run_research(topic: &str) {
 
 All macros are no-ops when running outside `nanny run` — no enforcement overhead.
 
-![Nanny demo — named agent scopes (planner → researcher → synthesizer) entering and exiting](https://raw.githubusercontent.com/nanny-run/nanny/next/assets/demo/webdingo-agent-scopes.gif)
+![Nanny demo — named agent scopes (planner → researcher → synthesizer) entering and exiting](https://raw.githubusercontent.com/nanny-run/nanny/main/assets/demo/webdingo-agent-scopes.gif)
 
 → Full Rust SDK guide at [docs.nanny.run/v0.1/guides/rust-sdk](https://docs.nanny.run/v0.1/guides/rust-sdk)
 

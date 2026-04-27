@@ -1,8 +1,8 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/nanny-run/nanny/next/assets/nanny-logo-dark.svg" />
-    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/nanny-run/nanny/next/assets/nanny-logo-light.svg" />
-    <img src="https://raw.githubusercontent.com/nanny-run/nanny/next/assets/nanny-logo-light.svg" alt="Nanny" height="80" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/nanny-run/nanny/main/assets/nanny-logo-dark.svg" />
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/nanny-run/nanny/main/assets/nanny-logo-light.svg" />
+    <img src="https://raw.githubusercontent.com/nanny-run/nanny/main/assets/nanny-logo-light.svg" alt="Nanny" height="80" />
   </picture>
 </p>
 
@@ -89,7 +89,7 @@ def run_research_loop(query: str) -> str:
 
 Activates `[limits.researcher]` from `nanny.toml` for the duration of the function. Limits revert on exit, including on exception. Each role runs under its own budget and tool allowlist — hitting the analysis ceiling does not affect the reporter, and the analysis agent cannot call the reporter's tools.
 
-![metrics_crew — ingestion, analysis, visualization, and reporter agent scopes entering and exiting](https://raw.githubusercontent.com/nanny-run/nanny/next/assets/demo/metrics-crew-agent-scopes.gif)
+![metrics_crew — ingestion, analysis, visualization, and reporter agent scopes entering and exiting](https://raw.githubusercontent.com/nanny-run/nanny/main/assets/demo/metrics-crew-agent-scopes.gif)
 
 ---
 
@@ -147,4 +147,4 @@ When a limit is exceeded, a `NannyStop` exception is raised with one of these re
 
 - [GitHub](https://github.com/nanny-run/nanny)
 - [Documentation](https://docs.nanny.run)
-- [Changelog](https://github.com/nanny-run/nanny/blob/next/CHANGELOG.md)
+- [Changelog](https://github.com/nanny-run/nanny/blob/main/CHANGELOG.md)

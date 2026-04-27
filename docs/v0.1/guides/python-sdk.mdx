@@ -83,7 +83,7 @@ cost_per_call = 10   # nanny.toml cost overrides the decorator default
 
 <Frame>
   <img
-    src="https://raw.githubusercontent.com/nanny-run/nanny/next/assets/demo/metrics-crew-tool-denied.gif"
+    src="https://raw.githubusercontent.com/nanny-run/nanny/main/assets/demo/metrics-crew-tool-denied.gif"
     alt="metrics_crew — ToolDenied fires when the analysis agent calls write_report, a tool outside its allowlist"
   />
 </Frame>
@@ -140,7 +140,7 @@ All fields are live. Before each rule evaluation, the SDK fetches current counte
 
 <Frame>
   <img
-    src="https://raw.githubusercontent.com/nanny-run/nanny/next/assets/demo/metrics-crew-rule-denied.gif"
+    src="https://raw.githubusercontent.com/nanny-run/nanny/main/assets/demo/metrics-crew-rule-denied.gif"
     alt="metrics_crew — RuleDenied fires on the loop-detection rule, stopping the analysis agent from repeating the same computation"
   />
 </Frame>
@@ -174,7 +174,7 @@ Works identically for async functions. Limits revert on exit whether the functio
 
 <Frame>
   <img
-    src="https://raw.githubusercontent.com/nanny-run/nanny/next/assets/demo/metrics-crew-agent-scopes.gif"
+    src="https://raw.githubusercontent.com/nanny-run/nanny/main/assets/demo/metrics-crew-agent-scopes.gif"
     alt="metrics_crew running under nanny run — ingestion, analysis, visualization, and reporter agent scopes entering and exiting with structured NDJSON events"
   />
 </Frame>
@@ -220,7 +220,7 @@ You do not need to handle stop reasons in most agent code. They propagate up the
 
 <Frame>
   <img
-    src="https://raw.githubusercontent.com/nanny-run/nanny/next/assets/demo/metrics-crew-budget-exhausted.gif"
+    src="https://raw.githubusercontent.com/nanny-run/nanny/main/assets/demo/metrics-crew-budget-exhausted.gif"
     alt="metrics_crew — BudgetExhausted stops the analysis agent when it hits its cost ceiling"
   />
 </Frame>
@@ -349,13 +349,15 @@ The key properties this gives you:
 
 <Frame>
   <img
-    src="https://raw.githubusercontent.com/nanny-run/nanny/next/assets/demo/metrics-crew-max-steps.gif"
+    src="https://raw.githubusercontent.com/nanny-run/nanny/main/assets/demo/metrics-crew-max-steps.gif"
     alt="metrics_crew — MaxStepsReached stops the analysis agent after it exhausts its step allowance"
   />
 </Frame>
 
 <Note>
-  **Scope:** All agents in this pattern run within a single Python process. This covers CrewAI, LangGraph, AutoGen, and any framework that orchestrates agents in a single runtime. Cross-process fleet enforcement is coming in v0.2.0.
+  **Scope:** All agents in this pattern run within a single Python process. This
+  covers CrewAI, LangGraph, AutoGen, and any framework that orchestrates agents
+  in a single runtime. Cross-process fleet enforcement is coming in v0.2.0.
 </Note>
 
 See [`examples/python/metrics_crew`](https://github.com/nanny-run/nanny/tree/main/examples/python/metrics_crew) for the complete working implementation of this pattern with four agents, Plotly chart generation, and a full incident report output.

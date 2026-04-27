@@ -131,10 +131,10 @@ The repository has two independent build systems: a Rust workspace under `crates
 
 **Python SDK** — lives at `sdks/python/`. Published as `nanny-sdk` on PyPI. Toolchain: `uv` (package manager), `hatchling` (build backend), `pytest` + `pytest-httpserver` (tests), `ruff` (lint), `mypy` (type checking). The root `Cargo.toml` workspace does not include `sdks/` — there is no toolchain collision.
 
-| Path | What it is |
-| ---- | ---------- |
-| `sdks/python/nanny_sdk/` | The importable package (`from nanny_sdk import tool, rule, agent`) |
-| `sdks/python/tests/` | Unit tests — all use a `mock_bridge` fixture, no real bridge required |
+| Path                         | What it is                                                             |
+| ---------------------------- | ---------------------------------------------------------------------- |
+| `sdks/python/nanny_sdk/`     | The importable package (`from nanny_sdk import tool, rule, agent`)     |
+| `sdks/python/tests/`         | Unit tests — all use a `mock_bridge` fixture, no real bridge required  |
 | `sdks/python/pyproject.toml` | Package metadata, build config, tool config (`ruff`, `mypy`, `pytest`) |
 
 If you are adding a new enforcement rule, it goes in `runtime`. If you are adding a new event type, it goes in `core/src/events/event.rs`. If you are changing CLI behaviour, it goes in `cli/src/main.rs`.
@@ -145,11 +145,11 @@ If you are adding a new enforcement rule, it goes in `runtime`. If you are addin
 
 `examples/` contains complete agents that exercise the full SDK — two Rust and two Python:
 
-| Example | What it demonstrates |
-| ------- | -------------------- |
-| [`examples/rust/webdingo`](examples/rust/webdingo) | `#[nanny::tool]`, `#[nanny::agent]`, `nanny::http_get`, loop-detection rule |
-| [`examples/rust/qabud`](examples/rust/qabud) | `#[nanny::tool]`, content-based rule (`last_tool_args`), allowlist enforcement |
-| [`examples/python/dev_assist`](examples/python/dev_assist) | `@tool`, `@rule`, `@agent` — LangGraph debug agent (Groq), Python-driven StateGraph nodes |
+| Example                                                        | What it demonstrates                                                                                |
+| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| [`examples/rust/webdingo`](examples/rust/webdingo)             | `#[nanny::tool]`, `#[nanny::agent]`, `nanny::http_get`, loop-detection rule                         |
+| [`examples/rust/qabud`](examples/rust/qabud)                   | `#[nanny::tool]`, content-based rule (`last_tool_args`), allowlist enforcement                      |
+| [`examples/python/dev_assist`](examples/python/dev_assist)     | `@tool`, `@rule`, `@agent` — LangGraph debug agent (Groq), Python-driven StateGraph nodes           |
 | [`examples/python/metrics_crew`](examples/python/metrics_crew) | `@tool`, `@rule`, `@agent` — CrewAI multi-agent pipeline (Groq), single-tool tasks, per-role limits |
 
 All four examples depend on the published crates (`nannyd` from crates.io, `nanny-sdk` from PyPI). `webdingo`, `qabud`, and `dev_assist` use Groq (`llama-3.3-70b-versatile`, free tier — set `GROQ_API_KEY`). `metrics_crew` uses OpenAI (`gpt-4.1-nano` — set `OPENAI_API_KEY`). Copy `.env.example` → `.env` in each directory and fill in the relevant key. Each example also documents a one-line swap to Ollama for offline use. All four are the best starting point for understanding how the pieces fit together before touching the crate or SDK internals.
@@ -191,7 +191,7 @@ There are no external service dependencies. The bridge runs in-process during te
 
 ```bash
 git fetch upstream
-git rebase upstream/next
+git rebase upstream/main
 ```
 
 ---
@@ -222,12 +222,12 @@ All tests must pass before a PR can be merged. The CI matrix runs on `ubuntu-lat
 git push origin fix/my-descriptive-branch-name
 ```
 
-Then open a pull request on GitHub from your fork's branch to `nanny-run/nanny` targeting the **`next`** branch. `next` is the default and the only active development branch — do not target `main`.
+Then open a pull request on GitHub from your fork's branch to `nanny-run/nanny` targeting the **`main`** branch. `main` is the default and the only active development branch.
 
 **Fork and branch model:**
 
-- Fork `nanny-run/nanny` on GitHub, clone your fork, and branch off `next`.
-- `next` is the only active development branch — all PRs must target `next`, never `main`.
+- Fork `nanny-run/nanny` on GitHub, clone your fork, and branch off `main`.
+- `main` is the only active development branch — all PRs must target `main`.
 - No direct pushes to the upstream repo. Always go through a PR.
 
 **Commit style — conventional commits:**
@@ -264,7 +264,7 @@ PR titles are checked against this format. Example: `feat: add [start] table to 
 
 **How a release happens:**
 
-1. Maintainer merges the release branch into `next`, then merges `next` into `main`.
+1. Maintainer merges the release branch into `main`.
 2. Maintainer pushes a `v*` tag (e.g. `v0.1.3`) on `main`.
 3. The release workflow runs automatically: binaries built, GitHub Release created with notes from `CHANGELOG.md`, all six crates published to crates.io in dependency order, Homebrew formula updated in the tap repo.
 
