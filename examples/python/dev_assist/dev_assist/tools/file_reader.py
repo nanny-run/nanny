@@ -4,14 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from langchain_core.tools import tool as lc_tool
-from nanny_sdk import tool as nanny_tool
+from nanny_sdk import tool
 
 _FILE_CHAR_LIMIT = 8_000
 
 
-@lc_tool
-@nanny_tool(cost=5)
+@tool(cost=5)
 def file_reader(path: str) -> str:
     """Read a source file from disk and return its full contents.
 

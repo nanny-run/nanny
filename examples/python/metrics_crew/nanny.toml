@@ -61,8 +61,10 @@ cost    = 500
 timeout = 600000
 
 [limits.demo-rule]
-# RuleDenied (no_analysis_loop): generous budget so only the rule fires.
-# The no_analysis_loop rule triggers after 5 consecutive compute_stats calls.
+# RuleDenied (compute_stats.max_calls): the demo-rule-denied tape temporarily
+# sets [tools.compute_stats] max_calls = 1 via sed before running. The first
+# compute_stats call succeeds; the second fires RuleDenied: compute_stats.max_calls.
+# Generous budget and steps so only the per-tool call limit fires.
 steps   = 100
 cost    = 1000
 timeout = 600000

@@ -94,10 +94,10 @@ def _stop_copy(exc: Exception, kind: str) -> tuple[str, str]:
         )
     if kind == "RuleDenied":
         rule = getattr(exc, "rule_name", "") or "unknown"
-        if rule == "no_read_loop":
+        if rule == "file_reader.max_calls":
             return (
-                "The agent got stuck reading the same files repeatedly.",
-                "Try a more specific trace or a narrower file path.",
+                "The agent read too many files and was stopped.",
+                "Try a more specific trace, or raise max_calls in nanny.toml.",
             )
         return (
             "The agent was stopped by a policy rule.",
@@ -116,6 +116,6 @@ def _stop_copy(exc: Exception, kind: str) -> tuple[str, str]:
     if kind == "TimeoutExpired":
         return (
             "Analysis timed out.",
-            "Ollama may be slow or the trace is too large. Try again or raise the timeout.",
+            "The request took too long. Try again or raise the timeout in nanny.toml.",
         )
     return (f"Analysis stopped unexpectedly: {exc}", "")

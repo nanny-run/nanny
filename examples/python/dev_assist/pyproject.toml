@@ -1,14 +1,16 @@
 [project]
 name = "dev-assist"
 version = "0.1.0"
-description = "dev_assist — LangChain debug agent governed by Nanny"
+description = "dev_assist — LangGraph debug agent governed by Nanny"
 requires-python = ">=3.11"
 dependencies = [
+    "langgraph>=0.2",
+    "langchain-groq>=0.2",
     "langchain-core>=0.3",
-    "langchain-ollama>=0.2",
     "typer>=0.12",
     "rich>=13",
-    "nanny-sdk==0.1.7",
+    "python-dotenv>=1.0",
+    "nanny-sdk==0.1.8",
 ]
 
 [project.scripts]

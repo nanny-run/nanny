@@ -19,11 +19,22 @@ Type "cd examples/python/metrics_crew"
 Enter
 Sleep 400ms
 
-# RuleDenied — no_analysis_loop rule fires after 5 consecutive compute_stats calls.
-# Generous budget (cost=1000, steps=100) ensures only the rule fires, not a limit.
-# Demonstrates: client-side rule evaluation, RuleDenied stop reason, loop detection.
-Type "nanny run --limits=demo-rule"
+# Step 1 — Cap compute_stats at 1 call.
+# The pipeline calls compute_stats twice (cpu then error_rate).
+# The second call fires RuleDenied: compute_stats.max_calls.
+# max_calls = 20 is unique in nanny.toml — this sed is safe and cross-platform.
+Type "sed -i.bak 's/max_calls     = 20/max_calls     = 1/' nanny.toml"
+Enter
+Sleep 300ms
+
+# Step 2 — Run the pipeline. RuleDenied fires at the second compute_stats call.
+# Demonstrates: per-tool call limit enforcement, RuleDenied stop reason.
+Type "nanny run"
 Enter
 
-Sleep 120s
+Sleep 35s
 
+# Step 3 — Restore nanny.toml after recording.
+Type "git checkout nanny.toml && rm -f nanny.toml.bak"
+Enter
+Sleep 500ms

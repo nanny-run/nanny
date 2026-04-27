@@ -74,8 +74,8 @@ Always the last event in any log.
 | `TimeoutExpired` | Wall-clock timeout was reached. Process was killed. |
 | `MaxStepsReached` | Step limit was reached. Process was killed. |
 | `BudgetExhausted` | Cost budget was exhausted. Process was killed. |
-| `ToolDenied` | A tool call was blocked by the allowlist or a rule. |
-| `RuleDenied` | A custom rule returned a denial. |
+| `ToolDenied` | A tool call was blocked because the tool is not in the allowlist. |
+| `RuleDenied` | A tool call was blocked by a custom rule or a per-tool `max_calls` limit. |
 | `ManualStop` | Execution was stopped programmatically. |
 | `ProcessCrashed` | The child process exited with a non-zero code unexpectedly. |
 | `BridgeUnavailable` | The bridge was active but unreachable during rule evaluation or a tool call. Nanny fails closed — silently continuing with ungoverned execution is never allowed. |
@@ -168,21 +168,39 @@ Emitted when Nanny permits a tool call to proceed.
 
 ## ToolDenied
 
-Emitted when Nanny blocks a tool call — either the tool is not in the allowlist, or a rule returned a denial.
+Emitted when Nanny blocks a tool call because the tool is not in the `[tools] allowed` list in `nanny.toml`.
 
 ```json
 {
   "event": "ToolDenied",
   "ts": 1711234568101,
-  "tool": "write_file",
-  "reason": "ToolDenied"
+  "tool": "write_file"
 }
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `tool` | string | The name of the tool that was blocked. |
-| `reason` | string | The stop reason that triggered the denial. |
+
+---
+
+## RuleDenied
+
+Emitted when a custom rule or a per-tool `max_calls` limit blocks a tool call. The tool was on the allowlist but a rule returned a denial before the call executed.
+
+```json
+{
+  "event": "RuleDenied",
+  "ts": 1711234568101,
+  "tool": "http_get",
+  "rule_name": "no_loop"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `tool` | string | The name of the tool that triggered the rule. |
+| `rule_name` | string | The name of the rule that fired (e.g. `"no_loop"`) or the per-tool limit that was hit (e.g. `"http_get.max_calls"`). |
 
 ---
 

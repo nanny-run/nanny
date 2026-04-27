@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.8] - 2026-04-27
+
+### Changed
+
+- **Example apps switch from Ollama to hosted providers** — `webdingo`, `qabud`, and `dev_assist`
+  now use Groq (`llama-3.3-70b-versatile`): free tier, no credit card required, reliable structured
+  function calling. `metrics_crew` uses OpenAI (`gpt-4.1-nano`): the 12-task CrewAI pipeline
+  accumulates context across tasks and needs a larger context window than Groq's free tier provides.
+  Each example ships an `.env.example` and documents a one-line swap back to Ollama for offline use.
+- **`dev_assist` rewritten as a LangGraph agent** — replaced the LangChain legacy ReAct agent
+  with a LangGraph `StateGraph` with four explicit Python nodes: extract, read files, search,
+  diagnose. Python drives every tool call directly; the LLM only reasons in the final synthesis
+  node. Enforcement is guaranteed regardless of model structured-calling behavior.
+- **`metrics_crew` restructured into single-tool CrewAI tasks** — each task now has exactly one
+  tool and one instruction. Previously one task instructed the LLM to call five tools in
+  sequence; that structure let the model hallucinate past tool calls. Single-tool tasks mean the
+  LLM has one job per task and cannot skip enforcement.
+
+### Fixed
+
+- **Event taxonomy: `ToolDenied` and `RuleDenied` are now distinct events** — previously
+  `ExecutionEvent::ToolDenied` fired for all tool denials with a `reason` field set to either
+  `"ToolDenied"` (allowlist block) or `"RuleDenied"` (rule or `max_calls` violation). This
+  produced contradictory NDJSON like `{"event":"ToolDenied","reason":"RuleDenied"}`. The event
+  type is now the self-describing authority:
+  - `ToolDenied { ts, tool }` — allowlist violation only; no `reason` field needed
+  - `RuleDenied { ts, tool, rule_name }` — rule or `max_calls` violation; `rule_name` identifies
+    which rule fired (e.g. `"no_spiral"` or `"http_get.max_calls"`)
+
 ## [0.1.7] - 2026-04-19
 
 ### Fixed
@@ -204,6 +233,7 @@ First public release of Nanny — an execution boundary for autonomous AI agents
   SHA256 checksums for each binary are computed and pushed to the homebrew tap automatically
   on every tagged release.
 
+[0.1.8]: https://github.com/nanny-run/nanny/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/nanny-run/nanny/compare/v0.1.5...v0.1.7
 [0.1.5]: https://github.com/nanny-run/nanny/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/nanny-run/nanny/compare/v0.1.3...v0.1.4

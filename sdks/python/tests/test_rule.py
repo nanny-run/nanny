@@ -292,6 +292,67 @@ def test_rules_evaluated_in_registration_order(mock_bridge: HTTPServer) -> None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# /stop payload on rule denial — tool name and rule name must be sent
+# ---------------------------------------------------------------------------
+
+
+def test_rule_deny_stop_payload_contains_tool_and_rule_name(mock_bridge: HTTPServer) -> None:
+    """When a rule fires, /stop is called with tool and rule_name in the payload.
+
+    The bridge needs both fields to emit the RuleDenied NDJSON event — a bare
+    {"reason":"RuleDenied"} payload leaves the bridge unable to populate the event.
+    """
+    mock_bridge.expect_oneshot_request(
+        "/stop",
+        method="POST",
+        json={"reason": "RuleDenied", "tool": "read_file", "rule_name": "block_dotenv"},
+    ).respond_with_json({"status": "ok"})
+
+    @rule("block_dotenv")
+    def block_dotenv(ctx: PolicyContext) -> bool:
+        return False
+
+    @tool(cost=5)
+    def read_file(path: str) -> str:
+        return ""
+
+    with pytest.raises(RuleDenied):
+        read_file(".env")
+
+    mock_bridge.check_assertions()
+
+
+def test_rule_deny_stop_payload_uses_decorated_function_name(mock_bridge: HTTPServer) -> None:
+    """The tool name in the /stop payload matches the decorated function's name."""
+    captured_bodies: list[dict] = []
+
+    def capture_stop(request):  # type: ignore[no-untyped-def]
+        import json
+        captured_bodies.append(json.loads(request.data))
+        from werkzeug.wrappers import Response
+        return Response('{"status":"ok"}', content_type="application/json")
+
+    mock_bridge.expect_oneshot_request("/stop", method="POST").respond_with_handler(capture_stop)
+
+    @rule("deny_all")
+    def deny_all(ctx: PolicyContext) -> bool:
+        return False
+
+    @tool(cost=5)
+    def fetch_url(url: str) -> str:
+        return ""
+
+    with pytest.raises(RuleDenied):
+        fetch_url("https://example.com")
+
+    assert len(captured_bodies) == 1
+    body = captured_bodies[0]
+    assert body["reason"] == "RuleDenied"
+    assert body["tool"] == "fetch_url"
+    assert body["rule_name"] == "deny_all"
+
+
 def test_passthrough_rules_not_evaluated(monkeypatch: pytest.MonkeyPatch) -> None:
     """In passthrough mode, rule functions are never called."""
     evaluated = False

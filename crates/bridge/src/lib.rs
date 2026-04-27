@@ -465,11 +465,21 @@ fn handle_tool_call(
             let reason_name = stop_reason_name(reason).to_string();
             {
                 let mut guard = shared.lock().unwrap();
-                append_event(&mut guard, ExecutionEvent::ToolDenied {
-                    ts: now_ms(),
-                    tool: call.tool.clone(),
-                    reason: reason_name.clone(),
-                });
+                // Emit the correct event variant based on why the tool was denied:
+                // ToolDenied  = allowlist violation (LimitsPolicy, fires first)
+                // RuleDenied  = rule or max_calls violation (RuleEvaluator, fires after allowlist)
+                let event = match reason {
+                    StopReason::RuleDenied { rule_name } => ExecutionEvent::RuleDenied {
+                        ts: now_ms(),
+                        tool: call.tool.clone(),
+                        rule_name: rule_name.clone(),
+                    },
+                    _ => ExecutionEvent::ToolDenied {
+                        ts: now_ms(),
+                        tool: call.tool.clone(),
+                    },
+                };
+                append_event(&mut guard, event);
                 mark_stopped(&mut guard, &reason_name);
             }
             BridgeResp::json(200, serde_json::to_string(&denial_from(reason)).unwrap())
@@ -871,10 +881,8 @@ fn stop_reason_name(reason: &StopReason) -> &'static str {
 }
 
 fn handle_stop(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
-    let raw = serde_json::from_slice::<serde_json::Value>(body)
-        .ok()
-        .and_then(|v| v["reason"].as_str().map(str::to_string))
-        .unwrap_or_default();
+    let parsed = serde_json::from_slice::<serde_json::Value>(body).unwrap_or_default();
+    let raw = parsed["reason"].as_str().unwrap_or_default().to_string();
     // Validate against the closed set of known stop reasons.
     // An untrusted child process holds the session token and can POST /stop;
     // accepting arbitrary strings would let a misbehaving agent falsify the
@@ -885,6 +893,16 @@ fn handle_stop(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
         _ => "ProcessCrashed".to_string(),
     };
     let mut guard = shared.lock().unwrap();
+    // When the SDK reports a client-side rule denial it knows both the rule name
+    // and the tool that triggered it — emit the RuleDenied event here so the
+    // NDJSON stream contains it even though no /tool/call ever reached the bridge.
+    if reason == "RuleDenied" {
+        let tool      = parsed["tool"].as_str().unwrap_or("").to_string();
+        let rule_name = parsed["rule_name"].as_str().unwrap_or("").to_string();
+        if !tool.is_empty() && !rule_name.is_empty() {
+            append_event(&mut guard, ExecutionEvent::RuleDenied { ts: now_ms(), tool, rule_name });
+        }
+    }
     mark_stopped(&mut guard, &reason);
     BridgeResp::json(200, r#"{"status":"ok"}"#)
 }
@@ -1652,5 +1670,84 @@ mod tests {
                 .unwrap_or(false)
         });
         assert!(has_tool_allowed, "drain must contain ToolAllowed after an allowed tool call");
+    }
+
+    // ── handle_stop — RuleDenied event emission ───────────────────────────────
+
+    /// POST /stop with RuleDenied + tool + rule_name emits a RuleDenied event.
+    ///
+    /// Client-side rule denials never reach /tool/call, so the bridge must emit
+    /// the event here using the metadata the SDK sends in the /stop payload.
+    #[test]
+    fn handle_stop_rule_denied_with_metadata_emits_rule_denied_event() {
+        let b = started(1000);
+        post(
+            &b,
+            "/stop",
+            r#"{"reason":"RuleDenied","tool":"read_file","rule_name":"no_sensitive_files"}"#,
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        let lines = b.drain_events();
+        let event = lines.iter().find_map(|l| {
+            let v: serde_json::Value = serde_json::from_str(l).ok()?;
+            if v["event"] == "RuleDenied" { Some(v) } else { None }
+        });
+
+        let event = event.expect("drain must contain a RuleDenied event after /stop with metadata");
+        assert_eq!(event["tool"],      "read_file",           "tool field must match");
+        assert_eq!(event["rule_name"], "no_sensitive_files",  "rule_name field must match");
+        assert!(event["ts"].is_number(), "ts field must be present");
+    }
+
+    /// POST /stop with RuleDenied but no tool or rule_name does not emit an event.
+    ///
+    /// The bridge cannot construct a meaningful RuleDenied event without both
+    /// fields — omitting the event is safer than emitting one with empty fields.
+    #[test]
+    fn handle_stop_rule_denied_without_metadata_emits_no_rule_denied_event() {
+        let b = started(1000);
+        post(&b, "/stop", r#"{"reason":"RuleDenied"}"#);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        let lines = b.drain_events();
+        let has_rule_denied = lines.iter().any(|l| {
+            serde_json::from_str::<serde_json::Value>(l)
+                .map(|v| v["event"] == "RuleDenied")
+                .unwrap_or(false)
+        });
+        assert!(!has_rule_denied, "no RuleDenied event must be emitted when tool/rule_name are absent");
+    }
+
+    /// POST /stop with RuleDenied and empty-string fields does not emit an event.
+    #[test]
+    fn handle_stop_rule_denied_empty_fields_emits_no_rule_denied_event() {
+        let b = started(1000);
+        post(&b, "/stop", r#"{"reason":"RuleDenied","tool":"","rule_name":""}"#);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        let lines = b.drain_events();
+        let has_rule_denied = lines.iter().any(|l| {
+            serde_json::from_str::<serde_json::Value>(l)
+                .map(|v| v["event"] == "RuleDenied")
+                .unwrap_or(false)
+        });
+        assert!(!has_rule_denied, "no RuleDenied event must be emitted when tool/rule_name are empty strings");
+    }
+
+    /// POST /stop with a non-RuleDenied reason never emits a RuleDenied event.
+    #[test]
+    fn handle_stop_other_reason_emits_no_rule_denied_event() {
+        let b = started(1000);
+        post(&b, "/stop", r#"{"reason":"AgentCompleted","tool":"read_file","rule_name":"some_rule"}"#);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        let lines = b.drain_events();
+        let has_rule_denied = lines.iter().any(|l| {
+            serde_json::from_str::<serde_json::Value>(l)
+                .map(|v| v["event"] == "RuleDenied")
+                .unwrap_or(false)
+        });
+        assert!(!has_rule_denied, "RuleDenied event must only fire for RuleDenied reason, not AgentCompleted");
     }
 }

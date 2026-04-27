@@ -40,8 +40,7 @@ Output: HTML charts in `reports/` and an incident report Markdown file.
 ## Prerequisites
 
 - **`nanny` CLI** — macOS: `brew tap nanny-run/nanny && brew install nannyd` · Linux: `curl -fsSL https://install.nanny.run | sh` · Windows: `irm https://install.nanny.run/windows | iex` · or `cargo install nannyd`
-- **Ollama** — `brew install ollama && ollama serve` (keep it running in a separate terminal)
-- **`llama3.1:8b` model** — `ollama pull llama3.1:8b`
+- **OpenAI API key** — get yours at [platform.openai.com/api-keys](https://platform.openai.com/api-keys). Copy `.env.example` to `.env` and fill in `OPENAI_API_KEY`.
 
 ---
 
@@ -49,9 +48,12 @@ Output: HTML charts in `reports/` and an incident report Markdown file.
 
 ```bash
 cd examples/python/metrics_crew
-pip install nanny-sdk
+cp .env.example .env
+# Edit .env and set OPENAI_API_KEY=<your_key_from_platform.openai.com>
 uv sync
 ```
+
+`uv sync` installs all dependencies including `nanny-sdk`. No separate `pip install` needed.
 
 ---
 
@@ -106,3 +108,44 @@ Multi-agent scopes entering and exiting with live NDJSON enforcement events:
 | `RuleDenied: no_analysis_loop` | Analysis agent kept re-running `compute_stats` on the same metric                                |
 | `ToolDenied`                   | An agent tried to call a tool outside its allowlist (e.g. analysis agent calling `write_report`) |
 | `AgentCompleted`               | All four agents finished within their limits; charts and report produced                         |
+
+## Development
+
+This example uses the published `nanny-sdk` package from PyPI.
+During active development on the nanny SDK itself, switch to a path dependency:
+
+```toml
+# pyproject.toml
+[tool.uv.sources]
+nanny-sdk = { path = "../../../sdks/python" }   # instead of nanny-sdk==<version>
+```
+
+Then run `uv sync` to install from the local source.
+
+The `[tool.uv.sources]` override wires this example to the local SDK. The `nanny` CLI binary (which contains the bridge) is separate — reinstall it from local source so both are in sync:
+
+```sh
+# from the workspace root (nanny/)
+
+# If nanny was installed via Homebrew, unlink it first so the local build takes precedence:
+brew unlink nannyd
+
+cargo install --path crates/cli --force
+```
+
+To switch back to the published version, remove the `[tool.uv.sources]` block and pin the version in `dependencies`:
+
+```toml
+# pyproject.toml
+dependencies = [
+    ...
+    "nanny-sdk==0.1.8",   # pin to the published release
+]
+```
+
+Then run `uv sync` again. Also restore the published `nanny` CLI:
+
+```sh
+cargo uninstall nannyd
+brew link nannyd   # if originally installed via Homebrew
+```

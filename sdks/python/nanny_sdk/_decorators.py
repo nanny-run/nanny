@@ -73,7 +73,7 @@ def tool(*, cost: int = 0) -> Callable[[F], F]:
             ctx.requested_tool = tool_name
             for rule_name, rule_fn in _RULES.items():
                 if not rule_fn(ctx):
-                    _client.report_stop("RuleDenied")
+                    _client.report_stop_rule(tool_name, rule_name)
                     raise RuleDenied(rule_name)
 
         if inspect.iscoroutinefunction(fn):

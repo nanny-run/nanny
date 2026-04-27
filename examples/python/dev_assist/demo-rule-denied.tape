@@ -19,12 +19,20 @@ Type "cd examples/python/dev_assist"
 Enter
 Sleep 400ms
 
-# RuleDenied — no_read_loop fires on the 5th total file_reader call.
-# The complex trace references 5 unique source files. The agent reads them
-# one by one; on the 5th call the client-side rule fires before the bridge
-# is even contacted. The rule detects a stuck agent (too many reads = no progress).
-# Demonstrates: @rule decorator, client-side enforcement, RuleDenied stop reason.
+# Step 1 — Lower file_reader max_calls to 3 so RuleDenied fires on the 4th read.
+# The trace has 5 unique files; the 4th read is denied before the agent finishes.
+# Demonstrates: max_calls enforcement, RuleDenied stop reason, @tool interception.
+Type "sed -i.bak 's/max_calls.*=.*15/max_calls     = 3/' nanny.toml"
+Enter
+Sleep 300ms
+
+# Step 2 — Run the pipeline. RuleDenied fires at the 4th file_reader call.
 Type "nanny run --limits=demo-rule"
 Enter
 
-Sleep 90s
+Sleep 15s
+
+# Step 3 — Restore nanny.toml after recording.
+Type "git checkout nanny.toml && rm -f nanny.toml.bak"
+Enter
+Sleep 500ms

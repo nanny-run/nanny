@@ -26,4 +26,4 @@ Sleep 400ms
 Type "nanny run --limits=demo-budget"
 Enter
 
-Sleep 20s
+Sleep 12s

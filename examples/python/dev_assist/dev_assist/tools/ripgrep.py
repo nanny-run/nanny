@@ -4,15 +4,13 @@ from __future__ import annotations
 
 import subprocess
 
-from langchain_core.tools import tool as lc_tool
-from nanny_sdk import tool as nanny_tool
+from nanny_sdk import tool
 
 _RG_LINE_LIMIT = 50
 _RG_TIMEOUT_S = 15
 
 
-@lc_tool
-@nanny_tool(cost=8)
+@tool(cost=8)
 def ripgrep(pattern: str, path: str = ".") -> str:
     """Search for a symbol, function name, or pattern across source files.
 
@@ -53,6 +51,7 @@ def ripgrep(pattern: str, path: str = ".") -> str:
     if len(lines) > _RG_LINE_LIMIT:
         truncated = len(lines) - _RG_LINE_LIMIT
         lines = lines[:_RG_LINE_LIMIT]
-        lines.append(f"\n... [{truncated} more lines truncated — narrow the pattern or path]")
+        lines.append(
+            f"\n... [{truncated} more lines truncated — narrow the pattern or path]")
 
     return "\n".join(lines)

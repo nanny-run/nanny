@@ -2,22 +2,21 @@
 
 Usage
 -----
-  dev debug --trace <file>             Diagnose a stack trace (ReAct mode).
-  dev debug --trace <file> --mode plan Diagnose using Plan-and-Execute mode.
-  dev debug                            Read a stack trace from stdin.
-  nanny run                            Same, with execution limits enforced.
+  dev debug --trace <file>   Diagnose a stack trace.
+  dev debug                  Read a stack trace from stdin.
+  nanny run                  Same, with execution limits enforced.
 
 More commands coming: dev ask, dev commit, dev pr, dev remember, dev plan.
 """
 
 from __future__ import annotations
 
-import enum
 import sys
 from pathlib import Path
 from typing import Annotated
 
 import typer
+from dotenv import load_dotenv
 from nanny_sdk import (
     BudgetExhausted,
     MaxStepsReached,
@@ -27,7 +26,11 @@ from nanny_sdk import (
     ToolDenied,
 )
 
-from dev_assist.agents.debug import run_debug
+# Load .env if present — no-op when vars are already set (CI/CD, production).
+# Developers: copy .env.example → .env and fill in GROQ_API_KEY.
+load_dotenv()
+
+from dev_assist.agents.debug import run_debug  # noqa: E402 — after load_dotenv
 from dev_assist.cli.output import console, render_diagnosis, render_stop, thinking
 
 app = typer.Typer(
@@ -43,11 +46,6 @@ def main() -> None:
     """dev_assist — diagnose errors, explore code, and automate dev tasks."""
 
 
-class Mode(str, enum.Enum):
-    react = "react"
-    plan = "plan"
-
-
 @app.command()
 def debug(
     trace: Annotated[
@@ -61,18 +59,6 @@ def debug(
             resolve_path=True,
         ),
     ] = None,
-    mode: Annotated[
-        Mode,
-        typer.Option(
-            "--mode",
-            "-m",
-            help=(
-                "Execution mode. "
-                "'react' (default): iterative Thought/Action loop. "
-                "'plan': single planning call then deterministic execution."
-            ),
-        ),
-    ] = Mode.react,
 ) -> None:
     """Diagnose a stack trace and propose a fix.
 
@@ -81,7 +67,6 @@ def debug(
     \b
     Examples:
       dev debug --trace ./error.log
-      dev debug --trace ./error.log --mode plan
       cat error.log | dev debug
     """
     # --- read input ---
@@ -102,9 +87,8 @@ def debug(
 
     # --- run agent ---
     try:
-        label = "Planning and executing…" if mode == Mode.plan else "Analysing…"
-        with thinking(label):
-            output = run_debug(trace_text, mode=mode.value)
+        with thinking():
+            output = run_debug(trace_text)
 
     except (ToolDenied, RuleDenied, BudgetExhausted, MaxStepsReached, TimeoutExpired) as exc:
         render_stop(exc)

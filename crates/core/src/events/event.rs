@@ -53,11 +53,26 @@ pub enum ExecutionEvent {
         tool: String,
     },
 
-    /// Emitted when a tool call is denied by policy.
+    /// Emitted when a tool call is blocked by the allowlist ([tools] allowed).
+    ///
+    /// The tool was not in the permitted set — execution stops immediately.
+    /// Distinct from `RuleDenied`: this fires from `LimitsPolicy`, before any
+    /// rule evaluation.
     ToolDenied {
         ts: u64,
         tool: String,
-        reason: String,
+    },
+
+    /// Emitted when a tool call is blocked by a rule or per-tool call limit.
+    ///
+    /// `rule_name` identifies the rule that fired (e.g. `"no_spiral"`) or the
+    /// auto-generated name for a `max_calls` limit (e.g. `"http_get.max_calls"`).
+    /// Distinct from `ToolDenied`: this fires from `RuleEvaluator`, after the
+    /// allowlist check passes.
+    RuleDenied {
+        ts: u64,
+        tool: String,
+        rule_name: String,
     },
 
     /// Emitted when a permitted tool fails during execution.

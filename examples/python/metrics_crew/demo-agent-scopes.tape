@@ -26,4 +26,4 @@ Sleep 400ms
 Type "nanny run"
 Enter
 
-Sleep 130s
+Sleep 90s

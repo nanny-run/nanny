@@ -102,7 +102,7 @@ pub mod __private {
 
     pub use super::runtime::{
         agent_enter, agent_exit, call_bridge_tool, call_tool, evaluate_local_rules, is_active,
-        report_stop, Rule, ToolVerdict,
+        report_stop, report_stop_rule, Rule, ToolVerdict,
     };
 }
 
@@ -443,6 +443,20 @@ mod runtime {
     /// bridge is unreachable.
     pub fn report_stop(reason: &str) {
         let body = serde_json::json!({"reason": reason}).to_string();
+        let _ = http_post("/stop", &body);
+    }
+
+    /// POST /stop with RuleDenied metadata so the bridge can emit the NDJSON event.
+    ///
+    /// Carries `tool` and `rule_name` so `handle_stop` can append a `RuleDenied`
+    /// event to the stream — client-side rule denials never reach `/tool/call`,
+    /// so the bridge would otherwise have no way to emit the event.
+    pub fn report_stop_rule(tool: &str, rule_name: &str) {
+        let body = serde_json::json!({
+            "reason":    "RuleDenied",
+            "tool":      tool,
+            "rule_name": rule_name,
+        }).to_string();
         let _ = http_post("/stop", &body);
     }
 
