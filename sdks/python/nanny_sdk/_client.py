@@ -1,27 +1,42 @@
 """Bridge HTTP client.
 
-The bridge uses different transports depending on the OS:
+The bridge uses different transports depending on the OS and configuration:
 
 - **Unix (macOS/Linux):** Unix domain socket at ``/tmp/nanny-<token>.sock``.
   The CLI injects ``NANNY_BRIDGE_SOCKET`` into the child process environment.
 - **Windows:** TCP loopback on an OS-assigned port.
   The CLI injects ``NANNY_BRIDGE_PORT`` into the child process environment.
+- **Network (cross-process / cross-machine):** TCP + mTLS to the address in
+  ``NANNY_BRIDGE_ADDR``. The CLI auto-injects ``NANNY_BRIDGE_CERT``,
+  ``NANNY_BRIDGE_KEY``, and ``NANNY_BRIDGE_CA`` from ``~/.nanny/certs/`` when
+  ``NANNY_BRIDGE_ADDR`` is set. Cross-machine deployments set these env vars
+  manually.
 
-``NANNY_SESSION_TOKEN`` is always injected on both platforms.
+``NANNY_SESSION_TOKEN`` is always injected on all platforms.
+
+Transport priority:
+1. ``NANNY_BRIDGE_SOCKET``  — Unix domain socket (macOS/Linux local)
+2. ``NANNY_BRIDGE_PORT``    — TCP loopback (Windows local)
+3. ``NANNY_BRIDGE_ADDR``    — TCP + mTLS (network / cross-machine)
+4. None of the above        → passthrough (all decorators are no-ops)
 
 All environment variables are read at call time (not import time) so tests can
 set them via ``monkeypatch`` without reloading the module.
 
-When neither ``NANNY_BRIDGE_SOCKET`` nor ``NANNY_BRIDGE_PORT`` is set the SDK
-is in passthrough mode — every decorator is a no-op and no network calls are
-made. This is the normal state when running ``python agent.py`` directly
-instead of ``nanny run agent.py``.
+When none of the three transport env vars are set the SDK is in passthrough
+mode — every decorator is a no-op and no network calls are made. This is the
+normal state when running ``python agent.py`` directly instead of
+``nanny run agent.py``.
 """
 
 from __future__ import annotations
 
 import os
-from typing import Any
+import ssl
+import tempfile
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Any, Generator
 
 import httpx
 
@@ -51,24 +66,141 @@ def _port() -> str | None:
     return os.environ.get("NANNY_BRIDGE_PORT")
 
 
+def _bridge_addr() -> str | None:
+    """Network governance server address (host:port) for cross-process enforcement.
+
+    Set automatically by ``nanny run`` when ``NANNY_BRIDGE_ADDR`` is in the
+    environment. Cross-machine deployments set this manually.
+    """
+    val = os.environ.get("NANNY_BRIDGE_ADDR")
+    return val if val else None
+
+
 def _token() -> str:
     return os.environ.get("NANNY_SESSION_TOKEN", "")
+
+
+# ---------------------------------------------------------------------------
+# mTLS cert resolution — used when NANNY_BRIDGE_ADDR is set
+# ---------------------------------------------------------------------------
+#
+# Two formats are accepted for all three NANNY_BRIDGE_CERT/KEY/CA env vars:
+#
+#   File path:   NANNY_BRIDGE_CA=/path/to/ca.crt
+#   Inline PEM:  NANNY_BRIDGE_CA="-----BEGIN CERTIFICATE-----\n..."
+#
+# Inline PEM works without a filesystem — useful in Docker/k8s where secrets
+# are injected as env var values rather than mounted files.
+#
+# NANNY_BRIDGE_CERT may be a combined cert+key PEM bundle, in which case
+# NANNY_BRIDGE_KEY can be omitted.
+
+
+def _default_certs_dir() -> Path:
+    return Path.home() / ".nanny" / "certs"
+
+
+def _resolve_pem_value(env_var: str, fallback: Path) -> str | None:
+    """Resolve PEM content from an env var or fallback file.
+
+    - Env var starts with ``-----BEGIN`` → treat as inline PEM, return as-is.
+    - Env var is a non-empty string      → treat as file path, return as-is.
+    - Env var is absent                  → return fallback path string if the
+      file exists, else ``None``.
+    """
+    val = os.environ.get(env_var)
+    if val:
+        return val  # inline PEM or file path — both returned as-is
+    return str(fallback) if fallback.exists() else None
+
+
+@contextmanager
+def _as_path(pem_or_path: str) -> Generator[str, None, None]:
+    """Yield a filesystem path for the given PEM string or file path.
+
+    - Inline PEM (starts with ``-----BEGIN``): write to a NamedTemporaryFile,
+      yield the path, delete the file on exit.  ``ssl.SSLContext.load_cert_chain``
+      reads the file immediately when called, so the temp file is safe to delete
+      as soon as the ``with`` block exits.
+    - Anything else: yield unchanged (already a file path).
+    """
+    if pem_or_path.startswith("-----BEGIN"):
+        tmp = tempfile.NamedTemporaryFile(mode="wb", suffix=".pem", delete=False)
+        try:
+            tmp.write(pem_or_path.encode())
+            tmp.flush()
+            tmp.close()
+            yield tmp.name
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
+    else:
+        yield pem_or_path
+
+
+def _build_ssl_context(cert_val: str, key_val: str | None, ca_val: str) -> ssl.SSLContext:
+    """Build an ``ssl.SSLContext`` for mTLS from resolved cert/key/CA values.
+
+    Each value may be an inline PEM string or a file path.
+    ``load_verify_locations(cadata=...)`` accepts inline PEM directly.
+    ``load_cert_chain`` requires file paths — ``_as_path`` handles the
+    temp-file dance for inline PEM values.
+    """
+    ctx = ssl.create_default_context()
+
+    # CA — verify the server certificate.
+    if ca_val.startswith("-----BEGIN"):
+        ctx.load_verify_locations(cadata=ca_val)
+    else:
+        ctx.load_verify_locations(cafile=ca_val)
+
+    # Client cert + key — prove our identity to the server (mTLS).
+    # ssl.SSLContext.load_cert_chain reads the files immediately, so
+    # _as_path temp files are cleaned up while the data is already loaded.
+    with _as_path(cert_val) as cert_path:
+        if key_val:
+            with _as_path(key_val) as key_path:
+                ctx.load_cert_chain(certfile=cert_path, keyfile=key_path)
+        else:
+            # Key embedded in cert bundle (combined PEM).
+            ctx.load_cert_chain(certfile=cert_path)
+
+    return ctx
+
+
+# ---------------------------------------------------------------------------
+# Passthrough detection
+# ---------------------------------------------------------------------------
 
 
 def is_passthrough() -> bool:
     """True when the SDK is running outside ``nanny run`` (no bridge present).
 
-    Checks ``NANNY_BRIDGE_SOCKET`` first (Unix), then ``NANNY_BRIDGE_PORT``
-    (Windows). Neither set → passthrough.
+    All three transport env vars must be absent for passthrough mode:
+    - ``NANNY_BRIDGE_SOCKET`` (Unix domain socket)
+    - ``NANNY_BRIDGE_PORT``   (TCP loopback)
+    - ``NANNY_BRIDGE_ADDR``   (network mTLS)
+
+    Checking only the first two would silently skip enforcement when the
+    process was started with ``NANNY_BRIDGE_ADDR`` set.
     """
-    return _socket_path() is None and _port() is None
+    return _socket_path() is None and _port() is None and _bridge_addr() is None
+
+
+# ---------------------------------------------------------------------------
+# Client factory
+# ---------------------------------------------------------------------------
 
 
 def _make_client(**kwargs: Any) -> httpx.Client:
     """Return an ``httpx.Client`` connected to the bridge.
 
-    - Unix socket present → ``HTTPTransport(uds=...)`` with ``base_url=http://localhost``
-    - TCP port present    → plain TCP with ``base_url=http://127.0.0.1:<port>``
+    Transport selection:
+    1. Unix socket present  → ``HTTPTransport(uds=...)`` with ``base_url=http://localhost``
+    2. TCP port present     → plain TCP with ``base_url=http://127.0.0.1:<port>``
+    3. NANNY_BRIDGE_ADDR set → HTTPS with mTLS, ``base_url=https://<addr>``
 
     Raises ``RuntimeError`` if called in passthrough mode (should never happen
     because decorators check ``is_passthrough()`` first).
@@ -77,12 +209,26 @@ def _make_client(**kwargs: Any) -> httpx.Client:
     if sock is not None:
         transport = httpx.HTTPTransport(uds=sock)
         return httpx.Client(transport=transport, base_url="http://localhost", **kwargs)
+
     port = _port()
     if port is not None:
         return httpx.Client(base_url=f"http://127.0.0.1:{port}", **kwargs)
+
+    addr = _bridge_addr()
+    if addr is not None:
+        # mTLS: build ssl.SSLContext from env vars or ~/.nanny/certs/ defaults.
+        # Both file paths and inline PEM (NANNY_BRIDGE_CERT="-----BEGIN …") work.
+        certs_dir = _default_certs_dir()
+        cert_val = _resolve_pem_value("NANNY_BRIDGE_CERT", certs_dir / "client.crt")
+        key_val  = _resolve_pem_value("NANNY_BRIDGE_KEY",  certs_dir / "client.key")
+        ca_val   = _resolve_pem_value("NANNY_BRIDGE_CA",   certs_dir / "ca.crt")
+        if cert_val and ca_val:
+            ssl_ctx = _build_ssl_context(cert_val, key_val, ca_val)
+            return httpx.Client(base_url=f"https://{addr}", verify=ssl_ctx, **kwargs)
+
     raise RuntimeError(  # pragma: no cover
         "nanny: bridge not available "
-        "(NANNY_BRIDGE_SOCKET and NANNY_BRIDGE_PORT are both unset)"
+        "(NANNY_BRIDGE_SOCKET, NANNY_BRIDGE_PORT, and NANNY_BRIDGE_ADDR are all unset)"
     )
 
 

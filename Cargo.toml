@@ -32,3 +32,15 @@ thiserror    = "1"
 anyhow       = "1"
 uuid         = { version = "1", features = ["v4", "serde"] }
 clap         = { version = "4", features = ["derive"] }
+rcgen        = "0.13"
+notify       = "6"
+dirs         = "5"
+x509-parser  = { version = "0.16", features = ["verify"] }
+time         = { version = "0.3", features = ["formatting", "parsing", "macros"] }
+# v0.2.0 — Network Bridge (server + SDK TLS client)
+axum         = { version = "0.7" }
+axum-server  = { version = "0.7", features = ["tls-rustls"] }
+tokio        = { version = "1", features = ["full"] }
+rustls       = "0.23"
+rustls-pemfile = "2"
+reqwest      = { version = "0.12", features = ["rustls-tls", "blocking"] }

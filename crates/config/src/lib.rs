@@ -61,6 +61,11 @@ pub struct NannyConfig {
     /// Cloud orchestrator connection. Only read when runtime.mode = "managed".
     #[serde(default)]
     pub managed: Option<ManagedConfig>,
+
+    /// HTTP CONNECT proxy settings for the network server.
+    /// Only active when `nanny server start --proxy` is passed.
+    #[serde(default)]
+    pub proxy: Option<ProxyConfig>,
 }
 
 // ── RuntimeConfig ─────────────────────────────────────────────────────────────
@@ -219,6 +224,35 @@ pub enum LogTarget {
 
     /// Write events to the file specified in log_file.
     File,
+}
+
+// ── ManagedConfig ─────────────────────────────────────────────────────────────
+
+// ── ProxyConfig ───────────────────────────────────────────────────────────────
+
+/// HTTP CONNECT proxy configuration for the network server.
+///
+/// Only active when `nanny server start --proxy` is passed.
+/// The proxy forwards HTTPS traffic from agents to allowed hosts,
+/// intercepting all outbound HTTP regardless of `#[nanny::tool]` decoration.
+///
+/// ```toml
+/// [proxy]
+/// allowed_hosts = ["api.openai.com", "api.groq.com", "*.anthropic.com"]
+/// ```
+///
+/// Proxy is opt-in. If `allowed_hosts` is missing or empty, the proxy is treated as not configured.
+/// Configure at least one host to activate it.
+/// Loopback (127.x.x.x, ::1) and RFC-1918 private ranges are always
+/// blocked in code regardless of this list.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProxyConfig {
+    /// Hostnames the proxy may forward to.
+    ///
+    /// Supports exact names (`"api.openai.com"`) and glob patterns (`"*.anthropic.com"`).
+    /// Loopback and RFC-1918 private ranges are blocked regardless of this list.
+    #[serde(default)]
+    pub allowed_hosts: Vec<String>,
 }
 
 // ── ManagedConfig ─────────────────────────────────────────────────────────────
@@ -396,6 +430,11 @@ allowed = ["http_get"]
 # "file"   — write events to log_file instead.
 log = "stdout"
 
+[proxy]
+# HTTP CONNECT proxy allowlist for the network governance server.
+# Uncomment and add hosts to activate the proxy:
+# allowed_hosts = ["api.openai.com", "api.groq.com"]
+
 # Uncomment to write events to a file instead:
 # log      = "file"
 # log_file = "nanny.log"
@@ -453,6 +492,14 @@ log = "stdout"
         assert_eq!(config.runtime.mode, Mode::Local);
         assert_eq!(config.tools.allowed, vec!["http_get"]);
         assert_eq!(config.observability.log, LogTarget::Stdout);
+        assert!(
+            config.proxy.is_some(),
+            "default_toml() must include a [proxy] section as a discoverable template"
+        );
+        assert!(
+            config.proxy.unwrap().allowed_hosts.is_empty(),
+            "default proxy allowlist must default to empty (opt-in)"
+        );
     }
 
     #[test]
@@ -622,6 +669,79 @@ timeout = 5000
 
         let start = config.start.expect("default_toml() must include [start]");
         assert_eq!(start.cmd, "python agent.py");
+    }
+
+    #[test]
+    fn proxy_config_is_optional() {
+        let config: NannyConfig = toml::from_str(
+            r#"
+[limits]
+steps   = 10
+cost    = 100
+timeout = 5000
+"#,
+        )
+        .expect("must parse");
+
+        assert!(config.proxy.is_none());
+    }
+
+    #[test]
+    fn proxy_config_parses_allowed_hosts() {
+        let config: NannyConfig = toml::from_str(
+            r#"
+[limits]
+steps   = 10
+cost    = 100
+timeout = 5000
+
+[proxy]
+allowed_hosts = ["api.openai.com", "*.anthropic.com"]
+"#,
+        )
+        .expect("must parse");
+
+        let proxy = config.proxy.expect("[proxy] must be present");
+        assert_eq!(proxy.allowed_hosts, vec!["api.openai.com", "*.anthropic.com"]);
+    }
+
+    #[test]
+    fn proxy_config_empty_allowed_hosts_parses() {
+        // Empty list is valid TOML — startup validates it at runtime, not parse time.
+        let config: NannyConfig = toml::from_str(
+            r#"
+[limits]
+steps   = 10
+cost    = 100
+timeout = 5000
+
+[proxy]
+allowed_hosts = []
+"#,
+        )
+        .expect("must parse — empty allowed_hosts is rejected at server startup, not config parse");
+
+        let proxy = config.proxy.expect("[proxy] must be present");
+        assert!(proxy.allowed_hosts.is_empty());
+    }
+
+    #[test]
+    fn proxy_config_without_allowed_hosts_defaults_to_empty() {
+        // [proxy] section present but allowed_hosts omitted → defaults to empty vec.
+        let config: NannyConfig = toml::from_str(
+            r#"
+[limits]
+steps   = 10
+cost    = 100
+timeout = 5000
+
+[proxy]
+"#,
+        )
+        .expect("must parse");
+
+        let proxy = config.proxy.expect("[proxy] must be present");
+        assert!(proxy.allowed_hosts.is_empty());
     }
 
     #[test]

@@ -1,4 +1,5 @@
 // Nanny CLI — the only surface humans touch.
+mod commands;
 mod events;
 mod runtime;
 //
@@ -65,6 +66,29 @@ enum Command {
 
     /// Remove the nanny binary from its current install location.
     Uninstall,
+
+    /// Start, stop, or check the Nanny governance server.
+    ///
+    /// For single-process agents, use `nanny run` instead. This command starts
+    /// a standalone governance server for cross-process or cross-machine
+    /// enforcement.
+    ///
+    /// Requires certificates — run `nanny certs generate` first.
+    #[command(subcommand)]
+    Server(commands::server::ServerCommand),
+
+    /// Manage TLS certificates for the network server.
+    ///
+    /// Certificates live in ~/.nanny/certs/ by default.
+    /// Generate once with `nanny certs generate`, then start the server.
+    #[command(subcommand)]
+    Certs(commands::certs::CertsCommand),
+
+    /// Show the health of all active Nanny components.
+    ///
+    /// Checks: local bridge, network server, certificate expiry.
+    /// Exits 0 if healthy, 1 if any active component is unhealthy.
+    Health,
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -76,6 +100,9 @@ fn main() {
         Command::Init => cmd_init(),
         Command::Run { limits, extra_args } => cmd_run(&cli.config, limits.as_deref(), extra_args),
         Command::Uninstall => cmd_uninstall(),
+        Command::Server(action) => commands::server::cmd_server(action),
+        Command::Certs(action) => commands::certs::cmd_certs(action),
+        Command::Health => commands::health::cmd_health(),
     };
 
     if let Err(e) = result {
@@ -228,6 +255,92 @@ fn cmd_uninstall_impl(exe: &Path) -> Result<()> {
 
 // ── nanny run ─────────────────────────────────────────────────────────────────
 
+// ── Network server auto-detection ─────────────────────────────────────────────
+
+/// State written to ~/.nanny/ by `nanny server start`, read here by `nanny run`.
+struct NetworkServerInfo {
+    /// Address to inject as NANNY_BRIDGE_ADDR (0.0.0.0 → 127.0.0.1 for local use).
+    addr: String,
+    /// Session token to inject as NANNY_SESSION_TOKEN.
+    token: String,
+}
+
+/// Check if a governance server started by `nanny server start` is running on
+/// this machine. Returns Some if both state files exist and the server is
+/// actually reachable via TCP. Cleans up stale files if unreachable.
+fn try_detect_network_server() -> Option<NetworkServerInfo> {
+    let nanny_dir = dirs::home_dir()?.join(".nanny");
+    let addr_raw  = std::fs::read_to_string(nanny_dir.join("server.addr")).ok()?;
+    let token     = std::fs::read_to_string(nanny_dir.join("server.token")).ok()?;
+
+    let addr_raw = addr_raw.trim().to_string();
+    let token    = token.trim().to_string();
+
+    if addr_raw.is_empty() || token.is_empty() {
+        return None;
+    }
+
+    // Replace 0.0.0.0 (bind-all listen addr) with 127.0.0.1 for local connections.
+    let connect_addr = addr_raw.replace("0.0.0.0", "127.0.0.1");
+
+    // Quick TCP probe — if the server isn't reachable, the state files are stale.
+    if std::net::TcpStream::connect_timeout(
+        &connect_addr.parse().ok()?,
+        std::time::Duration::from_millis(200),
+    )
+    .is_err()
+    {
+        // Stale files — clean them up so the next `nanny run` starts a local bridge.
+        let _ = std::fs::remove_file(nanny_dir.join("server.addr"));
+        let _ = std::fs::remove_file(nanny_dir.join("server.token"));
+        return None;
+    }
+
+    Some(NetworkServerInfo { addr: connect_addr, token })
+}
+
+/// Run the command against a detected network governance server instead of
+/// starting a local bridge. The server handles all enforcement — `nanny run`
+/// here just injects env vars and waits for the child to finish.
+fn cmd_run_via_network_server(command: Vec<String>, server: NetworkServerInfo) -> Result<()> {
+    let (program, args) = command.split_first().expect("command is non-empty");
+
+    println!("nanny: network server detected at {}", server.addr);
+    println!("nanny: governance enforced remotely — limits and rules apply");
+    println!();
+
+    // Cert files from ~/.nanny/certs/ — auto-injected if present.
+    // Cross-machine deployments override these via NANNY_BRIDGE_CERT/KEY/CA.
+    let certs_dir = dirs::home_dir()
+        .context("cannot determine home directory")?
+        .join(".nanny")
+        .join("certs");
+
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(args);
+    cmd.env("NANNY_BRIDGE_ADDR",    &server.addr);
+    cmd.env("NANNY_SESSION_TOKEN",  &server.token);
+
+    // Only inject cert paths that actually exist — agents on remote machines
+    // may have already set these env vars themselves via their deployment config.
+    let cert_file = certs_dir.join("client.crt");
+    let key_file  = certs_dir.join("client.key");
+    let ca_file   = certs_dir.join("ca.crt");
+    if cert_file.exists() { cmd.env("NANNY_BRIDGE_CERT", &cert_file); }
+    if key_file.exists()  { cmd.env("NANNY_BRIDGE_KEY",  &key_file); }
+    if ca_file.exists()   { cmd.env("NANNY_BRIDGE_CA",   &ca_file); }
+
+    let status = cmd
+        .status()
+        .with_context(|| format!("failed to run '{program}'"))?;
+
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
+
+    Ok(())
+}
+
 fn cmd_run(config_path: &Path, limits_name: Option<&str>, extra_args: Vec<String>) -> Result<()> {
     // Guard: exactly one nanny*.toml allowed per directory.
     let config_dir = config_path
@@ -269,6 +382,14 @@ fn cmd_run(config_path: &Path, limits_name: Option<&str>, extra_args: Vec<String
         return Err(anyhow::anyhow!("[start].cmd in nanny.toml is empty"));
     }
     command.extend(extra_args);
+
+    // ── Network server detection ──────────────────────────────────────────────
+    // If `nanny server start` is running on this machine, use it instead of
+    // starting a local bridge. The server handles enforcement; we just inject
+    // env vars and wait for the child.
+    if let Some(server) = try_detect_network_server() {
+        return cmd_run_via_network_server(command, server);
+    }
 
     // Build the wired runtime from config.
     // If a named limits set was requested, resolve it with inheritance.

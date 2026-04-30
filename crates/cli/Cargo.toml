@@ -28,6 +28,13 @@ clap         = { workspace = true }
 serde        = { workspace = true }
 serde_json   = { workspace = true }
 shlex        = "1"
+# v0.2.0 — Network Bridge
+reqwest      = { workspace = true }
+rcgen        = { workspace = true }
+notify       = { workspace = true }
+dirs         = { workspace = true }
+x509-parser  = { workspace = true }
+time         = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 self-replace = "1"

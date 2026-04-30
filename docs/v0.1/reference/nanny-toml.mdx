@@ -58,6 +58,12 @@ log_file = "nanny.log"       # Required when log = "file"
 endpoint = "https://api.nanny.run"
 org_id   = "org_xxxxxxxxxxxx"
 api_key  = "nanny_live_xxxxxxxxxxxx"
+
+# ── Proxy (v0.2.0) ────────────────────────────────────────────────────────────
+# Only active when `nanny server start --proxy` is passed.
+
+[proxy]
+allowed_hosts = ["api.openai.com", "*.anthropic.com"]   # glob patterns supported
 ```
 
 ---
@@ -133,6 +139,23 @@ cost_per_call = 10    # Cost units charged per call.
 |-------|------|---------|-------------|
 | `log` | string | `"stdout"` | `"stdout"` writes events to stdout. `"file"` appends to `log_file`. |
 | `log_file` | path | — | Required when `log = "file"`. Relative to working directory. |
+
+---
+
+## [proxy]
+
+Optional. Only active when `nanny server start --proxy` is passed. Controls which hosts the HTTP CONNECT proxy may forward to.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `allowed_hosts` | string array | `[]` | Hostnames the proxy may forward to. Supports exact names and glob patterns. An empty list is rejected at server startup. Loopback and RFC-1918 ranges are always blocked in code regardless of this list. |
+
+```toml
+[proxy]
+allowed_hosts = ["api.openai.com", "api.groq.com", "*.anthropic.com"]
+```
+
+This section is ignored when running `nanny run` in local mode.
 
 ---
 
