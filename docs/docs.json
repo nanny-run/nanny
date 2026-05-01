@@ -82,18 +82,15 @@
                 "pages": [
                   "v0.2/init",
                   "v0.2/run",
-                  "v0.2/uninstall",
                   "v0.2/reference/cli-server",
                   "v0.2/reference/cli-certs",
-                  "v0.2/reference/cli-health"
+                  "v0.2/reference/cli-health",
+                  "v0.2/uninstall"
                 ]
               },
               {
                 "group": "Reference",
-                "pages": [
-                  "v0.2/reference/nanny-toml",
-                  "v0.2/reference/events"
-                ]
+                "pages": ["v0.2/reference/nanny-toml", "v0.2/reference/events"]
               }
             ]
           }
