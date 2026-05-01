@@ -311,13 +311,24 @@ async fn route_proxy(State(app): State<AppState>, req: Request) -> Response {
             .into_response();
     };
 
-    // CONNECT uses authority-form: "host:port".
+    // CONNECT uses authority-form: "host:port" or "[ipv6]:port".
     let authority = req
         .uri()
         .authority()
         .map(|a| a.as_str().to_string())
         .unwrap_or_default();
-    let host = authority.split(':').next().unwrap_or("").to_string();
+    // RFC 7231 §4.3.6: IPv6 literals are bracketed — "[addr]:port".
+    // Strip the brackets to get a bare address for is_blocked_host / is_allowed.
+    let host = if authority.starts_with('[') {
+        authority
+            .trim_start_matches('[')
+            .split(']')
+            .next()
+            .unwrap_or("")
+            .to_string()
+    } else {
+        authority.split(':').next().unwrap_or("").to_string()
+    };
 
     if host.is_empty() {
         return (
@@ -1061,7 +1072,7 @@ mod tests {
         gen_certs_for_test(&dir);
 
         let port = next_port();
-        let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+        let addr: SocketAddr = format!("0.0.0.0:{port}").parse().unwrap();
         let cert = dir.join("server.crt");
         let key = dir.join("server.key");
         let ca = dir.join("ca.crt");
@@ -1117,7 +1128,7 @@ mod tests {
         gen_certs_for_test(&dir);
 
         let port = next_port();
-        let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+        let addr: SocketAddr = format!("0.0.0.0:{port}").parse().unwrap();
         let token = "test-server-token-401".to_string();
 
         let cert = dir.join("server.crt");
@@ -1334,7 +1345,7 @@ mod tests {
         gen_certs_for_test(&dir);
 
         let port = next_port();
-        let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+        let addr: SocketAddr = format!("0.0.0.0:{port}").parse().unwrap();
         let token = format!("proxy-test-token-{port}");
 
         let cert = dir.join("server.crt");
@@ -1531,7 +1542,7 @@ mod tests {
         gen_certs_for_test(&dir);
 
         let port = next_port();
-        let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+        let addr: SocketAddr = format!("0.0.0.0:{port}").parse().unwrap();
         let token = "test-server-token-nocert".to_string();
 
         let cert = dir.join("server.crt");
@@ -1954,7 +1965,7 @@ mod tests {
         gen_certs_for_test(&dir_b);
 
         let port  = next_port();
-        let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+        let addr: SocketAddr = format!("0.0.0.0:{port}").parse().unwrap();
         let token = format!("wrong-ca-{port}");
 
         // Start server with CA-A certs.
@@ -2008,7 +2019,7 @@ mod tests {
         let dir   = test_certs_dir();
         gen_certs_for_test(&dir);
         let port  = next_port();
-        let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+        let addr: SocketAddr = format!("0.0.0.0:{port}").parse().unwrap();
         let correct_token = format!("correct-{port}");
 
         let cert = dir.join("server.crt");
@@ -2034,6 +2045,547 @@ mod tests {
             resp.status(), 401,
             "valid cert + wrong token must return 401"
         );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ── T1–T5: Loopback plain HTTP path ──────────────────────────────────────
+    //
+    // These tests cover the branch introduced in this session:
+    // `addr.ip().is_loopback()` → `axum_server::bind` (plain HTTP, no certs).
+    //
+    // All existing integration tests use mTLS even on loopback. This group is
+    // the only coverage for the new path.
+    //
+    // Cert paths are dummies — they are never read on the loopback branch.
+
+    /// Start a plain-HTTP (loopback) server in a background thread.
+    /// Returns the bound port. Token is the caller-supplied string.
+    fn start_plain_http_server(token: &str) -> u16 {
+        let port = next_port();
+        let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+        let tok = token.to_string();
+        std::thread::spawn(move || {
+            NetworkServer::start_blocking(
+                addr,
+                // Cert paths are never read for loopback — pass nonexistent paths.
+                PathBuf::from("/dev/null/nanny-test-dummy.crt"),
+                PathBuf::from("/dev/null/nanny-test-dummy.key"),
+                PathBuf::from("/dev/null/nanny-test-dummy-ca.crt"),
+                test_components(),
+                None,
+                Some(tok),
+                100,
+            )
+            .ok();
+        });
+        wait_for_port(port);
+        port
+    }
+
+    /// Plain HTTP client — no TLS, no certs.
+    fn plain_http_client() -> reqwest::blocking::Client {
+        reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap()
+    }
+
+    // T1 — GET /health returns {"state":"running"} over plain HTTP.
+    // Proves the loopback branch binds and serves correctly without any TLS setup.
+    #[test]
+    fn loopback_plain_http_health_returns_running() {
+        let token = format!("plain-health-{}", next_port());
+        let port  = start_plain_http_server(&token);
+        let client = plain_http_client();
+
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/health"))
+            .header("X-Nanny-Session-Token", &token)
+            .send()
+            .expect("plain HTTP GET /health must succeed");
+
+        assert_eq!(resp.status(), 200, "loopback plain HTTP must return 200 on /health");
+        let body: serde_json::Value = resp.json().unwrap();
+        assert_eq!(body["state"], "running",
+            "health response must carry state=running; got: {body}");
+    }
+
+    // T2 — Wrong token returns 401 over plain HTTP.
+    // Auth is the session token, not TLS — must still enforce on plain HTTP path.
+    #[test]
+    fn loopback_plain_http_wrong_token_returns_401() {
+        let token = format!("plain-auth-{}", next_port());
+        let port  = start_plain_http_server(&token);
+        let client = plain_http_client();
+
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/health"))
+            .header("X-Nanny-Session-Token", "not-the-right-token")
+            .send()
+            .expect("request must reach server even with wrong token");
+
+        assert_eq!(resp.status(), 401,
+            "wrong token on plain HTTP must return 401");
+    }
+
+    // T3 — POST /tool/call allows a tool within budget over plain HTTP.
+    // Proves enforcement is active, not just that the socket binds.
+    #[test]
+    fn loopback_plain_http_tool_call_allowed() {
+        let token = format!("plain-tool-{}", next_port());
+        let port  = start_plain_http_server(&token);
+        let client = plain_http_client();
+
+        let resp = client
+            .post(format!("http://127.0.0.1:{port}/tool/call"))
+            .header("X-Nanny-Session-Token", &token)
+            .body(r#"{"tool":"echo","cost":5}"#)
+            .send()
+            .expect("POST /tool/call must reach plain HTTP server");
+
+        assert_eq!(resp.status(), 200,
+            "allowed tool on plain HTTP must return 200");
+        let body: serde_json::Value = resp.json().unwrap();
+        assert_eq!(body["status"], "allowed",
+            "tool within budget must be allowed; got: {body}");
+    }
+
+    // T4 — POST /stop → action endpoints return 410 over plain HTTP.
+    // Proves the execution-stopped gate works on the plain HTTP code path.
+    #[test]
+    fn loopback_plain_http_410_after_stop() {
+        let token = format!("plain-stop-{}", next_port());
+        let port  = start_plain_http_server(&token);
+        let client = plain_http_client();
+        let base   = format!("http://127.0.0.1:{port}");
+
+        // Stop the execution.
+        let stop = client
+            .post(format!("{base}/stop"))
+            .header("X-Nanny-Session-Token", &token)
+            .body(r#"{"reason":"ManualStop"}"#)
+            .send()
+            .expect("/stop must reach plain HTTP server");
+        assert_eq!(stop.status(), 200, "/stop must return 200");
+
+        // All action endpoints must now return 410.
+        for path in &["/tool/call", "/step", "/agent/enter", "/rule/evaluate"] {
+            let resp = client
+                .post(format!("{base}{path}"))
+                .header("X-Nanny-Session-Token", &token)
+                .body("{}")
+                .send()
+                .expect("post-stop request must reach server");
+            assert_eq!(resp.status(), 410,
+                "{path} must return 410 after execution stopped on plain HTTP path");
+        }
+    }
+
+    // T5 — Shared budget across two plain-HTTP clients.
+    // Two independent clients hit the same enforcement state; budget exhaustion
+    // on client 1's call blocks client 2's next call.
+    #[test]
+    fn loopback_plain_http_shared_budget_across_clients() {
+        // Use a budget of 25 with cost=10 per call (same reasoning as mTLS test).
+        // Call 1 (c1, cost 10) → allowed (10 spent)
+        // Call 2 (c2, cost 10) → allowed (20 spent)
+        // Call 3 (c1, cost 10) → LimitsPolicy pre-check: 30 > 25 → denied
+        // Call 4 (c2)          → 410 (execution stopped after call 3)
+        let token = format!("plain-budget-{}", next_port());
+        let port  = {
+            let p = next_port();
+            let addr: SocketAddr = format!("127.0.0.1:{p}").parse().unwrap();
+            let tok = token.clone();
+            std::thread::spawn(move || {
+                NetworkServer::start_blocking(
+                    addr,
+                    PathBuf::from("/dev/null/dummy.crt"),
+                    PathBuf::from("/dev/null/dummy.key"),
+                    PathBuf::from("/dev/null/dummy-ca.crt"),
+                    test_components_with_cost(25),
+                    None,
+                    Some(tok),
+                    100,
+                ).ok();
+            });
+            wait_for_port(p);
+            p
+        };
+
+        let c1 = plain_http_client();
+        let c2 = plain_http_client();
+        let base = format!("http://127.0.0.1:{port}");
+
+        macro_rules! tool_call {
+            ($client:expr) => {
+                $client
+                    .post(format!("{}/tool/call", base))
+                    .header("X-Nanny-Session-Token", &token)
+                    .body(r#"{"tool":"http_get","cost":10}"#)
+                    .send()
+                    .expect("tool call must reach server")
+            };
+        }
+
+        let r1 = tool_call!(c1);
+        let r2 = tool_call!(c2);
+        let r3 = tool_call!(c1);
+        let r4 = tool_call!(c2);
+
+        // r1 and r2: 200 + allowed
+        assert_eq!(r1.status(), 200, "c1 call 1 must succeed");
+        let b1: serde_json::Value = r1.json().unwrap();
+        assert_eq!(b1["status"], "allowed", "c1 call 1 must be allowed");
+
+        assert_eq!(r2.status(), 200, "c2 call 2 must succeed");
+        let b2: serde_json::Value = r2.json().unwrap();
+        assert_eq!(b2["status"], "allowed", "c2 call 2 must be allowed");
+
+        // r3: budget exceeded — must be denied (pre-check fires)
+        assert_eq!(r3.status(), 200, "c1 call 3 must return 200 (denied JSON)");
+        let b3: serde_json::Value = r3.json().unwrap();
+        assert_eq!(b3["status"], "denied",
+            "c1 call 3 must be denied — budget exhausted; got: {b3}");
+
+        // r4: execution stopped — must be 410
+        assert_eq!(r4.status(), 410,
+            "c2 call 4 must return 410 — execution stopped after c1's denial");
+    }
+
+    // ── T10: /status field contract ───────────────────────────────────────────
+    //
+    // GET /status is what the Python SDK reads to populate PolicyContext.
+    // The bridge-to-SDK field mapping is a documented contract:
+    //   bridge "step"       → SDK "step_count"
+    //   bridge "cost_spent" → SDK "cost_units_spent"
+    // A regression here breaks @rule evaluation silently.
+
+    #[test]
+    fn status_returns_correct_fields_after_tool_call() {
+        let token = format!("status-fields-{}", next_port());
+        let port  = start_plain_http_server(&token);
+        let client = plain_http_client();
+        let base   = format!("http://127.0.0.1:{port}");
+
+        // Make one tool call so the counters are non-zero.
+        client
+            .post(format!("{base}/tool/call"))
+            .header("X-Nanny-Session-Token", &token)
+            .body(r#"{"tool":"echo","cost":7,"args":{"x":"y"}}"#)
+            .send()
+            .expect("tool call must succeed");
+
+        let resp = client
+            .get(format!("{base}/status"))
+            .header("X-Nanny-Session-Token", &token)
+            .send()
+            .expect("GET /status must succeed");
+
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().unwrap();
+
+        // These are the exact field names the Python SDK reads.
+        assert!(body["step"].is_number(),
+            "/status must have numeric 'step' field; got: {body}");
+        assert!(body["cost_spent"].is_number(),
+            "/status must have numeric 'cost_spent' field; got: {body}");
+        assert!(body["elapsed_ms"].is_number(),
+            "/status must have numeric 'elapsed_ms' field; got: {body}");
+        assert!(body["tool_call_counts"].is_object(),
+            "/status must have object 'tool_call_counts' field; got: {body}");
+        assert!(body["tool_call_history"].is_array(),
+            "/status must have array 'tool_call_history' field; got: {body}");
+
+        // Verify the values reflect the call we just made.
+        assert_eq!(body["cost_spent"], 7,
+            "cost_spent must equal the charged cost; got: {body}");
+        assert!(body["tool_call_counts"]["echo"].as_u64().unwrap_or(0) >= 1,
+            "tool_call_counts must count the echo call; got: {body}");
+        let history = body["tool_call_history"].as_array().unwrap();
+        assert!(history.iter().any(|v| v == "echo"),
+            "tool_call_history must include 'echo'; got: {body}");
+    }
+
+    // ── T11: /step increments step count ─────────────────────────────────────
+
+    #[test]
+    fn step_endpoint_increments_step_count_in_status() {
+        let token = format!("step-incr-{}", next_port());
+        let port  = start_plain_http_server(&token);
+        let client = plain_http_client();
+        let base   = format!("http://127.0.0.1:{port}");
+
+        // POST /step twice.
+        for _ in 0..2 {
+            let resp = client
+                .post(format!("{base}/step"))
+                .header("X-Nanny-Session-Token", &token)
+                .body("{}")
+                .send()
+                .expect("POST /step must succeed");
+            assert_eq!(resp.status(), 200, "POST /step must return 200");
+        }
+
+        // GET /status — step must be at least 2.
+        let status: serde_json::Value = client
+            .get(format!("{base}/status"))
+            .header("X-Nanny-Session-Token", &token)
+            .send()
+            .expect("GET /status must succeed")
+            .json()
+            .unwrap();
+
+        let step = status["step"].as_u64().unwrap_or(0);
+        assert!(step >= 2,
+            "step must be ≥ 2 after two POST /step calls; got: {status}");
+    }
+
+    // ── T12–T13: Tool call events in network server ───────────────────────────
+
+    // T12 — POST /tool/call emits ToolAllowed in /events.
+    #[test]
+    fn tool_call_emits_tool_allowed_event_in_network_server() {
+        let token = format!("ev-allowed-{}", next_port());
+        let port  = start_plain_http_server(&token);
+        let client = plain_http_client();
+        let base   = format!("http://127.0.0.1:{port}");
+
+        client
+            .post(format!("{base}/tool/call"))
+            .header("X-Nanny-Session-Token", &token)
+            .body(r#"{"tool":"echo","cost":1}"#)
+            .send()
+            .expect("tool call must reach server");
+
+        let events = client
+            .get(format!("{base}/events"))
+            .header("X-Nanny-Session-Token", &token)
+            .send()
+            .expect("GET /events must succeed")
+            .text()
+            .unwrap();
+
+        let has_allowed = events.lines().any(|l| {
+            serde_json::from_str::<serde_json::Value>(l)
+                .map(|v| v["event"] == "ToolAllowed")
+                .unwrap_or(false)
+        });
+        assert!(has_allowed,
+            "ToolAllowed event must appear after a successful tool call\ngot: {events}");
+    }
+
+    // T13 — POST /tool/call for a denied tool emits ToolDenied in /events.
+    #[test]
+    fn tool_call_denied_emits_tool_denied_event_in_network_server() {
+        let token = format!("ev-denied-{}", next_port());
+        let port  = start_plain_http_server(&token);
+        let client = plain_http_client();
+        let base   = format!("http://127.0.0.1:{port}");
+
+        // "not_allowed_tool" is not in the allowed_tools list ("echo" only in test_components).
+        client
+            .post(format!("{base}/tool/call"))
+            .header("X-Nanny-Session-Token", &token)
+            .body(r#"{"tool":"not_allowed_tool","cost":0}"#)
+            .send()
+            .expect("tool call must reach server");
+
+        let events = client
+            .get(format!("{base}/events"))
+            .header("X-Nanny-Session-Token", &token)
+            .send()
+            .expect("GET /events must succeed")
+            .text()
+            .unwrap();
+
+        let has_denied = events.lines().any(|l| {
+            serde_json::from_str::<serde_json::Value>(l)
+                .map(|v| v["event"] == "ToolDenied")
+                .unwrap_or(false)
+        });
+        assert!(has_denied,
+            "ToolDenied event must appear after a denied tool call\ngot: {events}");
+    }
+
+    // ── T14: Token file permissions ───────────────────────────────────────────
+    // Verifies ~/.nanny/server.token is written with mode 0o600 (Unix only).
+
+    #[cfg(unix)]
+    #[test]
+    fn server_token_file_has_restrictive_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let token = format!("tokenperm-{}", next_port());
+        let port  = start_plain_http_server(&token);
+        let _ = port; // server is running — token file has been written
+
+        let token_file = dirs::home_dir()
+            .expect("home dir must exist")
+            .join(".nanny")
+            .join("server.token");
+
+        assert!(token_file.exists(), "~/.nanny/server.token must exist after server start");
+
+        let mode = std::fs::metadata(&token_file)
+            .expect("must read token file metadata")
+            .permissions()
+            .mode();
+
+        // 0o600 = owner read+write only. No group or world bits.
+        let group_world_bits = mode & 0o077;
+        assert_eq!(group_world_bits, 0,
+            "server.token must not be group- or world-readable; mode was 0o{mode:o}");
+    }
+
+    // ── T16: Rate limiter window reset ────────────────────────────────────────
+
+    #[test]
+    fn rate_limiter_recovers_after_window_reset() {
+        // Server allows 3 req/s per IP. Send 5 requests fast (must see ≥1 429).
+        // Then wait 1.1s for the window to reset.
+        // Then send 3 more requests — all must succeed (window reset, fresh count).
+        let dir = test_certs_dir();
+        gen_certs_for_test(&dir);
+        let port  = next_port();
+        let token = format!("rl-reset-{port}");
+
+        let _h = start_server_with_handle(test_components(), port, token.clone(), &dir, 3);
+
+        let client = make_mtls_client(&dir, port);
+        let base   = format!("https://127.0.0.1:{port}");
+
+        // Exhaust the window — at least one 429 expected.
+        let mut saw_429 = false;
+        for _ in 0..5 {
+            let resp = client
+                .get(format!("{base}/health"))
+                .header("X-Nanny-Session-Token", &token)
+                .send()
+                .expect("health request must reach server");
+            if resp.status() == 429 { saw_429 = true; }
+        }
+        assert!(saw_429, "rate limiter must fire 429 when limit is exceeded");
+
+        // Wait for a new window (1.1 s > 1 s window).
+        std::thread::sleep(Duration::from_millis(1100));
+
+        // All three requests must now succeed (fresh window).
+        for i in 0..3 {
+            let resp = client
+                .get(format!("{base}/health"))
+                .header("X-Nanny-Session-Token", &token)
+                .send()
+                .expect("health must succeed after window reset");
+            assert_eq!(resp.status(), 200,
+                "request {i} after window reset must return 200 — rate limiter must have reset");
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ── T17–T18: RFC-1918 and IPv6 unique-local at the proxy handler ──────────
+    //
+    // is_blocked_host unit tests prove the logic. These integration tests prove
+    // the handler actually calls is_blocked_host before forwarding.
+
+    // T17 — CONNECT to a private RFC-1918 address returns 403.
+    #[test]
+    fn proxy_blocks_rfc1918_private_range_at_handler() {
+        let (port, token, dir) = start_proxy_server(Some(vec!["10.0.0.1".into()]));
+
+        let ca   = std::fs::read(dir.join("ca.crt")).unwrap();
+        let cert = std::fs::read(dir.join("client.crt")).unwrap();
+        let key  = std::fs::read(dir.join("client.key")).unwrap();
+        let mut stream = tls_connect_raw(&format!("127.0.0.1:{port}"), &ca, &cert, &key);
+
+        // 10.0.0.1 is in the RFC-1918 private range — must be blocked even if allowlisted.
+        let (status, body) = send_connect(&mut stream, "10.0.0.1:80", &token);
+        assert_eq!(status, 403,
+            "RFC-1918 address must be blocked regardless of allowlist");
+        assert!(body.contains("blocked"),
+            "response must say 'blocked', not 'denied'; got: {body}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // T18 — CONNECT to an IPv6 unique-local address (fc00::/7) returns 403.
+    #[test]
+    fn proxy_blocks_ipv6_unique_local_at_handler() {
+        let (port, token, dir) = start_proxy_server(Some(vec!["fc00::1".into()]));
+
+        let ca   = std::fs::read(dir.join("ca.crt")).unwrap();
+        let cert = std::fs::read(dir.join("client.crt")).unwrap();
+        let key  = std::fs::read(dir.join("client.key")).unwrap();
+        let mut stream = tls_connect_raw(&format!("127.0.0.1:{port}"), &ca, &cert, &key);
+
+        // fc00::1 is IPv6 unique-local — must be blocked even if allowlisted.
+        // RFC 7231 requires IPv6 literals to be bracketed in CONNECT targets.
+        let (status, body) = send_connect(&mut stream, "[fc00::1]:443", &token);
+        assert_eq!(status, 403,
+            "IPv6 unique-local address must be blocked regardless of allowlist");
+        assert!(body.contains("blocked"),
+            "response must say 'blocked'; got: {body}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ── T19: In-flight request completes before graceful drain ────────────────
+    //
+    // graceful_drain_stops_server_cleanly proves new connections are refused
+    // after drain. This test proves the drain window actually works: a request
+    // received during the drain window must return 200, not a connection error.
+    //
+    // Invariant: if a response arrives, it must be well-formed (200). If we
+    // lose the race to the shutdown, a connection error is also acceptable.
+    // A corrupt or non-200 response during the drain window is the failure mode.
+
+    #[test]
+    fn in_flight_request_completes_before_drain_deadline() {
+        let dir = test_certs_dir();
+        gen_certs_for_test(&dir);
+        let port  = next_port();
+        let token = format!("inflight-{port}");
+
+        let handle = start_server_with_handle(test_components(), port, token.clone(), &dir, 100);
+        let client = make_mtls_client(&dir, port);
+        let base   = format!("https://127.0.0.1:{port}");
+
+        // Confirm server is up before the test begins.
+        let pre = client
+            .get(format!("{base}/health"))
+            .header("X-Nanny-Session-Token", &token)
+            .send()
+            .expect("pre-drain health must succeed");
+        assert_eq!(pre.status(), 200, "server must be healthy before drain");
+
+        // Trigger graceful shutdown with a 2s drain window.
+        handle.graceful_shutdown(Some(Duration::from_secs(2)));
+
+        // Send a request immediately after triggering drain. The race:
+        //   Win → request received during drain → server returns 200 (not error)
+        //   Lose → connection refused (server already closed) → Err(_) is fine
+        // The assertion is: IF we get a response, it must be 200.
+        let during_drain = client
+            .get(format!("{base}/health"))
+            .header("X-Nanny-Session-Token", &token)
+            .send();
+        match during_drain {
+            Ok(resp) => assert_eq!(resp.status(), 200,
+                "a response received during the drain window must be 200, not an error"),
+            Err(_) => { /* connection refused — we lost the race, acceptable */ }
+        }
+
+        // Wait for the drain window to expire.
+        std::thread::sleep(Duration::from_secs(3));
+
+        // All new connections must now be refused.
+        let post = client
+            .get(format!("{base}/health"))
+            .header("X-Nanny-Session-Token", &token)
+            .send();
+        assert!(post.is_err(),
+            "server must refuse all connections after graceful drain expires");
 
         std::fs::remove_dir_all(&dir).ok();
     }

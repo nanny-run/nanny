@@ -328,3 +328,290 @@ log = "stdout"
         "stderr must mention 'no start config'; got: {stderr}"
     );
 }
+
+// ── T6: nanny server start — non-loopback without certs fails fast ────────────
+//
+// `server.rs` bails before starting the server when the bind address is
+// non-loopback and cert files don't exist. Tests the error message content
+// so developers know exactly what to do (nanny certs generate).
+
+#[test]
+fn server_start_nonloopback_without_certs_exits_with_message() {
+    let dir   = temp_dir();
+    let home  = temp_dir(); // override HOME so no ~/.nanny/certs/ exists
+
+    // Write a minimal nanny.toml so the config load succeeds.
+    fs::write(
+        dir.join("nanny.toml"),
+        r#"[runtime]
+mode = "local"
+
+[start]
+cmd = "echo hello"
+
+[limits]
+steps   = 10
+cost    = 100
+timeout = 5000
+
+[observability]
+log = "stdout"
+"#,
+    )
+    .unwrap();
+
+    // Use a high port to avoid conflicts. Non-loopback → cert check fires.
+    let output = Command::new(nanny_bin())
+        .current_dir(&dir)
+        .env("HOME", &home)
+        .args(["server", "start", "--addr", "0.0.0.0:62998"])
+        .output()
+        .expect("nanny server start must run");
+
+    let _ = fs::remove_dir_all(&dir);
+    let _ = fs::remove_dir_all(&home);
+
+    assert!(
+        !output.status.success(),
+        "nanny server start must exit non-zero when certs are missing for non-loopback"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("mTLS") || stderr.contains("certs generate") || stderr.contains("not found"),
+        "stderr must mention cert requirement; got: {stderr}"
+    );
+}
+
+// ── T7: nanny server start — loopback does NOT require cert files ─────────────
+//
+// Default addr is 127.0.0.1 (loopback) → no cert check → server binds
+// successfully even when ~/.nanny/certs/ doesn't exist.
+// Regression guard: if the cert check accidentally runs for loopback, the
+// server would fail to start and this test would catch it.
+
+#[test]
+fn server_start_loopback_does_not_require_cert_files() {
+    let dir  = temp_dir();
+    let home = temp_dir(); // fresh HOME — no certs directory
+
+    fs::write(
+        dir.join("nanny.toml"),
+        r#"[runtime]
+mode = "local"
+
+[start]
+cmd = "echo hello"
+
+[limits]
+steps   = 10
+cost    = 100
+timeout = 5000
+
+[observability]
+log = "stdout"
+"#,
+    )
+    .unwrap();
+
+    // Pick a port for the server. We'll probe it then kill the process.
+    let port = 15900u16; // static, unlikely to be in use during tests
+
+    let mut child = Command::new(nanny_bin())
+        .current_dir(&dir)
+        .env("HOME", &home)
+        .args(["server", "start", "--addr", &format!("127.0.0.1:{port}")])
+        .spawn()
+        .expect("nanny server start must spawn");
+
+    // Poll until the port accepts connections (up to 5s).
+    let mut ready = false;
+    for _ in 0..50 {
+        if std::net::TcpStream::connect(format!("127.0.0.1:{port}")).is_ok() {
+            ready = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    // Kill the server process.
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = fs::remove_dir_all(&dir);
+    let _ = fs::remove_dir_all(&home);
+
+    assert!(
+        ready,
+        "nanny server start on loopback must bind successfully without cert files"
+    );
+}
+
+// ── T8: nanny run auto-detects a running governance server ────────────────────
+//
+// When ~/.nanny/server.addr and ~/.nanny/server.token exist and the server is
+// reachable, `nanny run` should detect it, print the confirmation message, and
+// route the child process through the network server instead of starting a
+// local bridge.
+
+#[test]
+fn nanny_run_detects_network_server_and_prints_message() {
+    let dir  = temp_dir();
+    let home = temp_dir();
+
+    // Write nanny.toml.
+    fs::write(
+        dir.join("nanny.toml"),
+        r#"[runtime]
+mode = "local"
+
+[start]
+cmd = "echo nanny-detection-test"
+
+[limits]
+steps   = 10
+cost    = 100
+timeout = 10000
+
+[observability]
+log = "stdout"
+"#,
+    )
+    .unwrap();
+
+    // Start a plain-HTTP governance server on a loopback port.
+    // We do this by running `nanny server start` in a background process
+    // with HOME=home so it writes its state files there.
+    let server_port = 15901u16;
+    let server_toml_dir = temp_dir();
+    fs::write(
+        server_toml_dir.join("nanny.toml"),
+        r#"[runtime]
+mode = "local"
+
+[start]
+cmd = "echo unused"
+
+[limits]
+steps   = 100
+cost    = 1000
+timeout = 60000
+
+[observability]
+log = "stdout"
+"#,
+    )
+    .unwrap();
+
+    let mut server = Command::new(nanny_bin())
+        .current_dir(&server_toml_dir)
+        .env("HOME", &home)
+        .args(["server", "start", "--addr", &format!("127.0.0.1:{server_port}")])
+        .spawn()
+        .expect("governance server must spawn");
+
+    // Wait for the server to be ready.
+    let mut ready = false;
+    for _ in 0..50 {
+        if std::net::TcpStream::connect(format!("127.0.0.1:{server_port}")).is_ok() {
+            ready = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(ready, "governance server must become ready within 5 s");
+
+    // Run `nanny run` with HOME pointing to the same home directory.
+    // try_detect_network_server reads ~/.nanny/server.addr and ~/.nanny/server.token.
+    let output = Command::new(nanny_bin())
+        .current_dir(&dir)
+        .env("HOME", &home)
+        .args(["--config", &config_arg(&dir), "run"])
+        .output()
+        .expect("nanny run must complete");
+
+    let _ = server.kill();
+    let _ = server.wait();
+    let _ = fs::remove_dir_all(&dir);
+    let _ = fs::remove_dir_all(&home);
+    let _ = fs::remove_dir_all(&server_toml_dir);
+
+    assert!(
+        output.status.success(),
+        "nanny run must exit 0 when routing through network server\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("network server detected at"),
+        "nanny run must print 'network server detected at' when server is reachable\ngot: {stdout}"
+    );
+}
+
+// ── T9: Stale server.addr is cleaned up when TCP probe fails ─────────────────
+//
+// When ~/.nanny/server.addr points to a port with nothing listening,
+// try_detect_network_server must delete the stale files and fall back to
+// a local bridge. nanny run must exit 0 (not crash).
+
+#[test]
+fn stale_server_addr_cleaned_up_on_probe_failure() {
+    let dir  = temp_dir();
+    let home = temp_dir();
+
+    // Write nanny.toml.
+    fs::write(
+        dir.join("nanny.toml"),
+        r#"[runtime]
+mode = "local"
+
+[start]
+cmd = "echo nanny-stale-test"
+
+[limits]
+steps   = 10
+cost    = 100
+timeout = 10000
+
+[observability]
+log = "stdout"
+"#,
+    )
+    .unwrap();
+
+    // Write stale state files pointing to a port with nothing listening.
+    let nanny_state = home.join(".nanny");
+    fs::create_dir_all(&nanny_state).unwrap();
+    // Port 1 is typically reserved / always unreachable on localhost.
+    fs::write(nanny_state.join("server.addr"), "127.0.0.1:1").unwrap();
+    fs::write(nanny_state.join("server.token"), "stale-token").unwrap();
+
+    let output = Command::new(nanny_bin())
+        .current_dir(&dir)
+        .env("HOME", &home)
+        .args(["--config", &config_arg(&dir), "run"])
+        .output()
+        .expect("nanny run must complete");
+
+    // Check whether stale files were removed.
+    let addr_exists  = nanny_state.join("server.addr").exists();
+    let token_exists = nanny_state.join("server.token").exists();
+
+    let _ = fs::remove_dir_all(&dir);
+    let _ = fs::remove_dir_all(&home);
+
+    assert!(
+        output.status.success(),
+        "nanny run must exit 0 when stale server.addr is cleaned up\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        !addr_exists,
+        "stale server.addr must be deleted when TCP probe fails"
+    );
+    assert!(
+        !token_exists,
+        "stale server.token must be deleted when TCP probe fails"
+    );
+}

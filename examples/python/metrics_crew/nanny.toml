@@ -113,6 +113,29 @@ max_calls     = 10
 cost_per_call = 5
 max_calls     = 3
 
+# ── HTTP proxy (optional) ─────────────────────────────────────────────────────
+# Activate when running the governance server for cross-process or cross-machine
+# enforcement.  Uncomment `allowed_hosts` and add every external host your crew
+# needs to reach.  Requests to any unlisted host receive 403 and fire a
+# ToolDenied event — the execution stops.
+#
+# Start the governance server first:
+#   nanny server start           # local multi-process (plain HTTP on 127.0.0.1)
+#   nanny server start --proxy   # + enable HTTP CONNECT proxy on the same port
+#
+# Then point agents at it:
+#   NANNY_BRIDGE_ADDR=127.0.0.1:62669 nanny run
+#
+# For cross-machine enforcement, generate mTLS certs and set NANNY_BRIDGE_ADDR
+# to the server's non-loopback address.  See: docs.nanny.run/v0.2/guides/governance-server
+
+# [proxy]
+# allowed_hosts = [
+#     "api.groq.com",           # LLM inference (Groq)
+#     "*.anthropic.com",        # LLM inference (Anthropic) — wildcard covers all subdomains
+#     "api.openai.com",         # LLM inference (OpenAI)
+# ]
+
 # ── Observability ─────────────────────────────────────────────────────────────
 
 [observability]
