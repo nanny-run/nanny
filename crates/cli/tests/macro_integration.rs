@@ -166,9 +166,16 @@ fn call_tool_budget_exhaustion_returns_stop() {
 /// No `#[nanny::rule]` attributes exist in this test binary → always allows.
 /// `evaluate_local_rules` is called by every `#[nanny::tool]` wrapper before
 /// contacting the bridge; zero rules means zero denials.
+///
+/// Must hold ENV_LOCK: `evaluate_local_rules` calls `fetch_bridge_status`,
+/// which calls `is_active()` (reads env vars) and — if active — makes an HTTP
+/// request to the bridge. If this test runs concurrently with a test that has
+/// set `NANNY_BRIDGE_SOCKET`, `fetch_bridge_status` may fail while `is_active`
+/// returns true, causing `evaluate_local_rules` to call `std::process::exit(1)`.
 #[test]
 fn evaluate_local_rules_no_rules_registered_allows_all() {
-    // No env vars needed — this is a pure local check over the inventory.
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    clear_env(); // ensure bridge env vars are absent — passthrough mode expected
     assert!(
         evaluate_local_rules("any_tool", ::std::collections::HashMap::new()).is_none(),
         "no registered rules must produce None (allow all)"
