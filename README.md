@@ -22,7 +22,7 @@
 
 <p align="center">
   <a href="https://docs.nanny.run">Documentation</a> ·
-  <a href="https://docs.nanny.run/v0.1/quickstart">Quickstart</a> ·
+  <a href="https://docs.nanny.run/v0.2/quickstart">Quickstart</a> ·
   <a href="CHANGELOG.md">Changelog</a> ·
   <a href="https://github.com/nanny-run/nanny/issues">Report a Bug</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
@@ -80,7 +80,8 @@ flowchart TD
 | **Nanny CLI**                   | Hard timeout, step, and cost limits for any agent process in any language.                                                               |
 | **Rust SDK**                    | Per-function cost metering, allowlist enforcement, and custom rules — in-process.                                                        |
 | **Python SDK**                  | Per-function and per-role governance for Python agents — each agent in your fleet gets its own budget, tool allowlist, and custom rules. |
-| **Nanny Cloud** _(Coming soon)_ | Durable audit logs, team dashboards, org-level budget aggregation, and cross-process fleet enforcement.                                  |
+| **Governance server**           | Cross-process and cross-machine enforcement via a long-lived server with mutual TLS.                                                     |
+| **Nanny Cloud** _(Coming soon)_ | Durable audit logs, team dashboards, org-level budget aggregation, and managed fleet enforcement.                                        |
 
 → Full docs at [docs.nanny.run](https://docs.nanny.run)
 
@@ -107,7 +108,7 @@ cd examples/python/dev_assist && nanny run
 cd examples/python/metrics_crew && nanny run
 ```
 
-> **Scope:** Nanny governs agents within a single process today. When all agents run in the same process — as in CrewAI, LangGraph, AutoGen, or any framework that orchestrates agents within one Python or Rust runtime — every agent is governed. Cross-process and cross-machine fleet enforcement is the [v0.2.0 cloud layer](#the-nanny-ecosystem).
+> **Scope:** Nanny governs agents within a single process today. When all agents run in the same process — as in CrewAI, LangGraph, AutoGen, or any framework that orchestrates agents within one Python or Rust runtime — every agent is governed. For cross-process and cross-machine enforcement, use the governance server.
 
 ---
 
@@ -235,7 +236,7 @@ All macros are no-ops when running outside `nanny run` — no enforcement overhe
 
 ![Nanny demo — named agent scopes (planner → researcher → synthesizer) entering and exiting](https://raw.githubusercontent.com/nanny-run/nanny/main/assets/demo/webdingo-agent-scopes.gif)
 
-→ Full Rust SDK guide at [docs.nanny.run/v0.1/guides/rust-sdk](https://docs.nanny.run/v0.1/guides/rust-sdk)
+→ Full Rust SDK guide at [docs.nanny.run/v0.2/guides/rust-sdk](https://docs.nanny.run/v0.2/guides/rust-sdk)
 
 ---
 
@@ -288,7 +289,7 @@ def read_file(path: str) -> str:
 
 All decorators are no-ops when running outside `nanny run` — zero overhead in development and CI.
 
-→ Full Python SDK guide at [docs.nanny.run/v0.1/guides/python-sdk](https://docs.nanny.run/v0.1/guides/python-sdk)
+→ Full Python SDK guide at [docs.nanny.run/v0.2/guides/python-sdk](https://docs.nanny.run/v0.2/guides/python-sdk)
 
 ---
 

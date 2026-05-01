@@ -1,0 +1,171 @@
+---
+title: nanny.toml reference
+description: Complete schema for the nanny.toml configuration file.
+---
+
+## Full schema
+
+```toml
+# ── Runtime ─────────────────────────────────────────────────────────────────────────────
+
+[runtime]
+mode = "local"   # "local" | "managed"
+
+# ── Start ─────────────────────────────────────────────────────────────────────
+
+[start]
+cmd = "python agent.py"   # required, the command nanny run executes
+
+# ── Limits ────────────────────────────────────────────────────────────────────
+
+[limits]
+steps   = 100
+cost    = 1000
+timeout = 30000
+
+# Named limit sets — inherit from [limits], override only declared fields.
+[limits.researcher]
+steps   = 200
+cost    = 5000
+timeout = 120000
+
+# ── Tools ─────────────────────────────────────────────────────────────────────
+
+[tools]
+allowed = ["http_get", "read_file"]   # empty list denies every tool call
+
+# Per-tool configuration — tool name must match the function name in code.
+[tools.http_get]
+max_calls     = 10    # max number of calls in one execution
+cost_per_call = 20    # overrides the decorator/macro default if set
+
+# ── Observability ─────────────────────────────────────────────────────────────
+
+[observability]
+log      = "stdout"          # "stdout" | "file"
+log_file = "nanny.log"       # Required when log = "file"
+
+# ── Proxy ─────────────────────────────────────────────────────────────────────
+
+[proxy]
+allowed_hosts = ["api.openai.com", "*.anthropic.com"]   # required when proxy mode is used
+
+# ── Managed (Cloud) ───────────────────────────────────────────────────────────
+
+[managed]
+endpoint = "https://api.nanny.run"
+org_id   = "org_xxxxxxxxxxxx"
+api_key  = "nanny_live_xxxxxxxxxxxx"
+```
+
+---
+
+## [runtime]
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `mode` | `"local"` \| `"managed"` | `"local"` | `"local"` uses the local enforcement bridge. `"managed"` connects to a Nanny Cloud endpoint (requires `[managed]`). |
+
+---
+
+## [start]
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `cmd` | string | — | **Required.** The shell command `nanny run` executes. Examples: `"python agent.py"`, `"cargo run --release"`, `"node agent.js"`. |
+
+---
+
+## [limits]
+
+The global execution ceiling. Any one limit stopping the agent stops the entire run.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `steps` | integer | — | Maximum tool calls allowed. Requires SDK instrumentation. |
+| `cost` | integer | — | Maximum cost units allowed. Requires SDK instrumentation. |
+| `timeout` | integer (ms) | — | Maximum wall-clock time in milliseconds. Enforced for any process, no SDK required. |
+
+**Named limit sets** — `[limits.<name>]` inherits all fields from `[limits]` and overrides only the fields it declares:
+
+```toml
+[limits]
+steps   = 50
+cost    = 500
+timeout = 15000
+
+[limits.researcher]
+steps   = 200       # overrides 50
+cost    = 5000      # overrides 500
+# timeout inherits 15000
+
+[limits.reporter]
+cost    = 100       # overrides 500 only; steps and timeout inherit
+```
+
+Activate a named set from the CLI:
+
+```bash
+nanny run --limits=researcher
+```
+
+Or from inside agent code using `@agent("researcher")` (Python) or `#[nanny::agent("researcher")]` (Rust).
+
+---
+
+## [tools]
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `allowed` | string array | — | Explicit allowlist of tool names. **An empty array denies every tool call.** If `[tools]` is not present, all tools are allowed. |
+
+### Per-tool configuration — `[tools.<name>]`
+
+```toml
+[tools.http_get]
+max_calls     = 10
+cost_per_call = 20
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `max_calls` | integer | unlimited | Maximum number of calls to this tool in one execution. Exceeding this limit fires `RuleDenied` with `rule_name = "<tool>.max_calls"`. |
+| `cost_per_call` | integer | decorator/macro value | Cost units charged per call. Overrides the value declared in `@tool(cost=N)` or `#[tool(cost = N)]`. |
+
+The tool name in `[tools.<name>]` must exactly match the function name used in the `@tool` decorator or `#[nanny::tool]` macro.
+
+---
+
+## [observability]
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `log` | `"stdout"` \| `"file"` | `"stdout"` | Destination for the NDJSON event stream. |
+| `log_file` | string | — | Required when `log = "file"`. Path to the output file. |
+
+---
+
+## [proxy]
+
+Optional. Enables HTTP CONNECT proxy mode on the governance server.
+
+Proxy mode is active only when `allowed_hosts` is present and non-empty. An empty list — or omitting `[proxy]` entirely — disables proxy mode.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `allowed_hosts` | string array | `[]` | Hostnames the proxy may forward to. Supports exact names (`api.openai.com`) and `*.suffix` wildcard patterns. Loopback, link-local, and RFC-1918 ranges are always blocked regardless of this list. |
+
+See [HTTP proxy mode](/v0.2/guides/http-proxy-mode) for full details.
+
+---
+
+## [managed]
+
+Only read when `[runtime] mode = "managed"`. Cloud connection config.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `endpoint` | string | — | Nanny Cloud API endpoint. |
+| `org_id` | string | — | Your organization ID. |
+| `api_key` | string | — | API key for authentication. Use an environment variable in production — never commit this value. |
+

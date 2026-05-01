@@ -460,7 +460,7 @@ fn cmd_run(config_path: &Path, limits_name: Option<&str>, extra_args: Vec<String
     // The bridge signals stop (budget, rules, max-steps) independently
     // of the child's own exit — we must check both.
     //
-    // Bridge events (ToolCalled, ToolAllowed, …) are drained on every tick
+    // Bridge events (ToolAllowed, RuleDenied, ToolDenied, …) are drained on every tick
     // so the NDJSON stream is written in near-real-time — `tail -f` on the
     // log file shows events as they happen, not just at execution end.
     let poll_interval = Duration::from_millis(50);

@@ -174,7 +174,7 @@ log = "stdout"
     );
 }
 
-/// Bridge events (ToolCalled, ToolAllowed, …) are flushed into the NDJSON
+/// Bridge events (ToolAllowed, RuleDenied, ToolDenied, …) are flushed into the NDJSON
 /// stream before ExecutionStopped, so ExecutionStopped is always the last line.
 ///
 /// This test uses `echo` as the child command — it exits immediately without

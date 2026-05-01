@@ -1,0 +1,243 @@
+---
+title: nanny certs
+description: Generate, import, rotate, inspect, and remove TLS certificates for the Nanny governance server.
+---
+
+TLS certificates are required when the governance server binds to a non-loopback address (anything outside `127.x.x.x`). For local multi-process development on loopback, no certs are needed.
+
+```bash
+nanny certs <COMMAND>
+```
+
+---
+
+## Commands
+
+### generate
+
+Generate a complete certificate bundle for the governance server.
+
+```bash
+nanny certs generate [--out-dir <path>] [--days <days>] [--force]
+```
+
+Always generates all five files atomically — PKI requires a CA to sign the server and client certs, so partial generation is not supported.
+
+#### Files generated
+
+```
+~/.nanny/certs/
+  ca.crt      — CA certificate (the trust anchor)
+  ca.key      — CA private key (keep this on the server machine; needed for nanny certs rotate)
+  server.crt  — server TLS certificate
+  server.key  — server TLS private key
+  client.crt  — client certificate (copy to each agent machine)
+  client.key  — client private key (copy to each agent machine)
+```
+
+`nanny server start` reads `server.crt`, `server.key`, and `ca.crt` automatically. Agents on other machines need `client.crt`, `client.key`, and `ca.crt`.
+
+#### Flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--out-dir` | path | `~/.nanny/certs/` | Directory to write cert files. The default is outside any project directory so files are never accidentally committed. |
+| `--days` | integer | `365` | Certificate validity period in days. |
+| `--force` | flag | — | Overwrite existing cert files. Without this flag, `generate` refuses if any cert files already exist. |
+
+#### Example output
+
+```
+nanny certs: generated certificate bundle in '/Users/you/.nanny/certs'
+
+  ca.crt      — CA certificate
+  ca.key      — CA private key    (keep secure, used for rotate)
+  server.crt  — server certificate
+  server.key  — server private key
+  client.crt  — client certificate (distribute to agents)
+  client.key  — client private key  (distribute to agents)
+
+  valid until: 2027-05-01T09:00:00Z
+
+Start the server:
+  nanny server start
+
+Cross-machine agents: copy client.crt + client.key to each agent machine
+and set NANNY_BRIDGE_CERT, NANNY_BRIDGE_KEY, NANNY_BRIDGE_CA in the env.
+```
+
+#### If cert files already exist
+
+```
+cert bundle already exists at '/Users/you/.nanny/certs'
+
+To keep your CA and regenerate only the server + client certs:
+  nanny certs rotate     — regenerate server + client certs, keep CA
+To inspect what you have:
+  nanny certs show       — inspect current expiry
+To regenerate everything (new CA, new server cert, new client cert):
+  nanny certs generate --force
+```
+
+---
+
+### import
+
+Import externally-issued certificates. Use this when your organization has its own PKI (HashiCorp Vault, AWS ACM, cert-manager, an internal CA).
+
+```bash
+nanny certs import [ca=<pem|@file>] [cert=<pem|@file>] [key=<pem|@file>]
+```
+
+Takes `key=value` pairs. Values are either a PEM string or a `@file` reference (path prefixed with `@`). Three keys are accepted: `ca`, `cert`, `key`.
+
+**Partial imports are supported.** Omit any key to leave the existing file unchanged. This is useful for rotating only the server cert and key while keeping the existing CA:
+
+```bash
+nanny certs import cert=@new-server.crt key=@new-server.key
+```
+
+After any import, Nanny validates that the certificate is signed by the CA (imported or existing). A mismatched cert/CA pair fails loudly with a clear error before any file is written.
+
+#### Examples
+
+**From files:**
+
+```bash
+nanny certs import \
+  ca=@/vault/secrets/ca.pem \
+  cert=@/vault/secrets/tls.crt \
+  key=@/vault/secrets/tls.key
+```
+
+**From environment variables (Vault Agent, CI/CD injection):**
+
+```bash
+nanny certs import \
+  ca="$VAULT_CA" \
+  cert="$VAULT_CERT" \
+  key="$VAULT_KEY"
+```
+
+**Directly from Vault CLI (no temp files):**
+
+```bash
+nanny certs import \
+  ca="$(vault read -field=issuing_ca pki/cert/ca)" \
+  cert="$(vault read -field=certificate pki/issue/nanny-server)" \
+  key="$(vault read -field=private_key pki/issue/nanny-server)"
+```
+
+**Updating CA, cert, and key together (CA was replaced by external PKI):**
+
+```bash
+nanny certs import \
+  ca=@new-ca.crt \
+  cert=@new-server.crt \
+  key=@new-server.key
+```
+
+After a successful import, if the governance server is running, it hot-reloads the new certs automatically. No restart needed.
+
+---
+
+### rotate
+
+Regenerate the server and client certificates, preserving the existing CA.
+
+```bash
+nanny certs rotate
+```
+
+`rotate` signs new server and client certs using the CA that `nanny certs generate` created. The CA itself is not changed — existing agents that trust this CA continue to work without re-importing `ca.crt`.
+
+**When to use `rotate`:**
+- Cert expiry is approaching (check with `nanny certs show`)
+- You want to invalidate the existing client cert (rotation generates a new `client.crt` + `client.key`)
+
+**When `rotate` does not apply:**
+- Your certs were issued by an external PKI (Vault, AWS ACM, etc.) — those systems hold the CA private key, not Nanny. Use `nanny certs import` instead.
+
+`rotate` requires `ca.key` to be present in `~/.nanny/certs/`. This file only exists when `nanny certs generate` created the CA. If `ca.key` is missing, `rotate` exits with an error and suggests `nanny certs import`.
+
+#### Example output
+
+```
+nanny certs: rotated — server + client certs regenerated, CA preserved
+  valid until: 2027-05-01T09:00:00Z
+
+  CA unchanged — existing agents retain their trust anchor
+  Redistribute client.crt + client.key to agents on other machines
+
+nanny certs: server is running — certs will hot-reload automatically
+```
+
+---
+
+### show
+
+Show expiry dates, file inventory, and SAN list for the current cert bundle.
+
+```bash
+nanny certs show
+```
+
+Does not print private key material or file paths. Status only.
+
+#### Example output
+
+```
+nanny certs: '/Users/you/.nanny/certs'
+
+  expires : 2027-05-01T09:00:00Z
+  san     : localhost, 127.0.0.1
+
+  present    ca.crt
+  present    ca.key
+  present    server.crt
+  present    server.key
+  present    client.crt
+  present    client.key
+```
+
+If no certs exist:
+
+```
+nanny certs: no certificates found — run `nanny certs generate`
+```
+
+---
+
+### remove
+
+Delete all cert files from `~/.nanny/certs/`.
+
+```bash
+nanny certs remove
+```
+
+Prompts for confirmation before deleting. After removal, `nanny server start` with a non-loopback address will refuse to start until new certs are generated or imported.
+
+**If no certs exist:**
+
+```
+nanny certs: nothing to remove — '/Users/you/.nanny/certs' does not exist
+```
+
+---
+
+## Certificate hot-reload
+
+The governance server watches `~/.nanny/certs/` for file changes. When cert files are updated — by `nanny certs import`, `nanny certs rotate`, or an external PKI agent writing to the directory — the server reloads the new certs without restarting. New connections use the new cert immediately; existing connections complete on the old cert.
+
+This is designed for short-lived PKI certs (for example, Vault PKI secrets engine issuing 8-hour certs renewed automatically by Vault Agent). The server stays up; certs rotate underneath it.
+
+---
+
+## Keeping `ca.key` secure
+
+The CA private key (`ca.key`) is the trust anchor for your entire certificate bundle. Anyone with access to `ca.key` can generate new certificates that your server will accept.
+
+- Keep `ca.key` on the server machine only. Never copy it to agent machines.
+- The client machines need only `ca.crt` (to verify the server) and `client.crt` + `client.key` (to present to the server).
+- Back up `ca.key` securely. If you lose it, run `nanny certs generate --force` to start fresh — but you will need to redistribute `ca.crt` to all agent machines.

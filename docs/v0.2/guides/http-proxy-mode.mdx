@@ -1,0 +1,148 @@
+---
+title: HTTP proxy mode
+description: Intercept and allowlist all outbound HTTP from your agent — even from code with no Nanny decorator.
+---
+
+## What it does
+
+`@nanny_tool` and `#[nanny::tool]` govern tool calls that go through your Rust or Python code. But some tools make HTTP requests without any decorator — LLM client libraries, database drivers, third-party SDKs, HTTP-based MCP tools. Those calls bypass `@nanny_tool` entirely.
+
+HTTP proxy mode fills that gap. When enabled, the governance server acts as an HTTP CONNECT proxy. Your agent sets standard proxy environment variables. All outbound HTTP and HTTPS traffic from the agent — regardless of which library or function makes the call — routes through the server. The server checks each request against an allowlist before forwarding it.
+
+A request to a host not on the allowlist gets a `403 Forbidden` and the governance server emits a `ToolDenied` event in the NDJSON log.
+
+This covers the outbound HTTP surface without any code changes to your agent.
+
+---
+
+## Enable proxy mode
+
+`nanny init` generates a `nanny.toml` with a `[proxy]` section already present but commented out. To activate proxy mode, uncomment `allowed_hosts` and add the hosts your agent needs to reach:
+
+```toml
+[proxy]
+allowed_hosts = ["api.openai.com", "api.groq.com", "*.anthropic.com"]
+```
+
+Proxy mode is active only when `allowed_hosts` is non-empty. Leaving it commented out — or setting an empty list — disables proxy mode entirely.
+
+The governance server validates this list at startup. If `--proxy` is passed but `allowed_hosts` is empty, the server refuses to start with a clear error.
+
+---
+
+## Configure your agent
+
+Add the standard proxy variables to your agent project's `.env` file:
+
+```ini
+# .env
+HTTP_PROXY=http://127.0.0.1:62669
+HTTPS_PROXY=http://127.0.0.1:62669
+```
+
+Most HTTP client libraries — Python's `httpx`, `requests`, `aiohttp`; Node's `fetch`; curl — respect these variables automatically. No code changes needed. Most agent frameworks load `.env` on startup; if yours doesn't, pass the variables inline:
+
+```bash
+HTTP_PROXY=http://127.0.0.1:62669 HTTPS_PROXY=http://127.0.0.1:62669 nanny run
+```
+
+For HTTPS traffic, the proxy uses HTTP CONNECT tunneling: the client sends a `CONNECT` request to the proxy, the proxy opens a TCP tunnel to the target, and the TLS handshake happens inside the tunnel between the client and the target server. The proxy sees the hostname and port but not the decrypted content of HTTPS requests.
+
+---
+
+## Host allowlist rules
+
+### Exact hostnames
+
+```toml
+allowed_hosts = ["api.openai.com", "api.anthropic.com"]
+```
+
+Matches only the exact hostname. `api.openai.com` does not match `beta.openai.com`.
+
+### Wildcard subdomains
+
+```toml
+allowed_hosts = ["*.openai.com", "*.anthropic.com"]
+```
+
+`*.openai.com` matches `api.openai.com`, `beta.openai.com`, `platform.openai.com` — any single subdomain level. It does not match `openai.com` itself (no wildcard prefix) and does not match `api.us.openai.com` (wildcards are single-level only).
+
+### Combining both
+
+```toml
+allowed_hosts = [
+  "api.openai.com",       # exact — this specific API endpoint
+  "*.anthropic.com",      # wildcard — any Anthropic subdomain
+  "api.groq.com",         # exact — Groq API
+]
+```
+
+---
+
+## What is always blocked
+
+Some address ranges are blocked regardless of your `allowed_hosts` list:
+
+| Range | Blocked because |
+|-------|-----------------|
+| Loopback (`127.x.x.x`, `::1`) | localhost services |
+| Link-local (`169.254.x.x`) | cloud metadata endpoints (AWS, GCP, Azure) |
+| RFC-1918 private ranges (`10.x.x.x`, `172.16–31.x.x`, `192.168.x.x`) | internal network services |
+
+---
+
+## The event log
+
+Every proxied request produces an event in the NDJSON log:
+
+**Allowed request:**
+```json
+{"event":"ToolAllowed","ts":1711234567120,"tool":"http_proxy","target":"api.openai.com:443"}
+```
+
+**Denied request (not in allowlist):**
+```json
+{"event":"ToolDenied","ts":1711234567320,"tool":"http_proxy","target":"malicious.example.com:443"}
+{"event":"ExecutionStopped","ts":1711234567321,"reason":"ToolDenied","steps":3,"cost_spent":30,"elapsed_ms":1250}
+```
+
+A proxy denial is a hard stop — the same outcome as any other `ToolDenied` event. The agent process exits immediately.
+
+---
+
+## Cost accounting and HTTPS content
+
+Two things to be aware of when combining proxy mode with the rest of Nanny:
+
+- **Cost accounting requires `@nanny_tool`.** Proxy requests are logged as events but not charged against your cost budget. For cost-tracked HTTP calls, decorate the function with `@nanny_tool` or use `nanny::http_get`.
+- **HTTPS content is not inspected.** The proxy allows or denies by hostname. It cannot read request or response bodies inside HTTPS tunnels.
+
+---
+
+## Example: LLM client with proxy
+
+Most LLM client libraries pick up `HTTP_PROXY` and `HTTPS_PROXY` automatically. Here's a complete example with the OpenAI Python client:
+
+```python
+import os
+from openai import OpenAI
+
+# The client picks up HTTP_PROXY / HTTPS_PROXY from the environment.
+# No code changes needed — just set the env vars before starting your agent.
+client = OpenAI()
+
+response = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "Hello"}],
+)
+```
+
+`nanny.toml`:
+
+```toml
+[proxy]
+allowed_hosts = ["api.openai.com"]
+```
+
+If your agent tries to call any other API host, it gets a `403` and the execution stops.

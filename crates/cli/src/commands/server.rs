@@ -28,14 +28,19 @@ pub enum ServerCommand {
     /// Start the governance server daemon.
     ///
     /// For single-process agents, use `nanny run` instead. This command starts
-    /// a standalone governance server for cross-process or cross-machine
-    /// enforcement over TCP with mutual TLS.
+    /// a standalone governance server for cross-process or cross-machine enforcement.
+    ///
+    /// The bind address determines the security posture:
+    ///   - Loopback (127.x.x.x, ::1): plain HTTP — OS-enforced, no certs needed.
+    ///   - Non-loopback (0.0.0.0, external IP): mTLS — mandatory, certs required.
     ///
     /// Governance API and HTTP CONNECT proxy (when [proxy] is configured in nanny.toml) share one port.
     /// Default port 62669 spells NANNY on a phone keypad.
     Start {
         /// Listen address. Governance API and proxy share this port.
-        #[arg(long, default_value = "0.0.0.0:62669")]
+        /// Default is loopback — plain HTTP, no cert setup required.
+        /// Use 0.0.0.0:62669 for cross-machine (mTLS mandatory, run `nanny certs generate` first).
+        #[arg(long, default_value = "127.0.0.1:62669")]
         addr: SocketAddr,
 
         /// Path to the server certificate PEM.
@@ -132,16 +137,25 @@ fn cmd_server_start(
     let key_path  = key.unwrap_or_else(|| certs_dir.join("server.key"));
     let ca_path   = ca.unwrap_or_else(|| certs_dir.join("ca.crt"));
 
-    // Verify cert files exist before attempting to bind.
-    for (label, path) in [("server cert", &cert_path), ("server key", &key_path), ("CA cert", &ca_path)] {
-        if !path.exists() {
-            anyhow::bail!(
-                "{label} not found: {}\n\
-                 \n\
-                 Run `nanny certs generate` to create a certificate bundle, or\n\
-                 use --cert, --key, --ca to specify paths explicitly.",
-                path.display()
-            );
+    // Cert files are required only for non-loopback addresses (mTLS mandatory).
+    // Loopback binds use plain HTTP — OS-enforced, no TLS overhead.
+    if !addr.ip().is_loopback() {
+        for (label, path) in [("server cert", &cert_path), ("server key", &key_path), ("CA cert", &ca_path)] {
+            if !path.exists() {
+                anyhow::bail!(
+                    "{label} not found: {}\n\
+                     \n\
+                     Non-loopback addresses require mTLS. Run `nanny certs generate` to create \
+                     a certificate bundle, or use --cert, --key, --ca to specify paths explicitly.\n\
+                     \n\
+                     For same-machine multi-agent use, bind to loopback instead:\n\
+                     \n\
+                     \x20   nanny server start\n\
+                     \n\
+                     (default is 127.0.0.1:62669 — no certs needed)",
+                    path.display()
+                );
+            }
         }
     }
 

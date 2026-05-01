@@ -116,6 +116,37 @@ These are permanent constraints, not temporary gaps. They protect the property t
 
 The repository has two independent build systems: a Rust workspace under `crates/` and a Python package under `sdks/python/`. They share the same repo and version number but have no toolchain overlap — `cd sdks/python && uv sync && uv run pytest` runs without touching Cargo, and `cargo build --workspace` runs without touching Python.
 
+---
+
+## Doc map
+
+This repository has three doc surfaces. Keep each one in scope and consistent with its audience.
+
+| Surface   | Where                                                                    | Audience                       | What it owns                                                                      |
+| --------- | ------------------------------------------------------------------------ | ------------------------------ | --------------------------------------------------------------------------------- |
+| Docs site | `docs/` (Mintlify)                                                       | Developers using Nanny         | Commands, configuration, SDK usage, concepts, reference                           |
+| Root docs | `README.md`, `ARCHITECTURE.md`, `CHANGELOG.md`, `SECURITY.md`, this file | Contributors and evaluators    | Project overview, deep implementation model, contribution workflow, release notes |
+| Examples  | `examples/**/README.md`                                                  | Developers learning by copying | Runnable “this is how you use it” integrations                                    |
+
+Entry points:
+
+- **Docs site**
+  - `docs/v0.2/index.mdx` (current version)
+  - `docs/v0.1/index.mdx` (previous version — maintained for existing links)
+  - `docs/docs.json` (navigation, versions, redirects)
+- **Root docs**
+  - `README.md` (product overview and first-run path)
+  - `ARCHITECTURE.md` (enforcement model, internal terms allowed)
+  - `CHANGELOG.md` (release notes, authoritative user-visible changes)
+  - `CONTRIBUTING.md` (how to work in this repo)
+- **Examples**
+  - `examples/rust/webdingo/README.md`
+  - `examples/rust/qabud/README.md`
+  - `examples/python/dev_assist/README.md`
+  - `examples/python/metrics_crew/README.md`
+
+If your PR changes user-facing behaviour, CLI output, config schema, or event format, update the docs site (`docs/`) and any affected example READMEs in the same PR.
+
 **Rust crates** — all six are published to crates.io. `nannyd` (`cli`) is the developer-facing crate. The others are its published dependencies and are not intended to be used directly.
 
 | Crate     | crates.io name  | Developer-facing | What it does                                                                                   |

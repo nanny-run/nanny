@@ -58,20 +58,14 @@ log_file = "nanny.log"       # Required when log = "file"
 endpoint = "https://api.nanny.run"
 org_id   = "org_xxxxxxxxxxxx"
 api_key  = "nanny_live_xxxxxxxxxxxx"
-
-# ── Proxy (v0.2.0) ────────────────────────────────────────────────────────────
-# Only active when `nanny server start --proxy` is passed.
-
-[proxy]
-allowed_hosts = ["api.openai.com", "*.anthropic.com"]   # glob patterns supported
 ```
 
 ---
 
 ## [runtime]
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
+| Field  | Type   | Default   | Description                                                                                                                    |
+| ------ | ------ | --------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `mode` | string | `"local"` | `"local"` enforces limits locally, without external services. `"managed"` additionally forwards execution data to Nanny Cloud. |
 
 ---
@@ -80,8 +74,8 @@ allowed_hosts = ["api.openai.com", "*.anthropic.com"]   # glob patterns supporte
 
 Required for `nanny run`. Declares the command to execute when `nanny run` is invoked with no inline command argument.
 
-| Field | Type | Description |
-|-------|------|-------------|
+| Field | Type   | Description                                                                                                                                        |
+| ----- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `cmd` | string | The command string to run. Parsed with shell quoting rules — paths with spaces are supported. Arguments passed after `--` on the CLI are appended. |
 
 ```toml
@@ -98,10 +92,10 @@ nanny run --limits=researcher    # runs with [limits.researcher] active
 
 ## [limits]
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `steps` | integer | `100` | Maximum steps. `0` = unlimited. |
-| `cost` | integer | `1000` | Maximum cost units. `0` = unlimited. |
+| Field     | Type    | Default | Description                               |
+| --------- | ------- | ------- | ----------------------------------------- |
+| `steps`   | integer | `100`   | Maximum steps. `0` = unlimited.           |
+| `cost`    | integer | `1000`  | Maximum cost units. `0` = unlimited.      |
 | `timeout` | integer | `30000` | Timeout in milliseconds. `0` = unlimited. |
 
 ### Named limit sets
@@ -119,9 +113,9 @@ Named sets inherit all unset fields from `[limits]`. Activate with `--limits=res
 
 ## [tools]
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `allowed` | string array | `[]` | Tool allowlist. Empty array means all tools are denied. List every tool name your agent is permitted to call. |
+| Field     | Type         | Default | Description                                                                                                   |
+| --------- | ------------ | ------- | ------------------------------------------------------------------------------------------------------------- |
+| `allowed` | string array | `[]`    | Tool allowlist. Empty array means all tools are denied. List every tool name your agent is permitted to call. |
 
 ### Per-tool config
 
@@ -135,27 +129,10 @@ cost_per_call = 10    # Cost units charged per call.
 
 ## [observability]
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `log` | string | `"stdout"` | `"stdout"` writes events to stdout. `"file"` appends to `log_file`. |
-| `log_file` | path | — | Required when `log = "file"`. Relative to working directory. |
-
----
-
-## [proxy]
-
-Optional. Only active when `nanny server start --proxy` is passed. Controls which hosts the HTTP CONNECT proxy may forward to.
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `allowed_hosts` | string array | `[]` | Hostnames the proxy may forward to. Supports exact names and glob patterns. An empty list is rejected at server startup. Loopback and RFC-1918 ranges are always blocked in code regardless of this list. |
-
-```toml
-[proxy]
-allowed_hosts = ["api.openai.com", "api.groq.com", "*.anthropic.com"]
-```
-
-This section is ignored when running `nanny run` in local mode.
+| Field      | Type   | Default    | Description                                                         |
+| ---------- | ------ | ---------- | ------------------------------------------------------------------- |
+| `log`      | string | `"stdout"` | `"stdout"` writes events to stdout. `"file"` appends to `log_file`. |
+| `log_file` | path   | —          | Required when `log = "file"`. Relative to working directory.        |
 
 ---
 
@@ -163,8 +140,8 @@ This section is ignored when running `nanny run` in local mode.
 
 Required when `[runtime] mode = "managed"`. Connects Nanny to Nanny Cloud for durable audit logs and team dashboards. All three fields are required.
 
-| Field | Type | Description |
-|-------|------|-----------|
-| `endpoint` | string | Cloud API endpoint (`https://api.nanny.run`). |
-| `org_id` | string | Your organisation ID from the Nanny Cloud dashboard. |
-| `api_key` | string | Your API key. **Never commit this to version control.** Use an environment variable or secrets manager. |
+| Field      | Type   | Description                                                                                             |
+| ---------- | ------ | ------------------------------------------------------------------------------------------------------- |
+| `endpoint` | string | Cloud API endpoint (`https://api.nanny.run`).                                                           |
+| `org_id`   | string | Your organisation ID from the Nanny Cloud dashboard.                                                    |
+| `api_key`  | string | Your API key. **Never commit this to version control.** Use an environment variable or secrets manager. |

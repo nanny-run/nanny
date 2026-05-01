@@ -1,0 +1,49 @@
+---
+title: nanny init
+description: Scaffold a nanny.toml configuration file in the current directory.
+---
+
+Writes a `nanny.toml` with safe defaults into the current working directory.
+
+```bash
+nanny init
+```
+
+---
+
+## What it does
+
+Creates a `nanny.toml` with conservative defaults that work for most agents out of the box.
+Set `[start].cmd` to your agent's entry point and adjust the limit values to match your requirements.
+
+The generated file includes inline comments for every field and links to the full `nanny.toml` reference.
+
+---
+
+## Flags
+
+`nanny init` takes no flags. It always writes to the current working directory.
+
+---
+
+## Errors
+
+| Condition | Behaviour |
+| --------- | --------- |
+| `nanny.toml` already exists | Prompts for confirmation. Overwrites on `y` or `yes`. Exits without changes on any other input. |
+| Multiple `nanny*.toml` files exist | Exits with an error listing the conflicting files. A project must have exactly one `nanny.toml`. |
+| No write permission in current directory | Exits with an error. |
+
+To reset a config to defaults, run `nanny init` and confirm when prompted.
+
+---
+
+## Next step
+
+Once your config is in place, run your agent:
+
+```bash
+nanny run
+```
+
+See [nanny run](/v0.2/run) for the full command reference.

@@ -1,0 +1,115 @@
+---
+title: Installation
+description: Install, upgrade, and uninstall the Nanny CLI on macOS, Linux, and Windows.
+---
+
+## Install
+
+<Tabs>
+  <Tab title="macOS">
+    ```bash
+    brew tap nanny-run/nanny
+    brew install nannyd
+    ```
+  </Tab>
+  <Tab title="Linux">
+    ```bash
+    curl -fsSL https://install.nanny.run | sh
+    ```
+
+    Installs to `/usr/local/bin` if writable, otherwise `~/.local/bin`. Have Rust installed? `cargo install nannyd` also works.
+  </Tab>
+  <Tab title="Windows">
+    ```powershell
+    irm https://install.nanny.run/windows | iex
+    ```
+
+    Downloads `nanny-windows-x86_64.zip` from the latest GitHub Release, extracts to `%LOCALAPPDATA%\nanny\`, and adds that directory to your user PATH. Restart your terminal after installing.
+  </Tab>
+</Tabs>
+
+Verify:
+
+```bash
+nanny --version
+```
+
+---
+
+## Upgrade
+
+<Tabs>
+  <Tab title="macOS">
+    ```bash
+    brew upgrade nannyd
+    ```
+  </Tab>
+  <Tab title="Linux">
+    Re-run the install script. It overwrites the existing binary.
+
+    ```bash
+    curl -fsSL https://install.nanny.run | sh
+    ```
+  </Tab>
+  <Tab title="Windows">
+    Re-run the install script. It overwrites the existing binary.
+
+    ```powershell
+    irm https://install.nanny.run/windows | iex
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Uninstall
+
+<Tabs>
+  <Tab title="macOS">
+    ```bash
+    nanny uninstall
+    ```
+
+    If installed via Homebrew, this redirects you to `brew uninstall nannyd` to keep Homebrew metadata consistent.
+  </Tab>
+  <Tab title="Linux">
+    ```bash
+    nanny uninstall
+    ```
+  </Tab>
+  <Tab title="Windows">
+    ```powershell
+    nanny uninstall
+    ```
+
+    Spawns a background process that removes the binary and cleans up your PATH automatically. Restart your terminal after uninstalling.
+  </Tab>
+</Tabs>
+
+---
+
+## Troubleshooting
+
+### `nanny: command not found` after install
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    Open a new terminal window. If the issue persists, confirm the install directory is in your PATH:
+
+    ```bash
+    echo $PATH
+    ```
+  </Tab>
+  <Tab title="Windows">
+    Open a new terminal window. PATH changes do not apply to already-open sessions. To verify the entry was added:
+
+    ```powershell
+    [Environment]::GetEnvironmentVariable("PATH", "User") -split ";" | Where-Object { $_ -match "nanny" }
+    ```
+
+    **Windows Defender blocks the download**
+
+    The binary is unsigned. If Defender quarantines it, add an exclusion for `%LOCALAPPDATA%\nanny\` or download the `.zip` directly from the [GitHub Releases](https://github.com/nanny-run/nanny/releases) page and extract manually.
+
+  </Tab>
+</Tabs>

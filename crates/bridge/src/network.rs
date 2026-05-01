@@ -536,7 +536,6 @@ impl NetworkServer {
         let token = session_token.unwrap_or_else(|| Uuid::new_v4().to_string());
         let (shared, registry) = init_shared_state(components, token.clone());
 
-        let tls_config = build_tls_config(&cert_path, &key_path, &ca_path)?;
         let app = AppState {
             shared,
             registry,
@@ -569,17 +568,25 @@ impl NetworkServer {
         std::fs::write(&pid_file, std::process::id().to_string())
             .context("failed to write ~/.nanny/server.pid")?;
 
-        println!("nanny server: started");
-        println!("  address      : {addr}");
-        println!("  session token: {token}");
-        println!("  token file   : {}", token_file.display());
-        println!();
-        println!("Agents on this machine:");
-        println!("  export NANNY_BRIDGE_ADDR={addr}");
-        println!("  export NANNY_SESSION_TOKEN={token}");
-        println!();
-        println!("Cross-machine agents: also set NANNY_BRIDGE_CERT, NANNY_BRIDGE_KEY, NANNY_BRIDGE_CA");
-        println!("  (auto-injected by `nanny run` on this machine from ~/.nanny/certs/)");
+        if addr.ip().is_loopback() {
+            println!("nanny server: started  (plain HTTP — loopback)");
+            println!("  address      : {addr}");
+            println!("  session token: {token}");
+            println!();
+            println!("Agents on this machine: run `nanny run` — server is detected automatically.");
+        } else {
+            println!("nanny server: started  (mTLS)");
+            println!("  address      : {addr}");
+            println!("  session token: {token}");
+            println!("  token file   : {}", token_file.display());
+            println!();
+            println!("Agents on this machine: run `nanny run` — server is detected automatically.");
+            println!();
+            println!("Cross-machine agents — set these in your deployment config:");
+            println!("  NANNY_BRIDGE_ADDR={addr}");
+            println!("  NANNY_SESSION_TOKEN=$(cat {})", token_file.display());
+            println!("  NANNY_BRIDGE_CERT, NANNY_BRIDGE_KEY, NANNY_BRIDGE_CA  (from ~/.nanny/certs/)");
+        }
         println!();
         println!("Press CTRL-C to stop.");
 
@@ -589,9 +596,6 @@ impl NetworkServer {
             .context("failed to build tokio runtime")?;
 
         let result = rt.block_on(async {
-            let rustls_config =
-                axum_server::tls_rustls::RustlsConfig::from_config(Arc::new(tls_config));
-
             // ── Graceful SIGTERM drain ────────────────────────────────────────
             // `nanny server stop` sends SIGTERM (Unix) / taskkill (Windows).
             // We give in-flight requests 10 s to complete before forcing exit.
@@ -608,70 +612,91 @@ impl NetworkServer {
                 });
             }
 
-            // ── Cert hot-reload ───────────────────────────────────────────────
-            // Watch the directory containing the server cert. When any file
-            // changes (from `nanny certs rotate` or `nanny certs import`), rebuild
-            // the TLS config and swap it in without restarting the server.
-            // New connections use the new cert; in-flight connections finish on
-            // the old one. If the new cert files fail to parse we log the error
-            // and keep the old config — the server never goes down on a bad write.
-            if let Some(cert_dir) = cert_path.parent().map(|p| p.to_path_buf()) {
-                use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-                let (tx, rx) = std::sync::mpsc::channel();
-                match RecommendedWatcher::new(tx, notify::Config::default()) {
-                    Ok(mut watcher) => {
-                        if watcher.watch(&cert_dir, RecursiveMode::NonRecursive).is_ok() {
-                            // Leak the watcher — it must stay alive for the
-                            // lifetime of the process to keep delivering events.
-                            std::mem::forget(watcher);
+            let router = build_router(app)
+                .into_make_service_with_connect_info::<SocketAddr>();
 
-                            let rc  = rustls_config.clone();
-                            let cp  = cert_path.clone();
-                            let kp  = key_path.clone();
-                            let cap = ca_path.clone();
+            if addr.ip().is_loopback() {
+                // ── Plain HTTP (loopback) ─────────────────────────────────────
+                // Loopback is OS-enforced — only processes on this machine can
+                // connect. No TLS needed; session token is the auth layer.
+                axum_server::bind(addr)
+                    .handle(server_handle)
+                    .serve(router)
+                    .await
+                    .context("server error")
+            } else {
+                // ── mTLS (non-loopback) ───────────────────────────────────────
+                // Mandatory for any address reachable from the network.
+                // build_tls_config reads and validates the cert files.
+                let tls_config = build_tls_config(&cert_path, &key_path, &ca_path)
+                    .context("failed to build TLS config")?;
+                let rustls_config =
+                    axum_server::tls_rustls::RustlsConfig::from_config(Arc::new(tls_config));
 
-                            std::thread::spawn(move || {
-                                while rx.recv().is_ok() {
-                                    // Drain burst events — a single rotate/import
-                                    // writes multiple files and fires many events.
-                                    while rx.try_recv().is_ok() {}
-                                    // Brief settle delay so all files are flushed
-                                    // to disk before we re-read them.
-                                    std::thread::sleep(std::time::Duration::from_millis(150));
+                // ── Cert hot-reload ───────────────────────────────────────────
+                // Watch the directory containing the server cert. When any file
+                // changes (from `nanny certs rotate` or `nanny certs import`),
+                // rebuild the TLS config and swap it in without restarting.
+                // New connections use the new cert; in-flight connections finish
+                // on the old one. If the new files fail to parse, log and keep
+                // the old config — the server never goes down on a bad write.
+                if let Some(cert_dir) = cert_path.parent().map(|p| p.to_path_buf()) {
+                    use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    match RecommendedWatcher::new(tx, notify::Config::default()) {
+                        Ok(mut watcher) => {
+                            if watcher.watch(&cert_dir, RecursiveMode::NonRecursive).is_ok() {
+                                // Leak the watcher — it must stay alive for the
+                                // lifetime of the process to keep delivering events.
+                                std::mem::forget(watcher);
 
-                                    match build_tls_config(&cp, &kp, &cap) {
-                                        Ok(new_cfg) => {
-                                            rc.reload_from_config(Arc::new(new_cfg));
-                                            eprintln!("nanny server: certs hot-reloaded");
-                                        }
-                                        Err(e) => {
-                                            eprintln!(
-                                                "nanny server: cert reload failed — \
-                                                 keeping current certs: {e:#}"
-                                            );
+                                let rc  = rustls_config.clone();
+                                let cp  = cert_path.clone();
+                                let kp  = key_path.clone();
+                                let cap = ca_path.clone();
+
+                                std::thread::spawn(move || {
+                                    while rx.recv().is_ok() {
+                                        // Drain burst events — a single rotate/import
+                                        // writes multiple files and fires many events.
+                                        while rx.try_recv().is_ok() {}
+                                        // Brief settle delay so all files are flushed
+                                        // to disk before we re-read them.
+                                        std::thread::sleep(
+                                            std::time::Duration::from_millis(150),
+                                        );
+
+                                        match build_tls_config(&cp, &kp, &cap) {
+                                            Ok(new_cfg) => {
+                                                rc.reload_from_config(Arc::new(new_cfg));
+                                                eprintln!("nanny server: certs hot-reloaded");
+                                            }
+                                            Err(e) => {
+                                                eprintln!(
+                                                    "nanny server: cert reload failed — \
+                                                     keeping current certs: {e:#}"
+                                                );
+                                            }
                                         }
                                     }
-                                }
-                            });
+                                });
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "nanny server: cert watcher failed to start \
+                                 (hot-reload disabled): {e}"
+                            );
                         }
                     }
-                    Err(e) => {
-                        eprintln!(
-                            "nanny server: cert watcher failed to start \
-                             (hot-reload disabled): {e}"
-                        );
-                    }
                 }
-            }
 
-            axum_server::bind_rustls(addr, rustls_config)
-                .handle(server_handle)
-                .serve(
-                    build_router(app)
-                        .into_make_service_with_connect_info::<SocketAddr>(),
-                )
-                .await
-                .context("server error")
+                axum_server::bind_rustls(addr, rustls_config)
+                    .handle(server_handle)
+                    .serve(router)
+                    .await
+                    .context("server error")
+            }
         });
 
         // Clean up PID and token files on shutdown.

@@ -1,0 +1,162 @@
+---
+title: nanny server
+description: Start, stop, and inspect the Nanny governance server for cross-process and cross-machine enforcement.
+---
+
+The governance server is a long-lived daemon that enforces Nanny's limits across multiple processes and machines. Agents connect to it over TCP. All tool calls from all connected agents are counted against the same shared budget and step limit.
+
+For single-process agents, use `nanny run` instead — no server needed.
+
+```bash
+nanny server <COMMAND>
+```
+
+---
+
+## Commands
+
+### start
+
+Start the governance server.
+
+```bash
+nanny server start [--addr <addr>] [--cert <path>] [--key <path>] [--ca <path>]
+```
+
+Reads `nanny.toml` from the current directory. Blocks until the server is stopped with `nanny server stop` or `CTRL-C`.
+
+#### Flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--addr` | socket address | `127.0.0.1:62669` | Listen address. Governance API and HTTP proxy share this port. Loopback = plain HTTP, no certs. Non-loopback = mTLS, certs required. |
+| `--cert` | path | `~/.nanny/certs/server.crt` | Path to the server TLS certificate PEM. Required only for non-loopback addresses. |
+| `--key` | path | `~/.nanny/certs/server.key` | Path to the server TLS private key PEM. Required only for non-loopback addresses. |
+| `--ca` | path | `~/.nanny/certs/ca.crt` | Path to the CA certificate PEM used to validate agent client certs. Required only for non-loopback addresses. |
+
+#### Security posture by bind address
+
+The bind address determines whether TLS is required:
+
+| Address | Transport | Who can connect | Certs required |
+|---------|-----------|-----------------|----------------|
+| `127.0.0.1:62669` (default, loopback) | Plain HTTP | Processes on this machine only — OS-enforced | No |
+| `0.0.0.0:62669` (all interfaces) | mTLS — mandatory | Any host on the network | Yes — run `nanny certs generate` first |
+
+
+#### Examples
+
+**Local dev — multiple processes on one machine:**
+
+```bash
+# Default is loopback — plain HTTP, no certs needed
+nanny server start
+```
+
+**Cross-machine — Docker or Kubernetes:**
+
+```bash
+# Generate certs first: nanny certs generate
+nanny server start --addr 0.0.0.0:62669
+```
+
+**Custom cert paths:**
+
+```bash
+nanny server start \
+  --addr 0.0.0.0:62669 \
+  --cert /etc/nanny/server.crt \
+  --key  /etc/nanny/server.key \
+  --ca   /etc/nanny/ca.crt
+```
+
+#### What gets written
+
+When the server starts, it writes two files:
+
+- `~/.nanny/server.addr` — the bound listen address (used by `nanny server status` and `nanny health`)
+- `~/.nanny/server.pid` — the server process ID (used by `nanny server stop`)
+
+#### HTTP proxy mode
+
+If `nanny.toml` includes a `[proxy]` section with a non-empty `allowed_hosts` list, the server also acts as an HTTP CONNECT proxy on the same port. See [HTTP proxy mode](/v0.2/guides/http-proxy-mode).
+
+---
+
+### status
+
+Show the live status of the running server.
+
+```bash
+nanny server status
+```
+
+Reads `~/.nanny/server.addr`, attempts a TCP connection, and reports whether the server is reachable.
+
+**Example output (server running):**
+
+```
+nanny server: running
+  address: 0.0.0.0:62669
+  pid    : 12345
+```
+
+**Example output (server not reachable):**
+
+```
+nanny server: not reachable at 0.0.0.0:62669
+  Start with: nanny server start
+```
+
+Exits `0` if the server is running and reachable, `1` otherwise.
+
+---
+
+### stop
+
+Stop the running server.
+
+```bash
+nanny server stop
+```
+
+Reads the PID from `~/.nanny/server.pid` and sends `SIGTERM`. The server begins a graceful shutdown:
+
+1. Stops accepting new connections.
+2. Allows in-flight requests to complete (up to 10 seconds).
+3. Exits cleanly.
+
+On Windows, uses `taskkill /F` instead of SIGTERM.
+
+**If the server is not running:**
+
+```
+no running server found (PID file not present at ~/.nanny/server.pid)
+Start the server with: nanny server start
+```
+
+---
+
+## Connecting agents
+
+**Same-machine agents:** `nanny run` detects the server automatically via `~/.nanny/server.addr` and `~/.nanny/server.token` and injects all required variables into the agent process. Nothing to set manually.
+
+**Cross-machine agents:** Set these in your deployment config (Docker Compose `environment:`, k8s `Secret`, CI/CD secrets):
+
+| Variable | Description |
+|----------|-------------|
+| `NANNY_BRIDGE_ADDR` | Server address — e.g. `server.example.com:62669` |
+| `NANNY_SESSION_TOKEN` | Session token — copy from `~/.nanny/server.token` on the server machine |
+| `NANNY_BRIDGE_CERT` | Path to client certificate PEM |
+| `NANNY_BRIDGE_KEY` | Path to client private key PEM |
+| `NANNY_BRIDGE_CA` | Path to CA certificate PEM used to verify the server |
+
+These variables are internal — set by `nanny run` or your deployment config. Do not set them for same-machine agents; `nanny run` handles them automatically.
+
+---
+
+## Port 62669
+
+The governance server default port is `62669`. This port serves both the governance JSON API and the HTTP CONNECT proxy. There is no separate proxy port.
+
+62669 spells NANNY on a phone keypad.

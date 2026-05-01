@@ -3,7 +3,7 @@ title: Python
 description: Per-function governance for Python agents using Nanny decorators.
 ---
 
-The Python SDK brings the same enforcement model as the [Rust SDK](/v0.1/guides/rust-sdk) to Python — `@tool`, `@rule`, and `@agent` decorators that enforce limits per function call.
+The Python SDK brings the same enforcement model as the [Rust SDK](/v0.2/guides/rust-sdk) to Python — `@tool`, `@rule`, and `@agent` decorators that enforce limits per function call.
 
 ```bash
 pip install nanny-sdk
@@ -23,8 +23,6 @@ nanny run
 python agent.py
 uv run agent.py
 ```
-
-This is safe to ship to production. The instrumentation only activates when `nanny run` is present.
 
 ---
 
@@ -354,12 +352,7 @@ The key properties this gives you:
   />
 </Frame>
 
-<Note>
-  **Scope:** All agents in this pattern run within a single Python process. This
-  covers CrewAI, LangGraph, AutoGen, and any framework that orchestrates agents
-  in a single runtime. For cross-process and cross-machine enforcement, see the
-  governance server in v0.2.x.
-</Note>
+For cross-process and cross-machine enforcement, use the [governance server](/v0.2/guides/governance-server).
 
 See [`examples/python/metrics_crew`](https://github.com/nanny-run/nanny/tree/main/examples/python/metrics_crew) for the complete working implementation of this pattern with four agents, Plotly chart generation, and a full incident report output.
 
