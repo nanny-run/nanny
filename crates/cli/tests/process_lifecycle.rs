@@ -94,10 +94,21 @@ fn fast_exit_completes_cleanly() {
 
 /// A process that runs past timeout_ms is killed — exit code non-zero,
 /// stderr carries the stop reason.
+///
+/// Uses a platform-specific long-running command so the test exercises
+/// the real kill path on every OS:
+/// - Unix:    `sleep 60`  — standard POSIX utility
+/// - Windows: `ping -n 65 127.0.0.1` — always available, native PE exe,
+///   ~64 s runtime (1-second intervals × 65 probes); reliably terminated
+///   by `TerminateProcess()` unlike Git-for-Windows Cygwin tools.
 #[test]
 fn timeout_kills_process_and_exits_nonzero() {
     let dir = temp_dir();
-    write_config(&dir, 300, "sleep 60"); // 300 ms timeout — well below `sleep 60`
+    // 300 ms timeout — well below either slow command.
+    #[cfg(windows)]
+    write_config(&dir, 300, "ping -n 65 127.0.0.1");
+    #[cfg(not(windows))]
+    write_config(&dir, 300, "sleep 60");
 
     let output = Command::new(nanny_bin())
         .args(["--config", &config_arg(&dir), "run"])
@@ -128,13 +139,21 @@ fn timeout_kills_process_and_exits_nonzero() {
 fn named_limits_timeout_is_enforced() {
     let dir = temp_dir();
 
+    // Use a platform-specific long-running command (same reasoning as
+    // `timeout_kills_process_and_exits_nonzero`).
+    #[cfg(windows)]
+    let slow_cmd = "ping -n 65 127.0.0.1";
+    #[cfg(not(windows))]
+    let slow_cmd = "sleep 60";
+
     // Global limits have a generous timeout; the named set is tight.
-    let toml = r#"
+    let toml = format!(
+        "\
 [runtime]
-mode = "local"
+mode = \"local\"
 
 [start]
-cmd = "sleep 60"
+cmd = \"{slow_cmd}\"
 
 [limits]
 steps   = 100
@@ -145,11 +164,12 @@ timeout = 30000
 timeout = 300
 
 [tools]
-allowed = ["http_get"]
+allowed = [\"http_get\"]
 
 [observability]
-log = "stdout"
-"#;
+log = \"stdout\"
+"
+    );
     fs::write(dir.join("nanny.toml"), toml).unwrap();
 
     let output = Command::new(nanny_bin())
@@ -451,7 +471,14 @@ log = "stdout"
 // reachable, `nanny run` should detect it, print the confirmation message, and
 // route the child process through the network server instead of starting a
 // local bridge.
+//
+// Skipped on Windows: `dirs::home_dir()` uses the Windows API
+// (`SHGetKnownFolderPath` / `USERPROFILE`) and ignores the `HOME` environment
+// variable entirely. Setting `env("HOME", &temp)` has no effect — nanny reads
+// from the real user home, never finds the test state files, and falls back to
+// a local bridge without printing the detection message.
 
+#[cfg(not(windows))]
 #[test]
 fn nanny_run_detects_network_server_and_prints_message() {
     let dir  = temp_dir();
@@ -553,7 +580,12 @@ log = "stdout"
 // When ~/.nanny/server.addr points to a port with nothing listening,
 // try_detect_network_server must delete the stale files and fall back to
 // a local bridge. nanny run must exit 0 (not crash).
+//
+// Skipped on Windows: same `dirs::home_dir()` / `HOME` env var limitation as T8.
+// Nanny reads from the real user home, never sees the stale test files, and
+// exits 0 without performing any cleanup — making the assertion vacuously false.
 
+#[cfg(not(windows))]
 #[test]
 fn stale_server_addr_cleaned_up_on_probe_failure() {
     let dir  = temp_dir();
