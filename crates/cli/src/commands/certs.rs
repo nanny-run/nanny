@@ -18,7 +18,7 @@ use rcgen::{BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
@@ -118,7 +118,7 @@ pub struct CertsMeta {
     pub san: Vec<String>,
 }
 
-fn write_meta(dir: &PathBuf, expires: OffsetDateTime, san: &[String]) -> Result<()> {
+fn write_meta(dir: &Path, expires: OffsetDateTime, san: &[String]) -> Result<()> {
     let meta = CertsMeta {
         expires: expires.format(&Rfc3339).context("failed to format expiry date")?,
         san: san.to_vec(),
@@ -130,7 +130,7 @@ fn write_meta(dir: &PathBuf, expires: OffsetDateTime, san: &[String]) -> Result<
     .context("failed to write meta.json")
 }
 
-pub fn read_meta(dir: &PathBuf) -> Result<CertsMeta> {
+pub fn read_meta(dir: &Path) -> Result<CertsMeta> {
     let raw = std::fs::read_to_string(dir.join("meta.json"))
         .context("meta.json not found — run `nanny certs generate` or `nanny certs import`")?;
     serde_json::from_str(&raw).context("failed to parse meta.json")
@@ -279,8 +279,7 @@ fn cmd_certs_import(pairs: Vec<String>) -> Result<()> {
                  Valid keys: ca, cert, key",
                 pair
             ))?;
-        let value = if v.starts_with('@') {
-            let path = &v[1..];
+        let value = if let Some(path) = v.strip_prefix('@') {
             std::fs::read_to_string(path)
                 .with_context(|| format!("failed to read file '{path}'"))?
         } else {
@@ -633,7 +632,7 @@ fn cmd_certs_show() -> Result<()> {
 /// finish on the old cert until they disconnect.
 #[allow(dead_code)] // consumed by nanny server start (Day 3 — NetworkListener hot-reload)
 pub fn watch_certs_dir(
-    dir: &PathBuf,
+    dir: &Path,
 ) -> Result<std::sync::mpsc::Receiver<notify::Result<notify::Event>>> {
     use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 
@@ -655,7 +654,7 @@ pub fn watch_certs_dir(
 /// Warn if the certs directory is inside a git-tracked tree.
 /// Certs should never be committed. ~/.nanny/certs/ is outside any project
 /// directory by default — this only fires for unusual --out-dir overrides.
-fn check_git_warning(dir: &PathBuf) {
+fn check_git_warning(dir: &Path) {
     let inside_git = std::process::Command::new("git")
         .args(["-C", &dir.to_string_lossy(), "rev-parse", "--is-inside-work-tree"])
         .output()

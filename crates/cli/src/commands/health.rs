@@ -12,7 +12,7 @@
 // was never started is not checked and does not cause a non-zero exit.
 
 use anyhow::{Context, Result};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
@@ -277,7 +277,7 @@ enum CertStatus {
     Unreadable(String),
 }
 
-fn check_certs(dir: &PathBuf) -> CertStatus {
+fn check_certs(dir: &Path) -> CertStatus {
     if !dir.join("ca.crt").exists() {
         return CertStatus::NotFound;
     }

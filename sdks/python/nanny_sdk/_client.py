@@ -34,9 +34,10 @@ from __future__ import annotations
 import os
 import ssl
 import tempfile
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
 import httpx
 

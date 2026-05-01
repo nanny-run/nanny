@@ -147,7 +147,7 @@ mod runtime {
     ///   1. `NANNY_BRIDGE_SOCKET`  — Unix domain socket (macOS/Linux local)
     ///   2. `NANNY_BRIDGE_PORT`    — TCP loopback (Windows local)
     ///   3. `NANNY_BRIDGE_ADDR`    — TCP + mTLS (network / cross-machine)
-    ///   None of the above         → passthrough (no-op)
+    ///   4. None of the above      — passthrough (no-op)
     pub fn is_active() -> bool {
         bridge_socket_path().is_some() || bridge_tcp_port().is_some() || bridge_addr().is_some()
     }

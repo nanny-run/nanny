@@ -526,6 +526,7 @@ impl NetworkServer {
     /// `session_token`: if `Some`, use that token; if `None`, generate a fresh UUID.
     /// The token is printed to stdout and written to `~/.nanny/server.token` so
     /// `nanny run` can auto-inject it into child environments.
+    #[allow(clippy::too_many_arguments)]
     pub fn start_blocking(
         addr: SocketAddr,
         cert_path: PathBuf,
