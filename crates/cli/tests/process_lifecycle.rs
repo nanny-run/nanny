@@ -99,8 +99,13 @@ fn fast_exit_completes_cleanly() {
 /// the real kill path on every OS:
 /// - Unix:    `sleep 60`  — standard POSIX utility
 /// - Windows: `ping -n 65 127.0.0.1` — always available, native PE exe,
-///   ~64 s runtime (1-second intervals × 65 probes); reliably terminated
-///   by `TerminateProcess()` unlike Git-for-Windows Cygwin tools.
+///   ~64 s runtime (1-second intervals × 65 probes); `TerminateProcess()`
+///   kills it cleanly as a direct child.
+///
+/// On Windows this test requires T7 (server_start_loopback_does_not_require_cert_files)
+/// to be skipped. T7 writes `~/.nanny/server.addr` to the real home dir (because
+/// `dirs::home_dir()` ignores the HOME override), which would cause nanny to
+/// route through `cmd_run_via_network_server` — a path with no timeout kill.
 #[test]
 fn timeout_kills_process_and_exits_nonzero() {
     let dir = temp_dir();
@@ -408,7 +413,18 @@ log = "stdout"
 // successfully even when ~/.nanny/certs/ doesn't exist.
 // Regression guard: if the cert check accidentally runs for loopback, the
 // server would fail to start and this test would catch it.
+//
+// Skipped on Windows: `dirs::home_dir()` ignores the `HOME` env override, so
+// `nanny server start` writes `server.addr` and `server.token` to the REAL
+// `~/.nanny/`. When the server is killed with TerminateProcess the cleanup
+// hook does not run, leaving stale files. Those stale files cause concurrent
+// tests (e.g. timeout_kills_process_and_exits_nonzero) to mistakenly route
+// through `cmd_run_via_network_server`, which has no timeout kill — the child
+// runs to completion and the timeout test fails. Skipping T7 on Windows
+// eliminates the contamination; the loopback-vs-mTLS branch is
+// platform-independent code covered by the Linux/macOS run.
 
+#[cfg(not(windows))]
 #[test]
 fn server_start_loopback_does_not_require_cert_files() {
     let dir  = temp_dir();
