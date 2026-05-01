@@ -64,8 +64,8 @@ api_key  = "nanny_live_xxxxxxxxxxxx"
 
 ## [runtime]
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
+| Field  | Type   | Default   | Description                                                                                                                    |
+| ------ | ------ | --------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `mode` | string | `"local"` | `"local"` enforces limits locally, without external services. `"managed"` additionally forwards execution data to Nanny Cloud. |
 
 ---
@@ -74,8 +74,8 @@ api_key  = "nanny_live_xxxxxxxxxxxx"
 
 Required for `nanny run`. Declares the command to execute when `nanny run` is invoked with no inline command argument.
 
-| Field | Type | Description |
-|-------|------|-------------|
+| Field | Type   | Description                                                                                                                                        |
+| ----- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `cmd` | string | The command string to run. Parsed with shell quoting rules — paths with spaces are supported. Arguments passed after `--` on the CLI are appended. |
 
 ```toml
@@ -92,10 +92,10 @@ nanny run --limits=researcher    # runs with [limits.researcher] active
 
 ## [limits]
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `steps` | integer | `100` | Maximum steps. `0` = unlimited. |
-| `cost` | integer | `1000` | Maximum cost units. `0` = unlimited. |
+| Field     | Type    | Default | Description                               |
+| --------- | ------- | ------- | ----------------------------------------- |
+| `steps`   | integer | `100`   | Maximum steps. `0` = unlimited.           |
+| `cost`    | integer | `1000`  | Maximum cost units. `0` = unlimited.      |
 | `timeout` | integer | `30000` | Timeout in milliseconds. `0` = unlimited. |
 
 ### Named limit sets
@@ -113,9 +113,9 @@ Named sets inherit all unset fields from `[limits]`. Activate with `--limits=res
 
 ## [tools]
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `allowed` | string array | `[]` | Tool allowlist. Empty array means all tools are denied. List every tool name your agent is permitted to call. |
+| Field     | Type         | Default | Description                                                                                                   |
+| --------- | ------------ | ------- | ------------------------------------------------------------------------------------------------------------- |
+| `allowed` | string array | `[]`    | Tool allowlist. Empty array means all tools are denied. List every tool name your agent is permitted to call. |
 
 ### Per-tool config
 
@@ -129,10 +129,10 @@ cost_per_call = 10    # Cost units charged per call.
 
 ## [observability]
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `log` | string | `"stdout"` | `"stdout"` writes events to stdout. `"file"` appends to `log_file`. |
-| `log_file` | path | — | Required when `log = "file"`. Relative to working directory. |
+| Field      | Type   | Default    | Description                                                         |
+| ---------- | ------ | ---------- | ------------------------------------------------------------------- |
+| `log`      | string | `"stdout"` | `"stdout"` writes events to stdout. `"file"` appends to `log_file`. |
+| `log_file` | path   | —          | Required when `log = "file"`. Relative to working directory.        |
 
 ---
 
@@ -140,8 +140,8 @@ cost_per_call = 10    # Cost units charged per call.
 
 Required when `[runtime] mode = "managed"`. Connects Nanny to Nanny Cloud for durable audit logs and team dashboards. All three fields are required.
 
-| Field | Type | Description |
-|-------|------|-----------|
-| `endpoint` | string | Cloud API endpoint (`https://api.nanny.run`). |
-| `org_id` | string | Your organisation ID from the Nanny Cloud dashboard. |
-| `api_key` | string | Your API key. **Never commit this to version control.** Use an environment variable or secrets manager. |
+| Field      | Type   | Description                                                                                             |
+| ---------- | ------ | ------------------------------------------------------------------------------------------------------- |
+| `endpoint` | string | Cloud API endpoint (`https://api.nanny.run`).                                                           |
+| `org_id`   | string | Your organisation ID from the Nanny Cloud dashboard.                                                    |
+| `api_key`  | string | Your API key. **Never commit this to version control.** Use an environment variable or secrets manager. |

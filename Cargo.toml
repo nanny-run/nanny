@@ -10,7 +10,7 @@ members = [
 ]
 
 [workspace.package]
-version     = "0.1.8"
+version     = "0.2.0"
 edition     = "2021"
 license     = "Apache-2.0"
 repository  = "https://github.com/nanny-run/nanny"
@@ -19,11 +19,11 @@ authors     = ["Evans Ibok <evansibok@gmail.com>"]
 # Shared dependency versions — pin once, inherit everywhere.
 [workspace.dependencies]
 # Internal crates — path + version kept in sync with [workspace.package] version.
-nanny-core    = { path = "crates/core",    version = "0.1.8" }
-nanny-config  = { path = "crates/config",  version = "0.1.8" }
-nanny-macros  = { path = "crates/macros",  version = "0.1.8" }
-nanny-runtime = { path = "crates/runtime", version = "0.1.8" }
-nanny-bridge  = { path = "crates/bridge",  version = "0.1.8" }
+nanny-core    = { path = "crates/core",    version = "0.2.0" }
+nanny-config  = { path = "crates/config",  version = "0.2.0" }
+nanny-macros  = { path = "crates/macros",  version = "0.2.0" }
+nanny-runtime = { path = "crates/runtime", version = "0.2.0" }
+nanny-bridge  = { path = "crates/bridge",  version = "0.2.0" }
 # External dependencies
 serde        = { version = "1", features = ["derive"] }
 serde_json   = "1"
@@ -32,3 +32,17 @@ thiserror    = "1"
 anyhow       = "1"
 uuid         = { version = "1", features = ["v4", "serde"] }
 clap         = { version = "4", features = ["derive"] }
+rcgen        = "0.13"
+notify       = "6"
+dirs         = "5"
+x509-parser  = { version = "0.16", features = ["verify"] }
+time         = { version = "0.3", features = ["formatting", "parsing", "macros"] }
+# v0.2.0 — Network Bridge (server + SDK TLS client)
+axum         = { version = "0.7" }
+axum-server  = { version = "0.7", features = ["tls-rustls-no-provider"] }
+tokio        = { version = "1", features = ["full"] }
+rustls       = "0.23"
+rustls-pemfile = "2"
+reqwest      = { version = "0.12", features = ["rustls-tls", "blocking"] }
+hyper        = { version = "1", features = ["server", "http1"] }
+hyper-util   = { version = "0.1", features = ["tokio"] }

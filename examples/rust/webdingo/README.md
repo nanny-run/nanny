@@ -69,7 +69,7 @@ During active development on the nanny crate itself, switch to a path dependency
 nannyd = { path = "../../../crates/cli" }   # instead of nannyd = "0.1.8"
 ```
 
-The path dep wires this example to the local SDK library. The `nanny` CLI binary (which contains the bridge) is separate — reinstall it from local source so both are in sync:
+The path dep wires this example to the local SDK library. The `nanny` CLI binary (which contains Nanny’s enforcement layer) is separate — reinstall it from local source so both are in sync:
 
 ```sh
 # from the workspace root (nanny/)

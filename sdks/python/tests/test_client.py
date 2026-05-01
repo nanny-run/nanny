@@ -7,10 +7,31 @@ import nanny_sdk._client as client
 
 
 def test_passthrough_when_no_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """is_passthrough() returns True when neither socket nor port is set."""
+    """is_passthrough() returns True when no transport env vars are set."""
     monkeypatch.delenv("NANNY_BRIDGE_SOCKET", raising=False)
     monkeypatch.delenv("NANNY_BRIDGE_PORT", raising=False)
+    monkeypatch.delenv("NANNY_BRIDGE_ADDR", raising=False)
     assert client.is_passthrough() is True
+
+
+def test_not_passthrough_when_addr_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """is_passthrough() returns False when NANNY_BRIDGE_ADDR is set (network path)."""
+    monkeypatch.delenv("NANNY_BRIDGE_SOCKET", raising=False)
+    monkeypatch.delenv("NANNY_BRIDGE_PORT", raising=False)
+    monkeypatch.setenv("NANNY_BRIDGE_ADDR", "10.0.0.1:62669")
+    assert client.is_passthrough() is False
+
+
+def test_bridge_addr_returns_none_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_bridge_addr() returns None when NANNY_BRIDGE_ADDR is not set."""
+    monkeypatch.delenv("NANNY_BRIDGE_ADDR", raising=False)
+    assert client._bridge_addr() is None
+
+
+def test_bridge_addr_returns_value_when_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_bridge_addr() returns the env var value when set."""
+    monkeypatch.setenv("NANNY_BRIDGE_ADDR", "server.example.com:62669")
+    assert client._bridge_addr() == "server.example.com:62669"
 
 
 def test_not_passthrough_when_port_set(mock_bridge: HTTPServer) -> None:

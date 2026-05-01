@@ -5,6 +5,56 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-05-01
+
+### Added
+
+- **Governance server** — `nanny server start` runs a standalone enforcement daemon for cross-process
+  and cross-machine agent fleets. All agents connected to the same server share one budget, one step
+  counter, and one execution boundary. A runaway agent on one machine counts against the same budget
+  as every other agent in the fleet.
+- **Mutual TLS** — governance server on a non-loopback address enforces mTLS. The server verifies
+  every connecting agent's client certificate against a CA. Connections without a valid cert are
+  refused at the TLS handshake — before any governance logic runs.
+- **`nanny certs` commands** — `generate`, `import`, `rotate`, `show`, `remove`. `generate` creates a
+  complete PKI bundle (CA + server cert + client cert) in `~/.nanny/certs/` in one command. `import`
+  accepts externally-issued certs (HashiCorp Vault, AWS ACM, any PKI system) with partial-import
+  support for rotation without CA replacement. `rotate` regenerates server + client certs using the
+  existing CA with zero downtime.
+- **Certificate hot-reload** — the governance server watches `~/.nanny/certs/` for file changes.
+  When certs are rotated or imported, the server reloads them without restarting. New connections use
+  the new cert immediately; in-flight connections finish on the old cert. Works with Vault Agent,
+  cert-manager, or any PKI automation that writes files to disk.
+- **HTTP CONNECT proxy** — the governance server acts as an HTTP proxy on the same port (62669).
+  All outbound HTTP from the agent routes through the server and is checked against an
+  `allowed_hosts` allowlist in `nanny.toml`. Requests to hosts outside the list are denied with
+  a `ToolDenied` event. Private IP ranges and cloud metadata endpoints (`169.254.169.254`) are
+  always blocked, regardless of the allowlist.
+- **`NANNY_BRIDGE_ADDR`** — new environment variable that points the Rust and Python SDKs at a
+  remote governance server. Joins the existing `NANNY_BRIDGE_SOCKET` (Unix) and `NANNY_BRIDGE_PORT`
+  (Windows). When set, `nanny run` skips starting a local bridge and routes the agent to the server.
+- **`nanny health`** — checks all active Nanny components (local bridge, network server, certs) in
+  one command. Exits `0` if healthy, `1` if not. Suitable for Docker `HEALTHCHECK`, Kubernetes
+  liveness probes, and deployment scripts.
+- **SIGTERM graceful drain** — `nanny server stop` sends `SIGTERM`. The server stops accepting new
+  connections and waits up to 10 seconds for in-flight requests to complete before exiting. An agent
+  mid-tool-call finishes cleanly rather than getting a connection reset.
+- **Per-IP rate limiting** — the governance server enforces a hard 100 requests/second limit per
+  client IP address. This is DoS protection, not a business feature — it prevents a runaway agent
+  from starving governance for all other agents on the same server. The limit is a hardcoded
+  constant, not a configuration option.
+- **`[proxy]` section in `nanny.toml`** — configures the HTTP proxy allowlist. Supports exact
+  hostnames and `*.suffix` wildcard patterns.
+
+### Changed
+
+- **`nanny run` respects `NANNY_BRIDGE_ADDR`** — when this variable is set, the CLI connects to
+  the remote governance server instead of starting a local bridge. Cert env vars
+  (`NANNY_BRIDGE_CERT`, `NANNY_BRIDGE_KEY`, `NANNY_BRIDGE_CA`) are auto-injected from
+  `~/.nanny/certs/` for same-machine agents; set them manually for agents on other machines.
+- **Default server port is 62669** — governance API and HTTP proxy share one port.
+  62669 spells NANNY on a phone keypad.
+
 ## [0.1.8] - 2026-04-27
 
 ### Changed
@@ -233,6 +283,7 @@ First public release of Nanny — an execution boundary for autonomous AI agents
   SHA256 checksums for each binary are computed and pushed to the homebrew tap automatically
   on every tagged release.
 
+[0.2.0]: https://github.com/nanny-run/nanny/compare/v0.1.8...v0.2.0
 [0.1.8]: https://github.com/nanny-run/nanny/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/nanny-run/nanny/compare/v0.1.5...v0.1.7
 [0.1.5]: https://github.com/nanny-run/nanny/compare/v0.1.4...v0.1.5

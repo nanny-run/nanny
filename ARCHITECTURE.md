@@ -13,7 +13,7 @@ This means:
 - A limit breach kills the process — no exceptions, no cleanup hooks
 - The enforcement is structural, not advisory
 
-The child process communicates with the parent through a local bridge. Every tool call the agent makes passes through this bridge before anything executes. The bridge decides whether to allow it, charge cost, and record it. If a limit is crossed, the parent kills the child immediately.
+The child process communicates with the parent through an enforcement bridge. Every tool call the agent makes passes through this bridge before anything executes. The bridge decides whether to allow it, charge cost, and record it. If a limit is crossed, the parent kills the child immediately.
 
 ```
 ┌─────────────────────────────────────────┐
@@ -26,6 +26,39 @@ The child process communicates with the parent through a local bridge. Every too
 │                                         │
 │  limits enforced: steps · cost · timeout│
 └─────────────────────────────────────────┘
+```
+
+---
+
+## Bridge modes
+
+The enforcement bridge runs in two configurations depending on how agents are deployed.
+
+**Local bridge (default — `nanny run`):**
+
+The bridge runs as a thread inside the `nanny` process. It communicates with the agent through a Unix domain socket on macOS and Linux, or a TCP loopback port on Windows. Both are OS-enforced — no process outside the same user session can connect. The bridge starts when `nanny run` spawns the child process and exits when the child exits.
+
+**Governance server (`nanny server start`):**
+
+The bridge runs as a long-lived standalone daemon. Agents connect to it over TCP, with mutual TLS enforced on non-loopback addresses. Multiple agents, on multiple machines, can connect to the same server simultaneously. All of their tool calls are counted against the same shared budget and step limit.
+
+The governance server is the right choice when:
+- Agents run in separate processes or containers and need a shared enforcement boundary
+- You need cross-machine enforcement (Docker, Kubernetes, remote workers)
+- You want enforcement to persist across multiple agent runs on the same task
+
+The local bridge is the right choice for everything else. It has no setup and no cert management.
+
+**The protocol is the same regardless of mode.** The SDK client (Rust or Python) checks for `NANNY_BRIDGE_SOCKET`, then `NANNY_BRIDGE_PORT`, then `NANNY_BRIDGE_ADDR`. Whichever is set, the same HTTP-over-transport protocol runs on top. Changing from local to network enforcement is a configuration change — no code changes needed.
+
+```
+Local mode:
+  agent ──(Unix socket / loopback TCP)──► nanny process (bridge inside)
+
+Network mode:
+  agent A ──(TCP + mTLS)──►
+  agent B ──(TCP + mTLS)──► nanny server (bridge as daemon)
+  agent C ──(TCP + mTLS)──►
 ```
 
 ---

@@ -1,0 +1,110 @@
+---
+title: Limits & Enforcement
+description: How steps, cost, and timeout work — and how to configure them.
+---
+
+## The three limit types
+
+Every Nanny execution is governed by three independent limits. Any one of them can stop a run.
+
+### Timeout
+
+The wall-clock time limit in milliseconds. The moment the child process has been running
+for `timeout` ms, Nanny kills it — regardless of what it's doing.
+
+```toml
+[limits]
+timeout = 30000   # 30 seconds
+```
+
+Timeout enforcement requires no instrumentation — it works for any process in any language.
+
+### Steps
+
+The maximum number of agent steps allowed. Requires `#[nanny::tool]` (Rust) or `@tool` (Python) to report tool calls.
+
+```toml
+[limits]
+steps = 100
+```
+
+### Cost
+
+The maximum number of cost units the agent may spend. Each tool declares its cost per call;
+Nanny tracks the running total and stops the moment the budget is exhausted.
+
+```toml
+[limits]
+cost = 1000
+```
+
+## Named limit sets
+
+In a multi-agent system, each agent has a different risk profile. The analysis agent makes expensive API calls — it deserves a tight cost ceiling. The reporter just writes a file — it barely needs a budget at all. Named limit sets let each role get exactly the ceiling it deserves, configured once in `nanny.toml`.
+
+```toml
+[limits]
+# Global ceiling — applies to any run not using a named set
+steps   = 200
+cost    = 500
+timeout = 120000
+
+[limits.ingestion]
+steps   = 20
+cost    = 50
+timeout = 30000
+
+[limits.analysis]
+steps   = 60
+cost    = 200    # tighter — this agent makes expensive calls
+timeout = 60000
+
+[limits.visualization]
+steps   = 20
+cost    = 100
+timeout = 30000
+
+[limits.reporter]
+steps   = 20
+cost    = 50     # loose — this agent just writes a file
+timeout = 30000
+```
+
+Named sets **inherit** from `[limits]` and override only the fields you declare. In the example above, `[limits.ingestion]` inherits from the global `[limits]` and overrides all three fields. A set that only declares `timeout` would inherit `steps` and `cost` from the base.
+
+Each agent activates its own set via the `@agent("role")` decorator:
+
+```python
+@agent("analysis")
+def run_analysis(path: str): ...    # governed by [limits.analysis]
+
+@agent("reporter")
+def run_reporter(output: str): ...  # governed by [limits.reporter]
+```
+
+Or activate a named set from the CLI for the entire run:
+
+```bash
+nanny run --limits=analysis
+```
+
+## What happens when a limit is hit
+
+1. Nanny kills the child process immediately — no grace period, no way for the agent to catch or delay the stop.
+2. An `ExecutionStopped` event is emitted with the reason.
+3. A human-readable message is printed to stderr: `nanny: stopped — TimeoutExpired`.
+4. Nanny exits with code `1`.
+
+The stop reasons are:
+
+| Reason | Trigger |
+|--------|-------|
+| `AgentCompleted` | Process exited cleanly on its own |
+| `TimeoutExpired` | Wall-clock timeout exceeded |
+| `MaxStepsReached` | Step limit hit |
+| `BudgetExhausted` | Cost budget exhausted |
+| `ToolDenied` | Tool not in allowlist |
+| `RuleDenied` | Custom rule returned denial |
+| `ManualStop` | Stopped programmatically |
+| `ProcessCrashed` | Child process exited with non-zero code unexpectedly |
+| `BridgeUnavailable` | Bridge was active but unreachable — Nanny fails closed rather than continue ungoverned |

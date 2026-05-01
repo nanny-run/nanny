@@ -188,6 +188,7 @@ mod tests {
             },
             observability: ObservabilityConfig::default(),
             managed: None,
+            proxy: None,
         }
     }
 
@@ -217,6 +218,7 @@ mod tests {
             },
             observability: ObservabilityConfig::default(),
             managed: None,
+            proxy: None,
         }
     }
 
@@ -276,6 +278,7 @@ mod tests {
             },
             observability: ObservabilityConfig::default(),
             managed: None,
+            proxy: None,
         };
 
         let components = build_from_config(&config);
@@ -330,6 +333,7 @@ mod tests {
                 org_id: "org_test".to_string(),
                 api_key: "nny_test_key".to_string(),
             }),
+            proxy: None,
         };
 
         // build_from_config uses runtime limits regardless of managed presence
@@ -363,6 +367,7 @@ mod tests {
             tools: ToolsConfig::default(),
             observability: ObservabilityConfig::default(),
             managed: None,
+            proxy: None,
         };
         let ceiling = Limits { max_steps: 100, max_cost_units: 1000, timeout_ms: 30_000 };
         let components = build_bridge_components(&config, ceiling, true);
@@ -396,6 +401,7 @@ mod tests {
             tools: ToolsConfig::default(),
             observability: ObservabilityConfig::default(),
             managed: None,
+            proxy: None,
         };
         let base = Limits { max_steps: 100, max_cost_units: 1000, timeout_ms: 30_000 };
         let components = build_bridge_components(&config, base, false);
@@ -430,6 +436,7 @@ mod tests {
             },
             observability: ObservabilityConfig::default(),
             managed: None,
+            proxy: None,
         };
 
         let components = build_from_config(&config);

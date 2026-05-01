@@ -21,6 +21,15 @@
   "icons": {
     "library": "lucide"
   },
+  "contextual": {
+    "options": ["copy", "view", "claude"]
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/nanny-run/nanny",
+      "x": "https://x.com/nannyrun_"
+    }
+  },
   "navbar": {
     "links": [
       {
@@ -30,17 +39,68 @@
     ]
   },
   "redirects": [
-    { "source": "/quickstart", "destination": "/v0.1/quickstart" },
+    { "source": "/quickstart", "destination": "/v0.2/quickstart" },
     { "source": "/v0.1.3/:slug*", "destination": "/v0.1/:slug*" },
     { "source": "/v0.1.4/:slug*", "destination": "/v0.1/:slug*" },
     { "source": "/v0.1.5/:slug*", "destination": "/v0.1/:slug*" },
-    { "source": "/v0.1.7/:slug*", "destination": "/v0.1/:slug*" }
+    { "source": "/v0.1.7/:slug*", "destination": "/v0.1/:slug*" },
+    { "source": "/v0.1.8/:slug*", "destination": "/v0.1/:slug*" }
   ],
   "navigation": {
     "versions": [
       {
-        "version": "v0.1.x",
+        "version": "v0.2.x",
         "tag": "Latest",
+        "tabs": [
+          {
+            "tab": "Getting Started",
+            "pages": [
+              "v0.2/index",
+              "v0.2/quickstart",
+              "v0.2/install",
+              {
+                "group": "Concepts",
+                "pages": [
+                  "v0.2/concepts/how-it-works",
+                  "v0.2/concepts/limits",
+                  "v0.2/concepts/event-log"
+                ]
+              },
+              {
+                "group": "SDKs",
+                "pages": ["v0.2/guides/rust-sdk", "v0.2/guides/python-sdk"]
+              },
+              {
+                "group": "Guides",
+                "pages": [
+                  "v0.2/guides/governance-server",
+                  "v0.2/guides/http-proxy-mode"
+                ]
+              },
+              {
+                "group": "CLI",
+                "pages": [
+                  "v0.2/init",
+                  "v0.2/run",
+                  "v0.2/uninstall",
+                  "v0.2/reference/cli-server",
+                  "v0.2/reference/cli-certs",
+                  "v0.2/reference/cli-health"
+                ]
+              },
+              {
+                "group": "Reference",
+                "pages": [
+                  "v0.2/reference/nanny-toml",
+                  "v0.2/reference/events"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "version": "v0.1.x",
         "tabs": [
           {
             "tab": "Getting Started",
@@ -75,15 +135,6 @@
     ],
     "global": {
       "anchors": []
-    }
-  },
-  "contextual": {
-    "options": ["copy", "view", "claude"]
-  },
-  "footer": {
-    "socials": {
-      "github": "https://github.com/nanny-run/nanny",
-      "x": "https://x.com/nannyrun_"
     }
   }
 }

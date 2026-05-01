@@ -1,0 +1,22 @@
+---
+title: nanny uninstall
+description: Remove the nanny binary from its current install location.
+---
+
+Removes the `nanny` binary from its current install location.
+
+```bash
+nanny uninstall
+```
+
+Works on all platforms. On Windows, the running executable cannot delete itself — `nanny uninstall` spawns a hidden background process that waits for nanny to exit, then removes the binary and cleans up your PATH automatically. Restart your terminal after uninstalling.
+
+---
+
+## Errors
+
+| Condition | Behaviour |
+|-----------|-----------|
+| Homebrew installation detected | Exits with an error and prints the correct `brew uninstall nannyd` command |
+| Insufficient permissions (macOS / Linux) | Exits with an error and prints a `sudo rm` fallback |
+| Binary path cannot be determined | Exits with an error |

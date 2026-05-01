@@ -1,0 +1,122 @@
+---
+title: Quickstart
+description: Install Nanny, configure limits, and run your first enforced process in under five minutes.
+---
+
+## Install
+
+The Nanny CLI is a system tool — install it once and use `nanny run` from any project.
+
+<Tabs>
+  <Tab title="macOS">
+    ```bash
+    brew tap nanny-run/nanny
+    brew install nannyd
+    ```
+  </Tab>
+  <Tab title="Linux">
+    ```bash
+    curl -fsSL https://install.nanny.run | sh
+    ```
+
+    Have Rust installed? `cargo install nannyd` also works.
+  </Tab>
+  <Tab title="Windows">
+    ```powershell
+    irm https://install.nanny.run/windows | iex
+    ```
+
+    Installs the binary to `%LOCALAPPDATA%\nanny\` and adds it to your PATH. Restart your terminal after installing.
+  </Tab>
+</Tabs>
+
+Verify the installation:
+
+```bash
+nanny --version
+```
+
+For upgrade paths, uninstall, and troubleshooting on each platform, see [Installing Nanny](/v0.2/install).
+
+The CLI is the enforcement engine. The SDK instruments your functions. You need both: `nanny run` owns the process lifecycle and enforces limits; `@tool`, `@rule`, and `@agent` report tool calls and activate named limit sets from inside your agent code.
+
+## Initialise a config
+
+Run this in the root of your project:
+
+```bash
+nanny init
+```
+
+This writes a `nanny.toml` with safe defaults:
+
+```toml
+[runtime]
+mode = "local"
+
+[start]
+# How to launch your agent. nanny run reads this command.
+cmd = "python agent.py"
+
+[limits]
+steps   = 100
+cost    = 1000
+timeout = 30000
+```
+
+Set `[start].cmd` to your agent's entry point and edit the limit values to match your requirements.
+
+## Run your agent
+
+```bash
+nanny run
+```
+
+Nanny reads `[start].cmd` from `nanny.toml`, spawns the process, and kills it the moment any limit is crossed.
+
+## Use named limits
+
+Define limit sets for different workloads in the same `nanny.toml`:
+
+```toml
+[limits]
+steps   = 50
+cost    = 500
+timeout = 15000
+
+[limits.researcher]
+steps   = 200
+cost    = 5000
+timeout = 120000
+```
+
+Then activate a named set at runtime:
+
+```bash
+nanny run --limits=researcher
+```
+
+Named sets inherit from `[limits]` and override only the fields you declare.
+
+## Read the event log
+
+Every run emits structured NDJSON to stdout:
+
+```json
+{"event":"ExecutionStarted","ts":1711234567000,"limits":{"steps":100,"cost":1000,"timeout":30000},"limits_set":"[limits]","command":"python agent.py"}
+{"event":"ExecutionStopped","ts":1711234572000,"reason":"AgentCompleted","steps":7,"cost_spent":70,"elapsed_ms":4823}
+```
+
+Pipe it to a file or your log aggregator:
+
+```bash
+nanny run >> nanny.log
+```
+
+Or configure file output directly in `nanny.toml`:
+
+```toml
+[observability]
+log      = "file"
+log_file = "nanny.log"
+```

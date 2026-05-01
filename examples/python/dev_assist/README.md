@@ -58,7 +58,7 @@ nanny run --limits=debugger
 
 ## Run without enforcement (passthrough)
 
-All decorators are no-ops outside `nanny run`. The agent runs normally with no bridge required:
+All decorators are no-ops outside `nanny run`. The agent runs normally with no Nanny enforcement layer required:
 
 ```bash
 uv run dev debug --trace fixtures/sample_trace.txt
@@ -68,12 +68,12 @@ uv run dev debug --trace fixtures/sample_trace.txt
 
 ## Nanny features demonstrated
 
-| Feature                          | What it does                                                               |
-| -------------------------------- | -------------------------------------------------------------------------- |
-| `@tool(cost=5)` on `file_reader` | Each file read charges 5 cost units; tracked against the budget            |
-| `@tool(cost=8)` on `ripgrep`     | Each search charges 8 cost units                                           |
-| `[tools.file_reader] max_calls`  | Caps total file reads; `RuleDenied` fires when the limit is exceeded       |
-| `@agent("debugger")`             | Activates `[limits.debugger]` from `nanny.toml` on entry; reverts on exit  |
+| Feature                          | What it does                                                              |
+| -------------------------------- | ------------------------------------------------------------------------- |
+| `@tool(cost=5)` on `file_reader` | Each file read charges 5 cost units; tracked against the budget           |
+| `@tool(cost=8)` on `ripgrep`     | Each search charges 8 cost units                                          |
+| `[tools.file_reader] max_calls`  | Caps total file reads; `RuleDenied` fires when the limit is exceeded      |
+| `@agent("debugger")`             | Activates `[limits.debugger]` from `nanny.toml` on entry; reverts on exit |
 
 ---
 
@@ -87,12 +87,12 @@ uv run dev debug --trace fixtures/sample_trace.txt
 
 ## Stop reasons you may see
 
-| Reason                     | What caused it                                               |
-| -------------------------- | ------------------------------------------------------------ |
-| `BudgetExhausted`          | Hit the cost ceiling before finishing the diagnosis          |
-| `RuleDenied: file_reader.max_calls` | Agent exceeded the maximum number of file reads          |
-| `ToolDenied`               | `write_file` removed from allowlist (demo-tool-denied tape)  |
-| `AgentCompleted`           | Diagnosis produced within all limits                         |
+| Reason                              | What caused it                                              |
+| ----------------------------------- | ----------------------------------------------------------- |
+| `BudgetExhausted`                   | Hit the cost ceiling before finishing the diagnosis         |
+| `RuleDenied: file_reader.max_calls` | Agent exceeded the maximum number of file reads             |
+| `ToolDenied`                        | `write_file` removed from allowlist (demo-tool-denied tape) |
+| `AgentCompleted`                    | Diagnosis produced within all limits                        |
 
 ## Development
 

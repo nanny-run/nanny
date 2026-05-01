@@ -1,0 +1,107 @@
+---
+title: nanny health
+description: Check the health of all active Nanny components in one command.
+---
+
+Shows the status of every Nanny component that is currently active. Exits `0` if all active components are healthy, `1` if any are unhealthy.
+
+```bash
+nanny health
+```
+
+---
+
+## What it checks
+
+`nanny health` checks three things:
+
+| Component | Active when | What "healthy" means |
+|-----------|------------|----------------------|
+| Local bridge | `NANNY_BRIDGE_SOCKET` or `NANNY_BRIDGE_PORT` is set | A TCP connection to the bridge succeeds |
+| Network server | `NANNY_BRIDGE_ADDR` is set | A TCP connection to the server address succeeds |
+| Certificates | `~/.nanny/certs/` exists | Cert files are present and not expired |
+
+A component that was never started is **not checked** and does not cause a non-zero exit. `nanny health` only reports on what is active.
+
+This means `nanny health` run from a regular terminal (outside `nanny run`) will typically show `local bridge: not running` — that's expected. The bridge env vars are injected by `nanny run` into the child process, not into the terminal that launched it.
+
+---
+
+## Example output
+
+**Server running, certs valid:**
+
+```
+local bridge  : not running
+network server: running  (0.0.0.0:62669)  [plain HTTP]
+certs         : valid  (expires 2027-05-01T09:00:00Z)
+```
+
+**All components active and healthy (within a governed process):**
+
+```
+local bridge  : running
+network server: not running
+certs         : not found  (run `nanny certs generate`)
+```
+
+**Server unreachable:**
+
+```
+local bridge  : not running
+network server: unreachable  (server.example.com:62669) — connection refused
+certs         : valid  (expires 2027-05-01T09:00:00Z)
+```
+
+Exit code is `1` when any active component is unreachable.
+
+---
+
+## Certificate expiry warning
+
+When certs exist and are valid but expire within 30 days, `nanny health` prints a warning to stderr:
+
+```
+nanny health  : warning — certs expire in 14 day(s). Run `nanny certs rotate` to renew.
+```
+
+The exit code is still `0` — a near-expiry cert is healthy, just worth knowing about.
+
+---
+
+## Use in scripts and health checks
+
+`nanny health` is designed for scripts, Docker health checks, and Kubernetes liveness probes:
+
+**Docker:**
+
+```dockerfile
+HEALTHCHECK --interval=30s --timeout=5s \
+  CMD nanny health || exit 1
+```
+
+**Shell script:**
+
+```bash
+if ! nanny health; then
+  echo "Nanny is not healthy — aborting"
+  exit 1
+fi
+```
+
+**Kubernetes:**
+
+```yaml
+livenessProbe:
+  exec:
+    command: ["nanny", "health"]
+  initialDelaySeconds: 5
+  periodSeconds: 30
+```
+
+---
+
+## See also
+
+- [`nanny server status`](/v0.2/reference/cli-server) — focused status view for the governance server
+- [`nanny certs show`](/v0.2/reference/cli-certs) — cert expiry and file inventory

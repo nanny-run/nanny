@@ -69,7 +69,7 @@ Reads `[start].cmd` from `nanny.toml` and runs the full four-agent pipeline unde
 
 ## Run without enforcement (passthrough)
 
-All decorators are no-ops outside `nanny run`. The full pipeline runs normally with no bridge required:
+All decorators are no-ops outside `nanny run`. The full pipeline runs normally with no Nanny enforcement layer required:
 
 ```bash
 uv run metrics-crew analyze --data fixtures/sample_metrics.csv

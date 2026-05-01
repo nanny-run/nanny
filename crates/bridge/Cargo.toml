@@ -14,8 +14,28 @@ uuid         = { workspace = true }
 thiserror    = { workspace = true }
 serde        = { workspace = true }
 serde_json   = { workspace = true }
+anyhow       = { workspace = true }
+dirs         = { workspace = true }
+# v0.2.0 — Network Bridge server
+axum         = { workspace = true }
+axum-server  = { workspace = true }
+tokio        = { workspace = true }
+rustls       = { workspace = true }
+rustls-pemfile = { workspace = true }
+hyper        = { workspace = true }
+hyper-util   = { workspace = true }
+notify       = { workspace = true }
 
 # TCP transport — only needed on Windows (non-Unix). On macOS/Linux we use
 # a Unix domain socket, which requires no external crate.
 [target.'cfg(not(unix))'.dependencies]
 tiny_http = "0.12"
+
+[dev-dependencies]
+# Used by network server integration tests (TLS client)
+reqwest = { version = "0.12", features = ["blocking", "rustls-tls", "json"] }
+# Used by network server integration tests (cert generation)
+rcgen = { workspace = true }
+time  = { workspace = true }
+# Used by raw_tcp_tls_handshake_works diagnostic test
+tokio-rustls = "0.26"

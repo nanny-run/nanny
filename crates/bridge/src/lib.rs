@@ -1,3 +1,6 @@
+// nanny-bridge — local enforcement server + network bridge server.
+pub mod network;
+
 // nanny-bridge — local enforcement server.
 //
 // Runs as a background thread inside the `nanny run` process.
@@ -98,7 +101,7 @@ pub struct BridgeComponents {
 
 // ── Internal state ────────────────────────────────────────────────────────────
 
-struct BridgeState {
+pub(crate) struct BridgeState {
     session_token: String,
     execution: ExecutionState,
 
@@ -318,15 +321,15 @@ struct BridgeReq {
     body: Vec<u8>,
 }
 
-enum ContentType {
+pub(crate) enum ContentType {
     Json,
     Ndjson,
 }
 
-struct BridgeResp {
-    status: u16,
-    body: String,
-    content_type: ContentType,
+pub(crate) struct BridgeResp {
+    pub(crate) status: u16,
+    pub(crate) body: String,
+    pub(crate) content_type: ContentType,
 }
 
 impl BridgeResp {
@@ -389,7 +392,7 @@ fn dispatch(
 
 // ── Handlers (transport-agnostic) ─────────────────────────────────────────────
 
-fn handle_health(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
+pub(crate) fn handle_health(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
     let guard = shared.lock().unwrap();
     let body = match &guard.execution {
         ExecutionState::Running =>
@@ -400,7 +403,7 @@ fn handle_health(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
     BridgeResp::json(200, body)
 }
 
-fn handle_status(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
+pub(crate) fn handle_status(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
     let guard = shared.lock().unwrap();
     let elapsed_ms = guard.start_time.elapsed().as_millis() as u64;
     let counts_json = serde_json::to_string(&guard.tool_call_counts).unwrap_or_else(|_| "{}".to_string());
@@ -418,12 +421,12 @@ fn handle_status(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
     BridgeResp::json(200, body)
 }
 
-fn handle_events(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
+pub(crate) fn handle_events(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
     let guard = shared.lock().unwrap();
     BridgeResp::ndjson(guard.events.join("\n"))
 }
 
-fn handle_tool_call(
+pub(crate) fn handle_tool_call(
     body: &[u8],
     shared: &Arc<Mutex<BridgeState>>,
     registry: &Arc<ToolRegistry>,
@@ -553,7 +556,7 @@ fn handle_tool_call(
     }
 }
 
-fn handle_rule_evaluate(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
+pub(crate) fn handle_rule_evaluate(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
     let req: RuleEvalRequest = serde_json::from_slice(body).unwrap_or_default();
 
     let decision = {
@@ -591,7 +594,7 @@ fn handle_rule_evaluate(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> Bridge
     BridgeResp::json(200, body)
 }
 
-fn handle_agent_enter(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
+pub(crate) fn handle_agent_enter(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
     let req: AgentEnterRequest = match serde_json::from_slice(body) {
         Ok(b) => b,
         Err(_) => return BridgeResp::json(400, r#"{"error":"invalid request body"}"#),
@@ -633,7 +636,7 @@ fn handle_agent_enter(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> BridgeRe
     }
 }
 
-fn handle_agent_exit(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
+pub(crate) fn handle_agent_exit(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
     let mut guard = shared.lock().unwrap();
     let prev = guard.limits_stack.pop().unwrap_or_else(|| guard.default_limits.clone());
     guard.current_limits = prev.clone();
@@ -646,7 +649,7 @@ fn handle_agent_exit(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
     BridgeResp::json(200, r#"{"status":"ok"}"#)
 }
 
-fn handle_step(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
+pub(crate) fn handle_step(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
     let mut guard = shared.lock().unwrap();
     guard.step_count += 1;
 
@@ -880,7 +883,7 @@ fn stop_reason_name(reason: &StopReason) -> &'static str {
     }
 }
 
-fn handle_stop(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
+pub(crate) fn handle_stop(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
     let parsed = serde_json::from_slice::<serde_json::Value>(body).unwrap_or_default();
     let raw = parsed["reason"].as_str().unwrap_or_default().to_string();
     // Validate against the closed set of known stop reasons.
@@ -919,11 +922,11 @@ fn mark_stopped(state: &mut BridgeState, reason: &str) {
     state.execution = ExecutionState::Stopped { reason: reason.to_string() };
 }
 
-fn append_event(state: &mut BridgeState, event: ExecutionEvent) {
+pub(crate) fn append_event(state: &mut BridgeState, event: ExecutionEvent) {
     state.events.push(serde_json::to_string(&event).unwrap());
 }
 
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -931,8 +934,52 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-fn is_stopped(shared: &Arc<Mutex<BridgeState>>) -> bool {
+pub(crate) fn is_stopped(shared: &Arc<Mutex<BridgeState>>) -> bool {
     matches!(shared.lock().unwrap().execution, ExecutionState::Stopped { .. })
+}
+
+// ── Network server factory ────────────────────────────────────────────────────
+
+/// Initialise the shared state and registry for the network server.
+///
+/// Returns the same Arc pair that the local bridge's transport loop uses
+/// so all nine route handlers can be reused unchanged by axum.
+pub(crate) fn init_shared_state(
+    components: BridgeComponents,
+    token: String,
+) -> (Arc<Mutex<BridgeState>>, Arc<ToolRegistry>) {
+    use nanny_runtime::{FakeLedger, LimitsPolicy, RuleEvaluator};
+    use std::collections::HashMap;
+
+    let limits_policy = LimitsPolicy::new(
+        components.limits.clone(),
+        components.allowed_tools.clone(),
+    );
+    let rule_evaluator = RuleEvaluator::new(components.per_tool_max_calls);
+    let max_cost = components.limits.max_cost_units;
+
+    let shared = Arc::new(Mutex::new(BridgeState {
+        session_token: token,
+        execution: ExecutionState::Running,
+        limits_policy,
+        rule_evaluator,
+        ledger: FakeLedger::new(max_cost),
+        default_limits: components.limits.clone(),
+        current_limits: components.limits,
+        named_limits: components.named_limits,
+        limits_stack: Vec::new(),
+        agent_name_stack: Vec::new(),
+        allowed_tools: components.allowed_tools,
+        cost_units_spent: 0,
+        tool_call_counts: HashMap::new(),
+        tool_call_history: Vec::new(),
+        step_count: 0,
+        start_time: std::time::Instant::now(),
+        events: Vec::new(),
+    }));
+
+    let registry = Arc::new(components.registry);
+    (shared, registry)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
