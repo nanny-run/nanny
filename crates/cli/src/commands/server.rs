@@ -53,6 +53,7 @@ pub enum ServerCommand {
         /// Defaults to ~/.nanny/certs/ca.crt.
         #[arg(long)]
         ca: Option<PathBuf>,
+
     },
 
     /// Stop the running governance server.
@@ -68,7 +69,8 @@ pub enum ServerCommand {
 
 pub fn cmd_server(action: ServerCommand) -> Result<()> {
     match action {
-        ServerCommand::Start { addr, cert, key, ca } => cmd_server_start(addr, cert, key, ca),
+        ServerCommand::Start { addr, cert, key, ca } =>
+            cmd_server_start(addr, cert, key, ca),
         ServerCommand::Stop => cmd_server_stop(),
         ServerCommand::Status => cmd_server_status(),
     }
@@ -86,6 +88,12 @@ fn nanny_state_dir() -> Result<PathBuf> {
 }
 
 // ── nanny server start ────────────────────────────────────────────────────────
+
+/// DoS protection: hard-coded 100 req/s per client IP.
+/// Not a config knob — if this is ever wrong for a real workload, bump the
+/// constant and ship a new binary.  Operator tuning of this value is not a
+/// use-case Nanny needs to support.
+const RATE_LIMIT_RPS: u32 = 100;
 
 fn cmd_server_start(
     addr: SocketAddr,
@@ -152,6 +160,7 @@ fn cmd_server_start(
         components,
         proxy_allowed_hosts,
         None,
+        RATE_LIMIT_RPS,
     )?;
 
     Ok(())

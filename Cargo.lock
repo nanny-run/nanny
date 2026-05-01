@@ -1192,8 +1192,11 @@ dependencies = [
  "axum",
  "axum-server",
  "dirs",
+ "hyper",
+ "hyper-util",
  "nanny-core",
  "nanny-runtime",
+ "notify",
  "rcgen",
  "reqwest",
  "rustls",
@@ -1204,6 +1207,7 @@ dependencies = [
  "time",
  "tiny_http",
  "tokio",
+ "tokio-rustls",
  "uuid",
 ]
 

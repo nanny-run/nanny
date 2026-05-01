@@ -922,11 +922,11 @@ fn mark_stopped(state: &mut BridgeState, reason: &str) {
     state.execution = ExecutionState::Stopped { reason: reason.to_string() };
 }
 
-fn append_event(state: &mut BridgeState, event: ExecutionEvent) {
+pub(crate) fn append_event(state: &mut BridgeState, event: ExecutionEvent) {
     state.events.push(serde_json::to_string(&event).unwrap());
 }
 
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

@@ -22,6 +22,9 @@ axum-server  = { workspace = true }
 tokio        = { workspace = true }
 rustls       = { workspace = true }
 rustls-pemfile = { workspace = true }
+hyper        = { workspace = true }
+hyper-util   = { workspace = true }
+notify       = { workspace = true }
 
 # TCP transport — only needed on Windows (non-Unix). On macOS/Linux we use
 # a Unix domain socket, which requires no external crate.
@@ -34,3 +37,5 @@ reqwest = { version = "0.12", features = ["blocking", "rustls-tls", "json"] }
 # Used by network server integration tests (cert generation)
 rcgen = { workspace = true }
 time  = { workspace = true }
+# Used by raw_tcp_tls_handshake_works diagnostic test
+tokio-rustls = "0.26"

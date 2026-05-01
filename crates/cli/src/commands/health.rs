@@ -11,8 +11,8 @@
 // "Active" means: the relevant env var or file is present. A component that
 // was never started is not checked and does not cause a non-zero exit.
 
-use anyhow::Result;
-use std::path::PathBuf;
+use anyhow::{Context, Result};
+use std::path::{Path, PathBuf};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
@@ -50,8 +50,8 @@ pub fn cmd_health() -> Result<()> {
         ServerStatus::NotConfigured => {
             println!("network server: not running");
         }
-        ServerStatus::Reachable(addr) => {
-            println!("network server: running  ({addr})");
+        ServerStatus::Reachable(addr, how) => {
+            println!("network server: running  ({addr})  [{how}]");
         }
         ServerStatus::Unreachable(addr, detail) => {
             println!("network server: unreachable  ({addr}) — {detail}");
@@ -135,7 +135,8 @@ fn check_local_bridge() -> BridgeStatus {
 
 enum ServerStatus {
     NotConfigured,
-    Reachable(String),
+    /// Server is reachable. `how` describes the verification method used.
+    Reachable(String, &'static str),
     Unreachable(String, String),
 }
 
@@ -145,21 +146,123 @@ fn check_network_server() -> ServerStatus {
         Err(_) => return ServerStatus::NotConfigured,
     };
 
-    // Parse host:port and do a basic TCP connectivity check.
-    // Full mTLS health check comes in Day 4 when the TLS transport is wired.
-    let connect_result = if let Some((host, port_str)) = addr.rsplit_once(':') {
+    // Prefer a full mTLS health check (actual HTTPS request with client cert)
+    // over a raw TCP probe — it validates the TLS handshake, CA trust, and the
+    // /health response in one shot.
+    let cert_dir    = default_certs_dir();
+    let client_cert = cert_dir.join("client.crt");
+    let client_key  = cert_dir.join("client.key");
+    let ca_cert     = cert_dir.join("ca.crt");
+
+    if client_cert.exists() && client_key.exists() && ca_cert.exists() {
+        match mtls_health_check(&addr, &client_cert, &client_key, &ca_cert) {
+            MtlsResult::Running => ServerStatus::Reachable(addr, "mTLS ok"),
+            MtlsResult::Stopped => ServerStatus::Reachable(addr, "mTLS ok, server stopped"),
+            MtlsResult::CertError(detail) => ServerStatus::Unreachable(
+                addr,
+                format!("cert mismatch — run `nanny certs show`: {detail}"),
+            ),
+            MtlsResult::ConnectError(detail) => ServerStatus::Unreachable(
+                addr,
+                format!("connection failed: {detail}"),
+            ),
+        }
+    } else {
+        // No local certs — fall back to TCP ping (e.g. loopback dev server).
+        tcp_probe_status(addr)
+    }
+}
+
+// ── mTLS health check ─────────────────────────────────────────────────────────
+
+enum MtlsResult {
+    Running,
+    Stopped,
+    CertError(String),
+    ConnectError(String),
+}
+
+fn mtls_health_check(
+    addr: &str,
+    client_cert: &Path,
+    client_key: &Path,
+    ca: &Path,
+) -> MtlsResult {
+    match do_mtls_get(addr, client_cert, client_key, ca) {
+        Err(e) => {
+            let msg = e.to_string();
+            // reqwest surfaces TLS/cert errors with these substrings.
+            if msg.contains("certificate") || msg.contains("tls") || msg.contains("TLS")
+                || msg.contains("handshake") || msg.contains("invalid peer")
+            {
+                MtlsResult::CertError(msg)
+            } else {
+                MtlsResult::ConnectError(msg)
+            }
+        }
+        Ok(state) if state.as_deref() == Some("running") => MtlsResult::Running,
+        Ok(_) => MtlsResult::Stopped,
+    }
+}
+
+/// Perform a real HTTPS GET /health using mutual TLS and return the `state` field.
+fn do_mtls_get(
+    addr: &str,
+    client_cert: &Path,
+    client_key: &Path,
+    ca: &Path,
+) -> Result<Option<String>> {
+    // reqwest::Identity requires combined cert+key PEM in one buffer.
+    let cert_pem = std::fs::read(client_cert)
+        .with_context(|| format!("failed to read {}", client_cert.display()))?;
+    let key_pem = std::fs::read(client_key)
+        .with_context(|| format!("failed to read {}", client_key.display()))?;
+    let mut combined = cert_pem;
+    combined.push(b'\n');
+    combined.extend_from_slice(&key_pem);
+
+    let identity = reqwest::Identity::from_pem(&combined)
+        .context("failed to build client identity from cert + key")?;
+
+    let ca_pem = std::fs::read(ca)
+        .with_context(|| format!("failed to read {}", ca.display()))?;
+    let ca_cert = reqwest::Certificate::from_pem(&ca_pem)
+        .context("failed to load CA certificate")?;
+
+    let client = reqwest::blocking::Client::builder()
+        .identity(identity)
+        .add_root_certificate(ca_cert)
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .context("failed to build HTTP client")?;
+
+    let url   = format!("https://{addr}/health");
+    let bytes = client
+        .get(&url)
+        .send()
+        .with_context(|| format!("GET {url} failed"))?
+        .bytes()
+        .context("failed to read /health response body")?;
+    let body: serde_json::Value =
+        serde_json::from_slice(&bytes).context("invalid JSON from /health")?;
+
+    Ok(body.get("state").and_then(|v| v.as_str()).map(|s| s.to_string()))
+}
+
+// ── TCP-only probe (fallback when no local certs) ─────────────────────────────
+
+fn tcp_probe_status(addr: String) -> ServerStatus {
+    let reachable = addr.rsplit_once(':').and_then(|(host, port_str)| {
         port_str
             .parse::<u16>()
             .ok()
-            .and_then(|port| std::net::TcpStream::connect((host, port)).ok())
-    } else {
-        None
-    };
+            .map(|port| std::net::TcpStream::connect((host, port)).is_ok())
+    });
 
-    match connect_result {
-        Some(_) => ServerStatus::Reachable(addr),
-        None => ServerStatus::Unreachable(
-            addr.clone(),
+    match reachable {
+        Some(true) => ServerStatus::Reachable(addr, "TCP ping"),
+        _ => ServerStatus::Unreachable(
+            addr,
             "TCP connection refused — is `nanny server start` running?".to_string(),
         ),
     }

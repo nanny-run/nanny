@@ -386,21 +386,147 @@ fn cmd_certs_import(pairs: Vec<String>) -> Result<()> {
 fn cmd_certs_rotate() -> Result<()> {
     let dir = default_certs_dir();
 
-    // Require existing CA — rotate preserves it and re-signs with it.
-    // rcgen can't load existing PEM certs for signing, so we regenerate
-    // the entire bundle (including CA) atomically using --force semantics.
-    // A future improvement would use openssl bindings to sign with the
-    // existing CA key without regenerating it.
-    if !dir.join("ca.crt").exists() {
+    let ca_crt_path = dir.join("ca.crt");
+    let ca_key_path = dir.join("ca.key");
+
+    if !ca_crt_path.exists() {
         anyhow::bail!(
-            "no certificates found in '{}'\n\
-             Run `nanny certs generate` first.",
-            dir.display()
+            "CA certificate not found: {}\n\
+             \n\
+             If you used `nanny certs import`, use it again to update your certs:\n\
+             \n\
+             \x20 nanny certs import cert=@new-server.crt key=@new-server.key\n\
+             \n\
+             `nanny certs rotate` only works when `nanny certs generate` created\n\
+             your CA and Nanny holds the CA private key. For certs issued by an\n\
+             external PKI (Vault, cert-manager, etc.), that system is responsible\n\
+             for rotation — import the new files with `nanny certs import`.",
+            ca_crt_path.display()
         );
     }
 
-    println!("nanny certs: rotating — regenerating all certificates (CA + server + client)");
-    cmd_certs_generate(Some(dir), true, 365)
+    if !ca_key_path.exists() {
+        anyhow::bail!(
+            "CA private key not found: {}\n\
+             \n\
+             `nanny certs rotate` requires the CA private key to re-sign new\n\
+             server and client certificates. This key only exists when\n\
+             `nanny certs generate` created the CA.\n\
+             \n\
+             If your certs were issued by an external PKI (Vault, AWS ACM,\n\
+             your company's CA), the CA private key never leaves that system —\n\
+             that is correct and expected. To update your certs, use\n\
+             `nanny certs import` instead:\n\
+             \n\
+             \x20 nanny certs import cert=@new-server.crt key=@new-server.key\n\
+             \n\
+             If the CA itself was replaced, also pass the new CA certificate:\n\
+             \n\
+             \x20 nanny certs import ca=@new-ca.crt cert=@new-server.crt key=@new-server.key\n\
+             \n\
+             The running server hot-reloads automatically when the files change.",
+            ca_key_path.display()
+        );
+    }
+
+    // Load the existing CA key — used to sign the new server + client certs.
+    let ca_key_pem = std::fs::read_to_string(&ca_key_path)
+        .context("failed to read ca.key")?;
+    let ca_key = KeyPair::from_pem(&ca_key_pem)
+        .context("failed to load CA key pair from ca.key")?;
+
+    // Reconstruct a CA cert signing object using the same fixed parameters as
+    // `nanny certs generate` (DN: "Nanny CA", IsCa::Ca).
+    //
+    // We use the existing ca.key — same private key → same public key → same
+    // SubjectKeyIdentifier. Chain validation passes because:
+    //   • Issuer DN in new server/client certs = "Nanny CA" = Subject DN in ca.crt
+    //   • Signature on new certs verifies against the public key in ca.crt
+    //
+    // This avoids the rcgen `x509-parser` feature (needed for from_ca_cert_der)
+    // and keeps the dependency footprint minimal.
+    let mut ca_dn = DistinguishedName::new();
+    ca_dn.push(DnType::CommonName, "Nanny CA");
+    let mut ca_params = CertificateParams::new(vec![])
+        .context("failed to reconstruct CA cert params")?;
+    ca_params.distinguished_name = ca_dn;
+    ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    let ca_cert = ca_params.self_signed(&ca_key)
+        .context("failed to reconstruct CA cert for signing")?;
+
+    let not_before = OffsetDateTime::now_utc();
+    let not_after  = not_before + time::Duration::days(365);
+
+    // ── New server cert (signed by existing CA) ───────────────────────────────
+    let server_sans = vec!["localhost".to_string(), "127.0.0.1".to_string()];
+    let mut server_dn = DistinguishedName::new();
+    server_dn.push(DnType::CommonName, "Nanny Server");
+    let mut server_params = CertificateParams::new(server_sans.clone())
+        .context("failed to create server cert params")?;
+    server_params.distinguished_name = server_dn;
+    server_params.not_before = not_before;
+    server_params.not_after  = not_after;
+
+    let server_key  = KeyPair::generate().context("failed to generate server key")?;
+    let server_cert = server_params
+        .signed_by(&server_key, &ca_cert, &ca_key)
+        .context("failed to sign server cert with existing CA")?;
+
+    // ── New client cert (signed by existing CA) ───────────────────────────────
+    let mut client_dn = DistinguishedName::new();
+    client_dn.push(DnType::CommonName, "Nanny Client");
+    let mut client_params = CertificateParams::new(vec!["nanny-client".to_string()])
+        .context("failed to create client cert params")?;
+    client_params.distinguished_name = client_dn;
+    client_params.not_before = not_before;
+    client_params.not_after  = not_after;
+
+    let client_key  = KeyPair::generate().context("failed to generate client key")?;
+    let client_cert = client_params
+        .signed_by(&client_key, &ca_cert, &ca_key)
+        .context("failed to sign client cert with existing CA")?;
+
+    // ── Write atomically — CA files are NOT touched ───────────────────────────
+    let files: &[(&str, String)] = &[
+        ("server.crt", server_cert.pem()),
+        ("server.key", server_key.serialize_pem()),
+        ("client.crt", client_cert.pem()),
+        ("client.key", client_key.serialize_pem()),
+    ];
+
+    for (name, pem) in files {
+        let tmp = dir.join(format!("{name}.tmp"));
+        std::fs::write(&tmp, pem)
+            .with_context(|| format!("failed to write {name}"))?;
+        std::fs::rename(&tmp, dir.join(name))
+            .with_context(|| format!("failed to finalise {name}"))?;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for name in &["server.key", "client.key"] {
+            std::fs::set_permissions(
+                dir.join(name),
+                std::fs::Permissions::from_mode(0o600),
+            ).with_context(|| format!("failed to set permissions on {name}"))?;
+        }
+    }
+
+    write_meta(&dir, not_after, &server_sans)?;
+
+    println!("nanny certs: rotated — server + client certs regenerated, CA preserved");
+    println!("  valid until: {}", not_after.format(&Rfc3339).unwrap_or_default());
+    println!();
+    println!("  CA unchanged — existing agents retain their trust anchor");
+    println!("  Redistribute client.crt + client.key to agents on other machines");
+
+    if nanny_server_is_running() {
+        println!();
+        println!("nanny certs: server is running — certs will hot-reload automatically");
+    }
+
+    Ok(())
 }
 
 // ── nanny certs remove ────────────────────────────────────────────────────────
@@ -548,12 +674,30 @@ fn check_git_warning(dir: &PathBuf) {
     }
 }
 
-/// Check whether the nanny server is running (rough connectivity check only).
-/// Used to hint that hot-reload will happen after import.
+/// Check whether the nanny server is running (TCP connectivity check).
+/// Used to hint that hot-reload will happen after import or rotate.
 fn nanny_server_is_running() -> bool {
-    // TODO(v0.2.0 Day 3): contact NANNY_BRIDGE_ADDR /health when the server exists.
-    // For now, return false so the hint is suppressed.
-    false
+    // Prefer the injected env var; fall back to ~/.nanny/server.addr written
+    // by `nanny server start` so this works from any terminal, not just a
+    // governed child process.
+    let addr = std::env::var("NANNY_BRIDGE_ADDR").ok().or_else(|| {
+        dirs::home_dir()
+            .map(|h| h.join(".nanny").join("server.addr"))
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .map(|s| s.trim().to_string())
+    });
+
+    match addr {
+        Some(a) => {
+            if let Some((host, port_str)) = a.rsplit_once(':') {
+                if let Ok(port) = port_str.parse::<u16>() {
+                    return std::net::TcpStream::connect((host, port)).is_ok();
+                }
+            }
+            false
+        }
+        None => false,
+    }
 }
 
 /// Validate that a string looks like PEM (starts with -----BEGIN).
