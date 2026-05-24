@@ -59,7 +59,7 @@ flowchart TD
         subgraph ENFORCE[" "]
             direction TB
             STEPS["steps"]
-            COST["cost"]
+            TOKENS["tokens"]
             TIMER["timeout"]
         end
 
@@ -68,7 +68,7 @@ flowchart TD
     end
 
     ENFORCE -- "✗  limit reached → killed" --> DEAD(["process exits"])
-    DEAD --> LOG["ExecutionStopped\nreason · steps · cost_spent\n→ stdout"]
+    DEAD --> LOG["ExecutionStopped\nreason · steps · tokens_spent\n→ stdout"]
 ```
 
 ---
@@ -78,7 +78,7 @@ flowchart TD
 | Layer                           | What it does                                                                                                                             |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | **Nanny CLI**                   | Token budget, step ceiling, and timeout for any agent process in any language.                                                           |
-| **Rust SDK**                    | Per-function cost metering, allowlist enforcement, and custom rules — in-process.                                                        |
+| **Rust SDK**                    | Per-function token metering, allowlist enforcement, and custom rules — in-process.                                                       |
 | **Python SDK**                  | Per-function and per-role governance for Python agents — each agent in your fleet gets its own budget, tool allowlist, and custom rules. |
 | **Governance server**           | Cross-process and cross-machine enforcement via a long-lived server with mutual TLS.                                                     |
 | **Nanny Cloud** _(Coming soon)_ | Durable audit logs, team dashboards, org-level budget aggregation, and managed fleet enforcement.                                        |
@@ -185,12 +185,12 @@ cmd = "python agent.py"   # nanny run always reads this
 
 [limits]
 steps   = 100     # max tool calls
-cost    = 1000    # max cost units
+tokens  = 1000    # max tokens
 timeout = 30000   # wall-clock ms
 
 [limits.researcher]
 steps   = 200
-cost    = 5000
+tokens  = 5000
 timeout = 120000
 
 [tools]
@@ -203,14 +203,14 @@ allowed = ["http_get", "read_file"]   # anything not listed is denied
 
 ## Rust SDK — all three macros
 
-For Rust agents, annotate functions directly to get per-function cost accounting,
+For Rust agents, annotate functions directly to get per-function token accounting,
 allowlist enforcement, and custom policy rules:
 
 ```rust
 use nannyd::{tool, rule, agent, PolicyContext};
 
-/// Each call charges 10 cost units and requires the tool to be in the allowlist.
-#[nanny::tool(cost = 10)]
+/// Each call charges 10 tokens and requires the tool to be in the allowlist.
+#[nanny::tool(tokens = 10)]
 fn search_web(query: String) -> String {
     // ... HTTP request ...
     String::new()
@@ -247,7 +247,7 @@ For Python agents, the same model as the Rust SDK — as decorators:
 ```python
 from nanny_sdk import tool, rule, agent
 
-@tool(cost=10)
+@tool(tokens=10)
 def search_web(query: str) -> str:
     import httpx
     return httpx.get(f"https://en.wikipedia.org/wiki/{query}").text
@@ -268,7 +268,7 @@ Works with any framework — LangGraph, CrewAI, LangChain, plain Python. In Pyth
 ```python
 from nanny_sdk import tool as nanny_tool
 
-@nanny_tool(cost=5)
+@nanny_tool(tokens=5)
 def read_file(path: str) -> str:
     with open(path) as f:
         return f.read()
@@ -281,13 +281,21 @@ from langchain_core.tools import tool as lc_tool
 from nanny_sdk import tool as nanny_tool
 
 @lc_tool                   # outer — LangChain registers this for LLM dispatch
-@nanny_tool(cost=5)        # inner — Nanny intercepts before the function body runs
+@nanny_tool(tokens=5)      # inner — Nanny intercepts before the function body runs
 def read_file(path: str) -> str:
     with open(path) as f:
         return f.read()
 ```
 
 All decorators are no-ops when running outside `nanny run` — zero overhead in development and CI.
+
+**LLM token tracking:** call `nanny_sdk.instrument(client)` once at startup to automatically report LLM token usage to Nanny's budget. Works with OpenAI, Groq, Together AI, Azure OpenAI, LiteLLM, Anthropic, Mistral, Google Gemini, and Cohere v2:
+
+```python
+import nanny_sdk, openai
+client = openai.OpenAI()
+nanny_sdk.instrument(client)   # one line — done
+```
 
 → Full Python SDK guide at [docs.nanny.run/v0.2/guides/python-sdk](https://docs.nanny.run/v0.2/guides/python-sdk)
 
@@ -298,10 +306,10 @@ All decorators are no-ops when running outside `nanny run` — zero overhead in 
 Every run emits NDJSON to stdout. One event per line. Always starts with `ExecutionStarted`, always ends with `ExecutionStopped`.
 
 ```json
-{"event":"ExecutionStarted","ts":1711234567000,"limits":{"steps":100,"cost":1000,"timeout":30000},"limits_set":"[limits]","command":"python agent.py"}
+{"event":"ExecutionStarted","ts":1711234567000,"limits":{"steps":100,"tokens":1000,"timeout":30000},"limits_set":"[limits]","command":"python agent.py"}
 {"event":"ToolAllowed","ts":1711234567120,"tool":"http_get"}
 {"event":"StepCompleted","ts":1711234567800,"step":1}
-{"event":"ExecutionStopped","ts":1711234572000,"reason":"BudgetExhausted","steps":12,"cost_spent":1000,"elapsed_ms":5000}
+{"event":"ExecutionStopped","ts":1711234572000,"reason":"BudgetExhausted","steps":12,"tokens_spent":1000,"elapsed_ms":5000}
 ```
 
 Pipe it to a file, stream it to your log aggregator, or query it inline:

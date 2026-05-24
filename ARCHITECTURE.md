@@ -13,7 +13,7 @@ This means:
 - A limit breach kills the process — no exceptions, no cleanup hooks
 - The enforcement is structural, not advisory
 
-The child process communicates with the parent through an enforcement bridge. Every tool call the agent makes passes through this bridge before anything executes. The bridge decides whether to allow it, charge cost, and record it. If a limit is crossed, the parent kills the child immediately.
+The child process communicates with the parent through an enforcement bridge. Every tool call the agent makes passes through this bridge before anything executes. The bridge decides whether to allow it, charge tokens, and record it. If a limit is crossed, the parent kills the child immediately.
 
 ```
 ┌─────────────────────────────────────────┐
@@ -24,7 +24,7 @@ The child process communicates with the parent through an enforcement bridge. Ev
 │  │  (child)     │ ◄──────────────       │
 │  └──────────────┘   allowed / stop      │
 │                                         │
-│  limits enforced: steps · cost · timeout│
+│  limits enforced: steps · tokens · timeout│
 └─────────────────────────────────────────┘
 ```
 
@@ -71,9 +71,9 @@ Every execution is governed by three independent limits. Any one of them stops t
 |-------|----------------|--------------------------|
 | `timeout` | Wall-clock time in ms | No — works for any process |
 | `steps` | Tool calls made | Yes — SDK |
-| `cost` | Cost units spent | Yes — SDK |
+| `tokens` | Tokens spent | Yes — SDK |
 
-Timeout enforcement is free. Step and cost enforcement require your agent to declare its tools using the SDK so the bridge knows when a tool call happens and what to charge.
+Timeout enforcement is free. Step and token enforcement require your agent to declare its tools using the SDK so the bridge knows when a tool call happens and what to charge.
 
 ---
 
@@ -99,7 +99,7 @@ Rules fire on every tool call, before the call executes. They receive a read-onl
 - Which tool is being called and with what arguments
 - The full history of tool calls made so far
 - Counts per tool name
-- Elapsed time and cost spent
+- Elapsed time and tokens spent
 
 Rules are stateless by design. All state they need comes from the execution snapshot. They cannot modify execution state — they can only allow or deny.
 
@@ -148,7 +148,7 @@ Every execution ends with an `ExecutionStopped` event carrying a `reason` field.
 | `AgentCompleted` | Your agent finished normally. The process exited cleanly on its own. |
 | `TimeoutExpired` | The wall-clock timeout was reached. The process was killed. |
 | `MaxStepsReached` | The step limit was hit. The process was killed. |
-| `BudgetExhausted` | The cost budget was exhausted. The process was killed. |
+| `BudgetExhausted` | The token budget was exhausted. The process was killed. |
 | `ToolDenied` | A tool call was blocked — the tool is not on the allowlist or exceeded its call limit. |
 | `RuleDenied` | A custom rule returned a denial. The tool never ran. |
 | `ManualStop` | Execution was stopped programmatically via the SDK. |
@@ -169,9 +169,9 @@ All other reasons are governance events — Nanny stopped the agent deliberately
 Rules are evaluated on every tool call. The sequence for any tool call is:
 
 1. All registered rules are evaluated against the current execution state
-2. If any rule returns `false`, the process exits immediately — the tool never runs, no cost is charged, no step is counted
+2. If any rule returns `false`, the process exits immediately — the tool never runs, no tokens are charged, no step is counted
 3. If all rules pass, the bridge evaluates the allowlist and limits
-4. If the bridge allows the call, it executes, cost is charged, and the step count increments
+4. If the bridge allows the call, it executes, tokens are charged, and the step count increments
 
 Rules fire at step 1. Everything else is downstream of that. This is why a rule denial produces `steps: 0` in the event log if it fires on the first tool call — the bridge never recorded a step because the call never reached it.
 
@@ -200,26 +200,26 @@ When building a pipeline of agents, each stage should have its own scope with li
 ```toml
 [limits]
 steps   = 50
-cost    = 1000
+tokens  = 1000
 timeout = 60000
 
 [limits.planner]
 steps   = 5
-cost    = 100
+tokens  = 100
 timeout = 15000
 
 [limits.researcher]
 steps   = 20
-cost    = 600
+tokens  = 600
 timeout = 60000
 
 [limits.synthesizer]
 steps   = 5
-cost    = 200
+tokens  = 200
 timeout = 30000
 ```
 
-The base `[limits]` is the outer budget for the entire run. Named scopes are inner budgets for each stage. A stage cannot exceed the outer budget — if the global cost limit is reached mid-pipeline, the run stops regardless of the active scope.
+The base `[limits]` is the outer budget for the entire run. Named scopes are inner budgets for each stage. A stage cannot exceed the outer budget — if the global token limit is reached mid-pipeline, the run stops regardless of the active scope.
 
 Design your limits so the sum of all stage budgets is comfortably within the global budget, with headroom for overhead between stages.
 
@@ -231,7 +231,7 @@ Before shipping, verify that each of your governance constraints actually fires.
 
 - **Allowlist** — call a tool that is not in `[tools] allowed`. It should produce `ToolDenied`.
 - **Rules** — construct input that your rule is designed to block. It should produce `RuleDenied`.
-- **Cost limit** — set a very low `cost` limit and make enough tool calls to exceed it. It should produce `BudgetExhausted`.
+- **Token limit** — set a very low `tokens` limit and make enough tool calls to exceed it. It should produce `BudgetExhausted`.
 - **Step limit** — set a very low `steps` limit and make enough tool calls to exceed it. It should produce `MaxStepsReached`.
 - **Timeout** — set a very short `timeout` and run a slow operation. It should produce `TimeoutExpired`.
 
@@ -245,7 +245,7 @@ Keep these test inputs alongside your agent code. They are as important as unit 
 
 To avoid building on false assumptions:
 
-- **Nanny does not sandbox the agent.** The child process has the same filesystem and network access as any other process the user can run. Nanny stops it when limits are crossed, but it does not restrict what the agent can do before then.
+- **Nanny does not isolate the agent.** The child process has the same filesystem and network access as any other process the user can run. Nanny stops it when limits are crossed, but it does not restrict what the agent can do before then.
 - **Nanny does not validate tool outputs.** What a tool returns to the agent is the agent's concern. Nanny enforces whether the call is permitted, not whether the result is correct.
 - **Nanny does not prevent all loops.** A loop that does not call tools (pure CPU computation, sleeping) is not visible to Nanny. The timeout is the backstop for those cases.
 - **Nanny does not recover from crashes.** If your agent panics or crashes, Nanny kills it and emits `ProcessCrashed`. It does not restart the agent or retry.

@@ -33,7 +33,7 @@ Mark a function as a tool that Nanny should track and charge against the budget:
 ```python
 from nanny_sdk import tool
 
-@tool(cost=10)
+@tool(tokens=10)
 def fetch_page(url: str) -> str:
     import httpx
     return httpx.get(url).text
@@ -43,25 +43,25 @@ When the agent calls `fetch_page`:
 
 1. Nanny checks: is `fetch_page` in the `[tools] allowed` list?
 2. Nanny checks: has `fetch_page` exceeded `[tools.fetch_page] max_calls`?
-3. Nanny charges 10 cost units against the budget.
+3. Nanny charges 10 tokens against the budget.
 4. If any check fails, a `NannyStop` exception is raised — the function body never runs.
 
 Works identically for async functions:
 
 ```python
-@tool(cost=10)
+@tool(tokens=10)
 async def fetch_page(url: str) -> str:
     import httpx
     async with httpx.AsyncClient() as client:
         return (await client.get(url)).text
 ```
 
-### Cost
+### Tokens
 
-The `cost` argument is required. Set it to `0` for tools you want tracked but not charged:
+The `tokens` argument is required. Set it to `0` for tools you want tracked but not charged:
 
 ```python
-@tool(cost=0)
+@tool(tokens=0)
 def log_step(msg: str) -> None: ...
 ```
 
@@ -75,8 +75,8 @@ The tool name used for allowlist checks is the **function name** as declared in 
 allowed = ["fetch_page", "read_file"]
 
 [tools.fetch_page]
-max_calls     = 20
-cost_per_call = 10   # nanny.toml cost overrides the decorator default
+max_calls       = 20
+tokens_per_call = 10   # nanny.toml value overrides the decorator default
 ```
 
 <Frame>
@@ -85,6 +85,36 @@ cost_per_call = 10   # nanny.toml cost overrides the decorator default
     alt="metrics_crew — ToolDenied fires when the analysis agent calls write_report, a tool outside its allowlist"
   />
 </Frame>
+
+---
+
+## `instrument` — automatic LLM token tracking
+
+Call `nanny_sdk.instrument(client)` once at agent startup to automatically report LLM token usage to Nanny's budget. Every completion response is intercepted and its token counts are debited from the same ledger that `@tool` charges against.
+
+```python
+import openai
+import nanny_sdk
+
+client = openai.OpenAI()
+nanny_sdk.instrument(client)   # one line — done
+
+# From here on, every response's token usage is reported to Nanny.
+response = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "Hello"}],
+)
+```
+
+Supported clients (detected by duck-typing — no provider package is imported):
+
+- **OpenAI, Groq, Together AI, Azure OpenAI, LiteLLM** — any client with a `chat.completions.create` method
+- **Anthropic** — `client.messages.create`
+- **Mistral** — `client.chat.complete`
+- **Google Gemini** (`google-genai` SDK) — `client.models.generate_content`
+- **Cohere v2** — `cohere.ClientV2`
+
+`instrument` returns the same client unchanged — it patches the method in-place. In passthrough mode (outside `nanny run`), it is a no-op: no wrapping, no overhead.
 
 ---
 
@@ -109,7 +139,7 @@ Rules are evaluated client-side on every tool call, before Nanny’s enforcement
 RuleDenied("no_spiral")
 ```
 
-The denied tool never runs and no cost is charged.
+The denied tool never runs and no tokens are charged.
 
 ### PolicyContext fields
 
@@ -119,7 +149,7 @@ The `ctx` parameter gives you a snapshot of the current execution state:
 | ------------------- | ---------------- | ------------------------------------------ |
 | `step_count`        | `int`            | Steps completed so far                     |
 | `elapsed_ms`        | `int`            | Wall-clock time elapsed                    |
-| `cost_units_spent`  | `int`            | Total cost units spent                     |
+| `tokens_spent`      | `int`            | Total tokens spent                         |
 | `tool_call_counts`  | `dict[str, int]` | Per-tool call counts                       |
 | `tool_call_history` | `list[str]`      | Ordered log of tool names called           |
 | `requested_tool`    | `str \| None`    | The tool being evaluated right now         |
@@ -134,7 +164,7 @@ def block_sensitive(ctx) -> bool:
     return ".env" not in path and "secret" not in path
 ```
 
-All fields are live. Before each rule evaluation, the SDK fetches current counters from Nanny’s enforcement layer — `step_count`, `cost_units_spent`, `tool_call_counts`, and `tool_call_history` reflect the actual execution state at the moment your rule runs.
+All fields are live. Before each rule evaluation, the SDK fetches current counters from Nanny’s enforcement layer — `step_count`, `tokens_spent`, `tool_call_counts`, and `tool_call_history` reflect the actual execution state at the moment your rule runs.
 
 <Frame>
   <img
@@ -147,7 +177,7 @@ All fields are live. Before each rule evaluation, the SDK fetches current counte
 
 ## `@agent` — activate named limits for a scope
 
-In a multi-agent system, each agent has a different role and a different risk profile. The analysis agent makes expensive API calls and deserves a tight cost ceiling. The reporter just writes a file and barely needs a budget at all. `@agent` activates the right named limit set when each role runs, then reverts automatically when it's done.
+In a multi-agent system, each agent has a different role and a different risk profile. The analysis agent makes expensive API calls and deserves a tight token ceiling. The reporter just writes a file and barely needs a budget at all. `@agent` activates the right named limit set when each role runs, then reverts automatically when it's done.
 
 ```python
 from nanny_sdk import agent
@@ -163,7 +193,7 @@ def run_research(topic: str) -> list[str]:
 # nanny.toml
 [limits.researcher]
 steps   = 200
-cost    = 5000
+tokens  = 5000
 timeout = 120000
 ```
 
@@ -205,7 +235,7 @@ from nanny_sdk import NannyStop, BudgetExhausted, ToolDenied
 try:
     run_research("Alan Turing")
 except BudgetExhausted:
-    print("Hit the cost ceiling")
+    print("Hit the token ceiling")
 except ToolDenied as e:
     print(f"Blocked tool: {e.tool_name}")
 except NannyStop as e:
@@ -219,7 +249,7 @@ You do not need to handle stop reasons in most agent code. They propagate up the
 <Frame>
   <img
     src="https://raw.githubusercontent.com/nanny-run/nanny/main/assets/demo/metrics-crew-budget-exhausted.gif"
-    alt="metrics_crew — BudgetExhausted stops the analysis agent when it hits its cost ceiling"
+    alt="metrics_crew — BudgetExhausted stops the analysis agent when it hits its token ceiling"
   />
 </Frame>
 
@@ -230,12 +260,12 @@ You do not need to handle stop reasons in most agent code. They propagate up the
 ```python
 from nanny_sdk import tool, rule, agent
 
-@tool(cost=10)
+@tool(tokens=10)
 def fetch_page(url: str) -> str:
     import httpx
     return httpx.get(url).text
 
-@tool(cost=5)
+@tool(tokens=5)
 def read_file(path: str) -> str:
     with open(path) as f:
         return f.read()
@@ -279,15 +309,15 @@ The canonical use case: a pipeline where each agent has a specific role, a speci
 from nanny_sdk import tool, rule, agent
 from collections import deque
 
-# Each tool declares its cost. The decorator fires on every call
+# Each tool declares its token cost. The decorator fires on every call
 # regardless of which agent invoked it.
-@tool(cost=10)
+@tool(tokens=10)
 def compute_stats(metric: str, path: str) -> dict: ...
 
-@tool(cost=10)
+@tool(tokens=10)
 def detect_anomalies(metric: str, path: str) -> list: ...
 
-@tool(cost=5)
+@tool(tokens=5)
 def write_report(content: str, output_path: str) -> str: ...
 
 # A rule that prevents the analysis agent from looping on the same computation.
@@ -302,7 +332,7 @@ def check_loop(ctx) -> bool:
 # Each agent activates its own limit scope.
 @agent("analysis")
 def run_analysis(path: str):
-    # Governed by [limits.analysis]: steps=60, cost=200, timeout=60000
+    # Governed by [limits.analysis]: steps=60, tokens=200, timeout=60000
     # Tool allowlist: ["compute_stats", "detect_anomalies"] only
     # write_report() here would raise ToolDenied immediately
     stats = compute_stats("cpu_usage", path)
@@ -311,7 +341,7 @@ def run_analysis(path: str):
 
 @agent("reporter")
 def run_reporter(findings: list, output_dir: str):
-    # Governed by [limits.reporter]: steps=20, cost=50, timeout=30000
+    # Governed by [limits.reporter]: steps=20, tokens=50, timeout=30000
     # Tool allowlist: ["write_report"] only
     # compute_stats() here would raise ToolDenied immediately
     return write_report(str(findings), f"{output_dir}/report.md")
@@ -321,17 +351,17 @@ def run_reporter(findings: list, output_dir: str):
 # nanny.toml
 [limits]
 steps   = 200
-cost    = 500
+tokens  = 500
 timeout = 120000
 
 [limits.analysis]
 steps   = 60
-cost    = 200
+tokens  = 200
 timeout = 60000
 
 [limits.reporter]
 steps   = 20
-cost    = 50
+tokens  = 50
 timeout = 30000
 
 [tools]
@@ -342,7 +372,7 @@ The key properties this gives you:
 
 - **Per-role budget:** hitting the analysis budget doesn't kill the reporter
 - **Least-privilege tool access:** each agent only receives the tools it needs; calling outside its role raises `ToolDenied` immediately
-- **Loop detection:** the `@rule` fires client-side before Nanny’s enforcement layer is contacted — the denied tool never runs and no cost is charged
+- **Loop detection:** the `@rule` fires client-side before Nanny’s enforcement layer is contacted — the denied tool never runs and no tokens are charged
 - **Full audit trail:** every tool call, every limit activation, every stop reason logged to NDJSON
 
 <Frame>
@@ -369,7 +399,7 @@ from langchain_core.tools import tool as lc_tool
 from nanny_sdk import tool as nanny_tool
 
 @lc_tool                    # outer — LangChain registers for tool dispatch
-@nanny_tool(cost=5)         # inner — Nanny intercepts before file is opened
+@nanny_tool(tokens=5)         # inner — Nanny intercepts before file is opened
 def read_file(path: str) -> str:
     """Read a source file from disk."""
     with open(path) as f:
@@ -387,7 +417,7 @@ from crewai.tools import tool as crew_tool
 from nanny_sdk import tool as nanny_tool
 
 @crew_tool                  # outer — CrewAI registers for agent dispatch
-@nanny_tool(cost=15)        # inner — Nanny intercepts before function runs
+@nanny_tool(tokens=15)        # inner — Nanny intercepts before function runs
 def generate_chart(metric: str, output_dir: str) -> str:
     """Generate an interactive Plotly chart for a metric."""
     # ... chart generation ...

@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-05-24
+
+### Changed
+
+- **`cost` renamed to `tokens`** — all developer-facing surfaces now use `tokens`:
+  `nanny.toml` fields (`tokens`, `tokens_per_call`), Python decorator (`@tool(tokens=N)`),
+  Rust macro (`#[tool(tokens = N)]`), `PolicyContext.tokens_spent`, and the
+  `ExecutionStopped` event field (`tokens_spent`). This is a breaking change for
+  any `nanny.toml` files and agent code using the old `cost` field names.
+
+### Added
+
+- **`nanny_sdk.instrument(client)`** — call once at agent startup to automatically
+  report LLM token usage to Nanny's budget. Intercepts completion responses from
+  OpenAI, Groq, Together AI, Azure OpenAI, LiteLLM, Anthropic, Mistral, Google
+  Gemini (google-genai), and Cohere v2. Uses duck-typing — no provider package is
+  imported. No-op in passthrough mode.
+- **`POST /llm/usage` bridge endpoint** — receives `{"input": N, "output": N}` and
+  debits `input + output` from the token ledger. Used internally by `instrument()`.
+
+---
+
 ## [0.2.0] - 2026-05-01
 
 ### Added
