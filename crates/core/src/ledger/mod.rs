@@ -35,7 +35,7 @@ pub struct Receipt {
 /// What the ledger says when asked if a spend is possible.
 ///
 /// Used by the executor to build PolicyContext before each step.
-/// The policy uses `cost_units_spent` to decide whether to allow or deny.
+/// The policy uses `tokens_spent` to decide whether to allow or deny.
 pub enum LedgerDecision {
     /// The balance covers the requested amount.
     Approved,
@@ -81,8 +81,8 @@ pub trait Ledger {
     /// Current unspent balance.
     fn balance(&self) -> u64;
 
-    /// Total units spent across all debits so far.
+    /// Total tokens spent across all debits so far.
     ///
-    /// Used by the executor to populate `PolicyContext.cost_units_spent`.
-    fn total_debited(&self) -> u64;
+    /// Used by the executor to populate `PolicyContext.tokens_spent`.
+    fn total_spent(&self) -> u64;
 }

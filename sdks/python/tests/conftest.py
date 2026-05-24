@@ -49,7 +49,7 @@ def mock_bridge(httpserver: HTTPServer, monkeypatch: pytest.MonkeyPatch) -> HTTP
     httpserver.expect_request("/status", method="GET").respond_with_json({
         "state": "running",
         "step": 0,
-        "cost_spent": 0,
+        "tokens_spent": 0,
         "elapsed_ms": 0,
         "tool_call_counts": {},
         "tool_call_history": [],

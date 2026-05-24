@@ -75,18 +75,18 @@ mod tests {
     fn started_event() -> ExecutionEvent {
         ExecutionEvent::ExecutionStarted {
             ts: 0,
-            limits: LimitsSnapshot { steps: 100, cost: 1000, timeout: 30_000 },
+            limits: LimitsSnapshot { steps: 100, tokens: 1000, timeout: 30_000 },
             limits_set: "[limits]".to_string(),
             command: "python agent.py".to_string(),
         }
     }
 
-    fn stopped_event(reason: &str, steps: u32, cost_spent: u64, elapsed_ms: u64) -> ExecutionEvent {
+    fn stopped_event(reason: &str, steps: u32, tokens_spent: u64, elapsed_ms: u64) -> ExecutionEvent {
         ExecutionEvent::ExecutionStopped {
             ts: 0,
             reason: reason.to_string(),
             steps,
-            cost_spent,
+            tokens_spent,
             elapsed_ms,
         }
     }
@@ -101,7 +101,7 @@ mod tests {
         assert_eq!(v["limits_set"], "[limits]");
         assert_eq!(v["command"], "python agent.py");
         assert_eq!(v["limits"]["steps"], 100);
-        assert_eq!(v["limits"]["cost"], 1000);
+        assert_eq!(v["limits"]["tokens"], 1000);
         assert_eq!(v["limits"]["timeout"], 30_000u64);
         assert!(v["ts"].is_number());
     }
@@ -115,7 +115,7 @@ mod tests {
         assert_eq!(v["event"], "ExecutionStopped");
         assert_eq!(v["reason"], "TimeoutExpired");
         assert_eq!(v["steps"], 7);
-        assert_eq!(v["cost_spent"], 0u64);
+        assert_eq!(v["tokens_spent"], 0u64);
         assert_eq!(v["elapsed_ms"], 5_432u64);
     }
 

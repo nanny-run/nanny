@@ -105,8 +105,8 @@ def _stop_copy(exc: Exception, kind: str) -> tuple[str, str]:
         )
     if kind == "BudgetExhausted":
         return (
-            "Analysis stopped — the agent reached its cost limit.",
-            "Try narrowing the query, or raise the cost limit in nanny.toml.",
+            "Analysis stopped — the agent reached its token budget.",
+            "Try narrowing the query, or raise the token budget in nanny.toml.",
         )
     if kind == "MaxStepsReached":
         return (

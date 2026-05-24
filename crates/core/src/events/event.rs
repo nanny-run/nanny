@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LimitsSnapshot {
     pub steps: u32,
-    pub cost: u64,
+    pub tokens: u64,
     pub timeout: u64,
 }
 
@@ -118,7 +118,7 @@ pub enum ExecutionEvent {
         ts: u64,
         reason: String,
         steps: u32,
-        cost_spent: u64,
+        tokens_spent: u64,
         elapsed_ms: u64,
     },
 }

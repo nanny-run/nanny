@@ -17,7 +17,7 @@ use std::collections::HashMap;
 /// Enforces all four hard limits:
 ///   1. Maximum step count
 ///   2. Wall-clock timeout
-///   3. Budget (cost units)
+///   3. Budget (tokens)
 ///   4. Tool allowlist
 ///
 /// Checks are evaluated in order. The first failing check stops execution.
@@ -41,7 +41,7 @@ impl Policy for LimitsPolicy {
         if ctx.elapsed_ms >= self.limits.timeout_ms {
             return PolicyDecision::Deny { reason: StopReason::TimeoutExpired };
         }
-        if ctx.cost_units_spent + ctx.next_tool_cost > self.limits.max_cost_units {
+        if ctx.tokens_spent + ctx.next_tool_tokens > self.limits.max_tokens {
             return PolicyDecision::Deny { reason: StopReason::BudgetExhausted };
         }
         if let Some(tool) = &ctx.requested_tool {
@@ -123,7 +123,7 @@ mod tests {
     use super::*;
 
     fn base_limits() -> Limits {
-        Limits { max_steps: 10, max_cost_units: 500, timeout_ms: 10_000 }
+        Limits { max_steps: 10, max_tokens: 500, timeout_ms: 10_000 }
     }
 
     fn base_context() -> PolicyContext {
@@ -159,8 +159,8 @@ mod tests {
 
     #[test]
     fn denies_on_budget_exhausted() {
-        // Budget fully spent; any new call (cost=1) is denied.
-        let ctx = PolicyContext { cost_units_spent: 500, next_tool_cost: 1, ..base_context() };
+        // Budget fully spent; any new call (tokens=1) is denied.
+        let ctx = PolicyContext { tokens_spent: 500, next_tool_tokens: 1, ..base_context() };
         assert!(matches!(
             policy().evaluate(&ctx),
             PolicyDecision::Deny { reason: StopReason::BudgetExhausted }
@@ -170,7 +170,7 @@ mod tests {
     #[test]
     fn denies_when_next_call_would_exceed_budget() {
         // budget=500, spent=491, next call costs 10: 491+10 > 500 → denied before execution.
-        let ctx = PolicyContext { cost_units_spent: 491, next_tool_cost: 10, ..base_context() };
+        let ctx = PolicyContext { tokens_spent: 491, next_tool_tokens: 10, ..base_context() };
         assert!(matches!(
             policy().evaluate(&ctx),
             PolicyDecision::Deny { reason: StopReason::BudgetExhausted }
@@ -272,7 +272,7 @@ mod tests {
     #[test]
     fn chain_denies_when_first_denies() {
         let first = LimitsPolicy::new(
-            Limits { max_steps: 0, max_cost_units: 999, timeout_ms: 99_999 },
+            Limits { max_steps: 0, max_tokens: 999, timeout_ms: 99_999 },
             vec![],
         );
         let second = RuleEvaluator::new(HashMap::new());
@@ -304,7 +304,7 @@ mod tests {
     #[test]
     fn chain_first_denial_wins_over_second() {
         let first = LimitsPolicy::new(
-            Limits { max_steps: 0, max_cost_units: 999, timeout_ms: 99_999 },
+            Limits { max_steps: 0, max_tokens: 999, timeout_ms: 99_999 },
             vec![],
         );
         let mut max_calls = HashMap::new();

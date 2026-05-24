@@ -403,9 +403,9 @@ fn cmd_run(config_path: &Path, limits_name: Option<&str>, extra_args: Vec<String
     // Print what limits are active before running anything.
     let active_set = limits_name.unwrap_or("[limits]");
     println!("nanny: config loaded from '{}'", config_path.display());
-    println!("nanny: limits ({active_set}) — steps={} cost={} timeout={}ms",
+    println!("nanny: limits ({active_set}) — steps={} tokens={} timeout={}ms",
         components.limits.max_steps,
-        components.limits.max_cost_units,
+        components.limits.max_tokens,
         components.limits.timeout_ms,
     );
     println!("nanny: mode — {:?}", config.runtime.mode);
@@ -543,7 +543,7 @@ fn cmd_run(config_path: &Path, limits_name: Option<&str>, extra_args: Vec<String
     log.write(&execution_stopped_event(
         &stop_reason,
         metrics.step_count,
-        metrics.cost_units_spent,
+        metrics.tokens_spent,
         elapsed_ms,
     ))?;
 
@@ -563,7 +563,7 @@ fn execution_started_event(limits: &Limits, limits_set: &str, command: &str) -> 
         ts: now_ms(),
         limits: LimitsSnapshot {
             steps: limits.max_steps,
-            cost: limits.max_cost_units,
+            tokens: limits.max_tokens,
             timeout: limits.timeout_ms,
         },
         limits_set: limits_set.to_string(),
@@ -571,12 +571,12 @@ fn execution_started_event(limits: &Limits, limits_set: &str, command: &str) -> 
     }
 }
 
-fn execution_stopped_event(reason: &str, steps: u32, cost_spent: u64, elapsed_ms: u64) -> ExecutionEvent {
+fn execution_stopped_event(reason: &str, steps: u32, tokens_spent: u64, elapsed_ms: u64) -> ExecutionEvent {
     ExecutionEvent::ExecutionStopped {
         ts: now_ms(),
         reason: reason.to_string(),
         steps,
-        cost_spent,
+        tokens_spent,
         elapsed_ms,
     }
 }

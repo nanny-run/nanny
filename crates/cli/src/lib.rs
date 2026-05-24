@@ -10,7 +10,7 @@
 //! ```rust,ignore
 //! use nanny::{tool, rule, agent, PolicyContext};
 //!
-//! #[tool(cost = 10)]
+//! #[tool(tokens = 200)]
 //! fn search_web(query: &str) -> String { ... }
 //!
 //! #[rule("no_spiral")]
@@ -46,7 +46,7 @@ pub use nanny_macros::agent;
 ///
 /// The request is executed by the nanny bridge — the calling process never
 /// opens a network connection directly. Nanny enforces the allowlist, charges
-/// cost (10 units on success), and applies the step limit before making the
+/// tokens (200 per request), and applies the step limit before making the
 /// request.
 ///
 /// # Passthrough mode
@@ -399,7 +399,7 @@ mod runtime {
             // still run but counters will be empty, which is expected offline.
             None => BridgeStatus {
                 step_count:        0,
-                cost_units_spent:  0,
+                tokens_spent:      0,
                 tool_call_counts:  HashMap::new(),
                 tool_call_history: Vec::new(),
             },
@@ -411,8 +411,8 @@ mod runtime {
             tool_call_history: status.tool_call_history,
             last_tool_args:    args,
             elapsed_ms,
-            step_count:        status.step_count,
-            cost_units_spent:  status.cost_units_spent,
+            step_count:    status.step_count,
+            tokens_spent:  status.tokens_spent,
             ..PolicyContext::default()
         };
 
@@ -427,7 +427,7 @@ mod runtime {
     /// Counters fetched from the bridge `/status` endpoint.
     struct BridgeStatus {
         step_count:        u32,
-        cost_units_spent:  u64,
+        tokens_spent:      u64,
         tool_call_counts:  HashMap<String, u32>,
         tool_call_history: Vec<String>,
     }
@@ -445,11 +445,11 @@ mod runtime {
             Ok(v) => v,
             Err(_) => return None,
         };
-        // Bridge wire names: "step" → step_count, "cost_spent" → cost_units_spent
+        // Bridge wire names: "step" → step_count, "tokens_spent" → tokens_spent
         let step_count = v.get("step")
             .and_then(|s| s.as_u64())
             .unwrap_or(0) as u32;
-        let cost_units_spent = v.get("cost_spent")
+        let tokens_spent = v.get("tokens_spent")
             .and_then(|c| c.as_u64())
             .unwrap_or(0);
         let tool_call_counts = v.get("tool_call_counts")
@@ -458,7 +458,7 @@ mod runtime {
         let tool_call_history = v.get("tool_call_history")
             .and_then(|h| serde_json::from_value(h.clone()).ok())
             .unwrap_or_default();
-        Some(BridgeStatus { step_count, cost_units_spent, tool_call_counts, tool_call_history })
+        Some(BridgeStatus { step_count, tokens_spent, tool_call_counts, tool_call_history })
     }
 
     // ── Tool call ─────────────────────────────────────────────────────────────
@@ -473,8 +473,8 @@ mod runtime {
     }
 
     /// POST /tool/call to the bridge.
-    pub fn call_tool(tool_name: &str, cost: u64) -> ToolVerdict {
-        let body = format!(r#"{{"tool":"{tool_name}","cost":{cost}}}"#);
+    pub fn call_tool(tool_name: &str, tokens: u64) -> ToolVerdict {
+        let body = format!(r#"{{"tool":"{tool_name}","tokens":{tokens}}}"#);
         match http_post("/tool/call", &body) {
             Some(resp) if resp.status == 200 && resp.body.contains("\"allowed\"") => {
                 ToolVerdict::Run

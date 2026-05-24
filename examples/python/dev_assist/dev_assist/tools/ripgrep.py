@@ -10,7 +10,7 @@ _RG_LINE_LIMIT = 50
 _RG_TIMEOUT_S = 15
 
 
-@tool(cost=8)
+@tool(tokens=160)
 def ripgrep(pattern: str, path: str = ".") -> str:
     """Search for a symbol, function name, or pattern across source files.
 

@@ -42,7 +42,7 @@ fn start_bridge_named(
 ) -> Bridge {
     let components = BridgeComponents {
         registry:          nanny_runtime::default_registry(),
-        limits:            Limits { max_steps: 100, max_cost_units: budget, timeout_ms: 30_000 },
+        limits:            Limits { max_steps: 100, max_tokens: budget, timeout_ms: 30_000 },
         named_limits:      named,
         allowed_tools:     allowed.iter().map(|s| s.to_string()).collect(),
         per_tool_max_calls: HashMap::new(),
@@ -193,7 +193,7 @@ fn agent_enter_exit_round_trip() {
     let mut named = HashMap::new();
     named.insert(
         "researcher".to_string(),
-        Limits { max_steps: 200, max_cost_units: 5000, timeout_ms: 120_000 },
+        Limits { max_steps: 200, max_tokens: 5000, timeout_ms: 120_000 },
     );
     let bridge = start_bridge_named(&["search_web"], 1000, named);
     inject_env(&bridge);
@@ -216,7 +216,7 @@ fn agent_named_limits_govern_tool_calls() {
     let mut named = HashMap::new();
     named.insert(
         "researcher".to_string(),
-        Limits { max_steps: 200, max_cost_units: 5000, timeout_ms: 120_000 },
+        Limits { max_steps: 200, max_tokens: 5000, timeout_ms: 120_000 },
     );
     // Global budget = 5; researcher budget = 5000.
     let bridge = start_bridge_named(&["search_web"], 5, named);

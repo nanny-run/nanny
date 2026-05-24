@@ -48,8 +48,8 @@ pub enum ExecutionState {
 /// Final accounting snapshot read by the CLI when writing `ExecutionStopped`.
 #[derive(Debug, Clone, Default)]
 pub struct BridgeMetrics {
-    pub step_count:       u32,
-    pub cost_units_spent: u64,
+    pub step_count:    u32,
+    pub tokens_spent:  u64,
     /// Total number of tool calls made during execution.
     pub tool_call_count:  usize,
     /// Number of distinct tools that were allowed (configured in `[tools]`).
@@ -120,7 +120,7 @@ pub(crate) struct BridgeState {
     allowed_tools: Vec<String>,
 
     // Execution tracking ──────────────────────────────────────────────────────
-    cost_units_spent: u64,
+    tokens_spent: u64,
     tool_call_counts: HashMap<String, u32>,
     tool_call_history: Vec<String>,
     step_count: u32,
@@ -158,21 +158,21 @@ impl Bridge {
             components.allowed_tools.clone(),
         );
         let rule_evaluator = RuleEvaluator::new(components.per_tool_max_calls);
-        let max_cost = components.limits.max_cost_units;
+        let max_tokens = components.limits.max_tokens;
 
         let shared = Arc::new(Mutex::new(BridgeState {
             session_token: token.clone(),
             execution: ExecutionState::Running,
             limits_policy,
             rule_evaluator,
-            ledger: FakeLedger::new(max_cost),
+            ledger: FakeLedger::new(max_tokens),
             default_limits: components.limits.clone(),
             current_limits: components.limits.clone(),
             named_limits: components.named_limits,
             limits_stack: Vec::new(),
             agent_name_stack: Vec::new(),
             allowed_tools: components.allowed_tools,
-            cost_units_spent: 0,
+            tokens_spent: 0,
             tool_call_counts: HashMap::new(),
             tool_call_history: Vec::new(),
             step_count: 0,
@@ -271,7 +271,7 @@ impl Bridge {
         let guard = self.shared.lock().unwrap();
         BridgeMetrics {
             step_count:         guard.step_count,
-            cost_units_spent:   guard.cost_units_spent,
+            tokens_spent:       guard.tokens_spent,
             tool_call_count:    guard.tool_call_history.len(),
             allowed_tool_count: guard.allowed_tools.len(),
         }
@@ -386,6 +386,7 @@ fn dispatch(
         ("POST", "/agent/enter")   => handle_agent_enter(&req.body, shared),
         ("POST", "/agent/exit")    => handle_agent_exit(shared),
         ("POST", "/step")          => handle_step(shared),
+        ("POST", "/llm/usage")     => handle_llm_usage(&req.body, shared),
         _                          => BridgeResp::json(404, r#"{"error":"Not Found"}"#),
     }
 }
@@ -410,12 +411,12 @@ pub(crate) fn handle_status(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
     let history_json = serde_json::to_string(&guard.tool_call_history).unwrap_or_else(|_| "[]".to_string());
     let body = match &guard.execution {
         ExecutionState::Running => format!(
-            r#"{{"state":"running","step":{},"cost_spent":{},"elapsed_ms":{},"tool_call_counts":{},"tool_call_history":{}}}"#,
-            guard.step_count, guard.cost_units_spent, elapsed_ms, counts_json, history_json
+            r#"{{"state":"running","step":{},"tokens_spent":{},"elapsed_ms":{},"tool_call_counts":{},"tool_call_history":{}}}"#,
+            guard.step_count, guard.tokens_spent, elapsed_ms, counts_json, history_json
         ),
         ExecutionState::Stopped { reason } => format!(
-            r#"{{"state":"stopped","reason":"{}","step":{},"cost_spent":{},"elapsed_ms":{},"tool_call_counts":{},"tool_call_history":{}}}"#,
-            reason, guard.step_count, guard.cost_units_spent, elapsed_ms, counts_json, history_json
+            r#"{{"state":"stopped","reason":"{}","step":{},"tokens_spent":{},"elapsed_ms":{},"tool_call_counts":{},"tool_call_history":{}}}"#,
+            reason, guard.step_count, guard.tokens_spent, elapsed_ms, counts_json, history_json
         ),
     };
     BridgeResp::json(200, body)
@@ -436,11 +437,11 @@ pub(crate) fn handle_tool_call(
         Err(_) => return BridgeResp::json(400, r#"{"error":"invalid request body"}"#),
     };
 
-    // Resolve cost before locking — registry is immutable after init.
+    // Resolve token cost before locking — registry is immutable after init.
     // For bridge tools (e.g. http_get) use the registry's declared cost;
-    // for user-defined tools fall back to the cost the SDK sent in the request.
+    // for user-defined tools fall back to the tokens the SDK sent in the request.
     let next_cost = registry.declared_cost(&call.tool)
-        .unwrap_or_else(|| call.cost.unwrap_or(0) as u64);
+        .unwrap_or_else(|| call.tokens.unwrap_or(0) as u64);
 
     // Build PolicyContext and evaluate — hold lock briefly, then release.
     let decision = {
@@ -450,8 +451,8 @@ pub(crate) fn handle_tool_call(
             step_count: guard.step_count,
             elapsed_ms,
             requested_tool: Some(call.tool.clone()),
-            cost_units_spent: guard.cost_units_spent,
-            next_tool_cost: next_cost,
+            tokens_spent: guard.tokens_spent,
+            next_tool_tokens: next_cost,
             tool_call_counts: guard.tool_call_counts.clone(),
             tool_call_history: guard.tool_call_history.clone(),
             last_tool_args: HashMap::new(),
@@ -496,20 +497,20 @@ pub(crate) fn handle_tool_call(
             match result {
                 Err(ToolCallError::NotFound { .. }) => {
                     // User-defined tool — the function body runs in the child process.
-                    // The bridge just charges the declared cost and records the call.
-                    let cost = call.cost.unwrap_or(0);
+                    // The bridge just charges the declared token cost and records the call.
+                    let cost = call.tokens.unwrap_or(0);
                     {
                         let mut guard = shared.lock().unwrap();
                         guard.step_count += 1;
                         let _ = guard.ledger.debit(cost);
-                        guard.cost_units_spent += cost;
+                        guard.tokens_spent += cost;
                         *guard.tool_call_counts.entry(call.tool.clone()).or_insert(0) += 1;
                         guard.tool_call_history.push(call.tool.clone());
                         append_event(&mut guard, ExecutionEvent::ToolAllowed {
                             ts: now_ms(),
                             tool: call.tool.clone(),
                         });
-                        if guard.cost_units_spent >= guard.current_limits.max_cost_units {
+                        if guard.tokens_spent >= guard.current_limits.max_tokens {
                             mark_stopped(&mut guard, "BudgetExhausted");
                         }
                     }
@@ -536,14 +537,14 @@ pub(crate) fn handle_tool_call(
                         let mut guard = shared.lock().unwrap();
                         guard.step_count += 1;
                         let _ = guard.ledger.debit(cost);
-                        guard.cost_units_spent += cost;
+                        guard.tokens_spent += cost;
                         *guard.tool_call_counts.entry(call.tool.clone()).or_insert(0) += 1;
                         guard.tool_call_history.push(call.tool.clone());
                         append_event(&mut guard, ExecutionEvent::ToolAllowed {
                             ts: now_ms(),
                             tool: call.tool.clone(),
                         });
-                        if guard.cost_units_spent >= guard.current_limits.max_cost_units {
+                        if guard.tokens_spent >= guard.current_limits.max_tokens {
                             mark_stopped(&mut guard, "BudgetExhausted");
                         }
                     }
@@ -566,8 +567,8 @@ pub(crate) fn handle_rule_evaluate(body: &[u8], shared: &Arc<Mutex<BridgeState>>
             elapsed_ms: req.elapsed
                 .unwrap_or_else(|| guard.start_time.elapsed().as_millis() as u64),
             requested_tool: req.tool.clone(),
-            cost_units_spent: req.cost_spent.unwrap_or(guard.cost_units_spent),
-            next_tool_cost: 0,
+            tokens_spent: req.tokens_spent.unwrap_or(guard.tokens_spent),
+            next_tool_tokens: 0,
             tool_call_counts: if req.tool_call_counts.is_empty() {
                 guard.tool_call_counts.clone()
             } else {
@@ -611,7 +612,7 @@ pub(crate) fn handle_agent_enter(body: &[u8], shared: &Arc<Mutex<BridgeState>>) 
                 LimitsPolicy::new(new_limits.clone(), guard.allowed_tools.clone());
             let snapshot = LimitsSnapshot {
                 steps: new_limits.max_steps,
-                cost: new_limits.max_cost_units,
+                tokens: new_limits.max_tokens,
                 timeout: new_limits.timeout_ms,
             };
             append_event(&mut guard, ExecutionEvent::AgentScopeEntered {
@@ -627,8 +628,8 @@ pub(crate) fn handle_agent_enter(body: &[u8], shared: &Arc<Mutex<BridgeState>>) 
 
     match result {
         Ok(limits) => BridgeResp::json(200, format!(
-            r#"{{"status":"ok","limits":{{"steps":{},"cost":{},"timeout":{}}}}}"#,
-            limits.max_steps, limits.max_cost_units, limits.timeout_ms
+            r#"{{"status":"ok","limits":{{"steps":{},"tokens":{},"timeout":{}}}}}"#,
+            limits.max_steps, limits.max_tokens, limits.timeout_ms
         )),
         Err(name) => BridgeResp::json(404, format!(
             r#"{{"error":"named limits set '{}' not found"}}"#, name
@@ -658,8 +659,8 @@ pub(crate) fn handle_step(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
         step_count: guard.step_count,
         elapsed_ms,
         requested_tool: None,
-        cost_units_spent: guard.cost_units_spent,
-        next_tool_cost: 0,
+        tokens_spent: guard.tokens_spent,
+        next_tool_tokens: 0,
         tool_call_counts: guard.tool_call_counts.clone(),
         tool_call_history: guard.tool_call_history.clone(),
         last_tool_args: HashMap::new(),
@@ -684,6 +685,50 @@ pub(crate) fn handle_step(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
             200,
             format!(r#"{{"status":"running","step":{}}}"#, guard.step_count),
         ),
+    }
+}
+
+/// POST /llm/usage {"input": N, "output": N}
+///
+/// Submits LLM token usage from a nanny.instrument()-wrapped client.
+/// Debits `input + output` tokens from the shared ledger.
+///
+/// Returns `{"status":"ok"}` if accepted.
+/// Returns `{"status":"denied","reason":"BudgetExhausted"}` if the submission
+/// pushes `tokens_spent >= max_tokens`. The next tool call will also fail.
+pub(crate) fn handle_llm_usage(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
+    #[derive(serde::Deserialize)]
+    struct LlmUsageRequest {
+        #[serde(default)]
+        input: u64,
+        #[serde(default)]
+        output: u64,
+    }
+
+    let req: LlmUsageRequest = match serde_json::from_slice(body) {
+        Ok(r) => r,
+        Err(_) => return BridgeResp::json(400, r#"{"error":"invalid request body"}"#),
+    };
+
+    let total = req.input + req.output;
+    if total == 0 {
+        return BridgeResp::json(200, r#"{"status":"ok"}"#);
+    }
+
+    let mut guard = shared.lock().unwrap();
+    let _ = guard.ledger.debit(total);
+    guard.tokens_spent += total;
+
+    let max_tokens = guard.current_limits.max_tokens;
+    if guard.tokens_spent >= max_tokens {
+        let reason = "BudgetExhausted";
+        mark_stopped(&mut guard, reason);
+        BridgeResp::json(200, format!(
+            r#"{{"status":"denied","reason":"{}"}}"#,
+            reason
+        ))
+    } else {
+        BridgeResp::json(200, r#"{"status":"ok"}"#)
     }
 }
 
@@ -815,10 +860,10 @@ struct ToolCallRequest {
     tool: String,
     #[serde(default)]
     args: ToolArgs,
-    /// Cost declared by the macro at the call site.
+    /// Token cost declared by the macro at the call site.
     /// Used when the tool is not registered in the bridge registry (user-defined tools).
     #[serde(default)]
-    cost: Option<u64>,
+    tokens: Option<u64>,
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -828,7 +873,7 @@ struct RuleEvalRequest {
     #[serde(default)] tool:              Option<String>,
     #[serde(default)] tool_call_counts:  HashMap<String, u32>,
     #[serde(default)] tool_call_history: Vec<String>,
-    #[serde(default)] cost_spent:        Option<u64>,
+    #[serde(default)] tokens_spent:      Option<u64>,
 }
 
 #[derive(serde::Deserialize)]
@@ -956,21 +1001,21 @@ pub(crate) fn init_shared_state(
         components.allowed_tools.clone(),
     );
     let rule_evaluator = RuleEvaluator::new(components.per_tool_max_calls);
-    let max_cost = components.limits.max_cost_units;
+    let max_tokens = components.limits.max_tokens;
 
     let shared = Arc::new(Mutex::new(BridgeState {
         session_token: token,
         execution: ExecutionState::Running,
         limits_policy,
         rule_evaluator,
-        ledger: FakeLedger::new(max_cost),
+        ledger: FakeLedger::new(max_tokens),
         default_limits: components.limits.clone(),
         current_limits: components.limits,
         named_limits: components.named_limits,
         limits_stack: Vec::new(),
         agent_name_stack: Vec::new(),
         allowed_tools: components.allowed_tools,
-        cost_units_spent: 0,
+        tokens_spent: 0,
         tool_call_counts: HashMap::new(),
         tool_call_history: Vec::new(),
         step_count: 0,
@@ -1009,12 +1054,12 @@ mod tests {
         }
     }
 
-    fn echo_components(max_cost: u64) -> BridgeComponents {
+    fn echo_components(max_tokens: u64) -> BridgeComponents {
         let mut registry = ToolRegistry::new();
         registry.register(Box::new(EchoTool));
         BridgeComponents {
             registry,
-            limits: Limits { max_steps: 100, max_cost_units: max_cost, timeout_ms: 30_000 },
+            limits: Limits { max_steps: 100, max_tokens, timeout_ms: 30_000 },
             named_limits: Default::default(),
             allowed_tools: vec!["echo".to_string()],
             per_tool_max_calls: Default::default(),
@@ -1029,11 +1074,11 @@ mod tests {
     }
 
     /// Bridge with custom allowed tools and an empty registry — exercises
-    /// the user-defined tool path (NotFound → charge cost → return allowed).
-    fn started_with_tools(allowed_tools: Vec<String>, max_cost: u64) -> Bridge {
+    /// the user-defined tool path (NotFound → charge tokens → return allowed).
+    fn started_with_tools(allowed_tools: Vec<String>, max_tokens: u64) -> Bridge {
         let components = BridgeComponents {
             registry: ToolRegistry::new(),
-            limits: Limits { max_steps: 100, max_cost_units: max_cost, timeout_ms: 30_000 },
+            limits: Limits { max_steps: 100, max_tokens, timeout_ms: 30_000 },
             named_limits: Default::default(),
             allowed_tools,
             per_tool_max_calls: Default::default(),
@@ -1218,13 +1263,13 @@ mod tests {
 
         let (_, body) = get(&b, "/status");
         let v = json_val(&body);
-        assert_eq!(v["cost_spent"], 20); // 2 calls × cost 10
+        assert_eq!(v["tokens_spent"], 20); // 2 calls × tokens 10
     }
 
     /// Each allowed tool call increments step_count and charges cost.
     ///
     /// This is the bridge-level regression guard for the bug where
-    /// ExecutionStopped emitted steps=0 and cost_spent=0. metrics() must
+    /// ExecutionStopped emitted steps=0 and tokens_spent=0. metrics() must
     /// reflect the real accounting state so the CLI can emit accurate values.
     #[test]
     fn tool_call_increments_step_and_charges_cost_in_metrics() {
@@ -1233,15 +1278,15 @@ mod tests {
         post(&b, "/tool/call", r#"{"tool":"echo","args":{"message":"y"}}"#);
 
         let m = b.metrics();
-        assert_eq!(m.step_count,       2,  "each tool call must increment step_count");
-        assert_eq!(m.cost_units_spent, 20, "each tool call must charge declared cost");
+        assert_eq!(m.step_count,    2,  "each tool call must increment step_count");
+        assert_eq!(m.tokens_spent, 20, "each tool call must charge declared token cost");
     }
 
     #[test]
     fn denied_tool_returns_denied_with_tool_name() {
         let b = Bridge::start(BridgeComponents {
             registry: ToolRegistry::new(),
-            limits: Limits { max_steps: 100, max_cost_units: 1000, timeout_ms: 30_000 },
+            limits: Limits { max_steps: 100, max_tokens: 1000, timeout_ms: 30_000 },
             named_limits: Default::default(),
             allowed_tools: vec![],   // empty allowlist — all tools denied
             per_tool_max_calls: Default::default(),
@@ -1260,7 +1305,7 @@ mod tests {
     fn denied_tool_stops_execution() {
         let b = Bridge::start(BridgeComponents {
             registry: ToolRegistry::new(),
-            limits: Limits { max_steps: 100, max_cost_units: 1000, timeout_ms: 30_000 },
+            limits: Limits { max_steps: 100, max_tokens: 1000, timeout_ms: 30_000 },
             named_limits: Default::default(),
             allowed_tools: vec![],
             per_tool_max_calls: Default::default(),
@@ -1307,7 +1352,7 @@ mod tests {
         per_tool_max_calls.insert("echo".to_string(), 1u32);
         let b = Bridge::start(BridgeComponents {
             registry,
-            limits: Limits { max_steps: 100, max_cost_units: 10_000, timeout_ms: 30_000 },
+            limits: Limits { max_steps: 100, max_tokens: 10_000, timeout_ms: 30_000 },
             named_limits: Default::default(),
             allowed_tools: vec!["echo".to_string()],
             per_tool_max_calls,
@@ -1340,7 +1385,7 @@ mod tests {
         per_tool_max_calls.insert("echo".to_string(), 2u32);
         let b = Bridge::start(BridgeComponents {
             registry: ToolRegistry::new(),
-            limits: Limits { max_steps: 100, max_cost_units: 1000, timeout_ms: 30_000 },
+            limits: Limits { max_steps: 100, max_tokens: 1000, timeout_ms: 30_000 },
             named_limits: Default::default(),
             allowed_tools: vec!["echo".to_string()],
             per_tool_max_calls,
@@ -1362,7 +1407,7 @@ mod tests {
         registry.register(Box::new(EchoTool));
         let b = Bridge::start(BridgeComponents {
             registry,
-            limits: Limits { max_steps: 100, max_cost_units: 10_000, timeout_ms: 30_000 },
+            limits: Limits { max_steps: 100, max_tokens: 10_000, timeout_ms: 30_000 },
             named_limits: Default::default(),
             allowed_tools: vec!["echo".to_string()],
             per_tool_max_calls,
@@ -1393,11 +1438,11 @@ mod tests {
     fn agent_enter_switches_limits() {
         let mut named = HashMap::new();
         named.insert("researcher".to_string(), Limits {
-            max_steps: 200, max_cost_units: 5000, timeout_ms: 60_000,
+            max_steps: 200, max_tokens: 5000, timeout_ms: 60_000,
         });
         let b = Bridge::start(BridgeComponents {
             registry: ToolRegistry::new(),
-            limits: Limits { max_steps: 10, max_cost_units: 100, timeout_ms: 5_000 },
+            limits: Limits { max_steps: 10, max_tokens: 100, timeout_ms: 5_000 },
             named_limits: named,
             allowed_tools: vec![],
             per_tool_max_calls: Default::default(),
@@ -1415,11 +1460,11 @@ mod tests {
     fn agent_exit_reverts_to_previous_limits() {
         let mut named = HashMap::new();
         named.insert("researcher".to_string(), Limits {
-            max_steps: 200, max_cost_units: 5000, timeout_ms: 60_000,
+            max_steps: 200, max_tokens: 5000, timeout_ms: 60_000,
         });
         let b = Bridge::start(BridgeComponents {
             registry: ToolRegistry::new(),
-            limits: Limits { max_steps: 10, max_cost_units: 100, timeout_ms: 5_000 },
+            limits: Limits { max_steps: 10, max_tokens: 100, timeout_ms: 5_000 },
             named_limits: named,
             allowed_tools: vec![],
             per_tool_max_calls: Default::default(),
@@ -1445,11 +1490,11 @@ mod tests {
     #[test]
     fn nested_agent_enter_exit_round_trip() {
         let mut named = HashMap::new();
-        named.insert("a".to_string(), Limits { max_steps: 50, max_cost_units: 200, timeout_ms: 10_000 });
-        named.insert("b".to_string(), Limits { max_steps: 99, max_cost_units: 300, timeout_ms: 20_000 });
+        named.insert("a".to_string(), Limits { max_steps: 50, max_tokens: 200, timeout_ms: 10_000 });
+        named.insert("b".to_string(), Limits { max_steps: 99, max_tokens: 300, timeout_ms: 20_000 });
         let b = Bridge::start(BridgeComponents {
             registry: ToolRegistry::new(),
-            limits: Limits { max_steps: 10, max_cost_units: 100, timeout_ms: 5_000 },
+            limits: Limits { max_steps: 10, max_tokens: 100, timeout_ms: 5_000 },
             named_limits: named,
             allowed_tools: vec![],
             per_tool_max_calls: Default::default(),
@@ -1481,7 +1526,7 @@ mod tests {
     fn step_stops_at_max_steps() {
         let b = Bridge::start(BridgeComponents {
             registry: ToolRegistry::new(),
-            limits: Limits { max_steps: 1, max_cost_units: 1000, timeout_ms: 30_000 },
+            limits: Limits { max_steps: 1, max_tokens: 1000, timeout_ms: 30_000 },
             named_limits: Default::default(),
             allowed_tools: vec![],
             per_tool_max_calls: Default::default(),
@@ -1504,7 +1549,7 @@ mod tests {
         let v = json_val(&body);
         assert_eq!(v["state"], "running");
         assert_eq!(v["step"], 2);
-        assert_eq!(v["cost_spent"], 10);
+        assert_eq!(v["tokens_spent"], 10);
     }
 
     #[test]
@@ -1545,7 +1590,7 @@ mod tests {
         registry.register(Box::new(FailingTool));
         let b = Bridge::start(BridgeComponents {
             registry,
-            limits: Limits { max_steps: 100, max_cost_units: 1000, timeout_ms: 30_000 },
+            limits: Limits { max_steps: 100, max_tokens: 1000, timeout_ms: 30_000 },
             named_limits: Default::default(),
             allowed_tools: vec!["fail".to_string()],
             per_tool_max_calls: Default::default(),
@@ -1707,7 +1752,7 @@ mod tests {
     #[test]
     fn drain_events_contains_tool_allowed_after_call() {
         let b = started_with_tools(vec!["search_web".to_string()], 1000);
-        post(&b, "/tool/call", r#"{"tool":"search_web","cost":10}"#);
+        post(&b, "/tool/call", r#"{"tool":"search_web","tokens":10}"#);
         std::thread::sleep(std::time::Duration::from_millis(10));
 
         let lines = b.drain_events();

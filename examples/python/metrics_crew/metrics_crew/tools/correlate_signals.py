@@ -9,7 +9,7 @@ from nanny_sdk import tool as nanny_tool
 
 
 @crew_tool
-@nanny_tool(cost=15)
+@nanny_tool(tokens=300)
 def correlate_signals(metrics: str, path: str) -> str:
     """Compute Pearson correlation between a set of metric columns.
 

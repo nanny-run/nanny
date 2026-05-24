@@ -44,7 +44,7 @@ use super::{
     append_event, now_ms,
     BridgeComponents, BridgeResp, BridgeState, ContentType,
     handle_agent_enter, handle_agent_exit, handle_events, handle_health,
-    handle_rule_evaluate, handle_status, handle_step, handle_stop,
+    handle_llm_usage, handle_rule_evaluate, handle_status, handle_step, handle_stop,
     handle_tool_call, init_shared_state, is_stopped,
 };
 
@@ -195,6 +195,13 @@ async fn route_step(State(app): State<AppState>) -> Response {
         return (StatusCode::from_u16(410).unwrap(), r#"{"error":"execution stopped"}"#).into_response();
     }
     to_response(handle_step(&app.shared))
+}
+
+async fn route_llm_usage(State(app): State<AppState>, body: Bytes) -> Response {
+    if is_stopped(&app.shared) {
+        return (StatusCode::from_u16(410).unwrap(), r#"{"error":"execution stopped"}"#).into_response();
+    }
+    to_response(handle_llm_usage(&body, &app.shared))
 }
 
 // ── IP / host SSRF guard ──────────────────────────────────────────────────────
@@ -437,6 +444,7 @@ fn build_router(app: AppState) -> Router {
         .route("/agent/enter",   post(route_agent_enter))
         .route("/agent/exit",    post(route_agent_exit))
         .route("/step",          post(route_step))
+        .route("/llm/usage",     post(route_llm_usage))
         // Token auth — runs before every handler.
         .layer(middleware::from_fn_with_state(app.clone(), require_token))
         // Rate limiting — outermost layer, runs first.
@@ -877,7 +885,7 @@ mod tests {
     fn test_components() -> BridgeComponents {
         BridgeComponents {
             registry: ToolRegistry::new(),
-            limits: Limits { max_steps: 100, max_cost_units: 1000, timeout_ms: 30_000 },
+            limits: Limits { max_steps: 100, max_tokens: 1000, timeout_ms: 30_000 },
             named_limits: HashMap::new(),
             allowed_tools: vec!["echo".to_string()],
             per_tool_max_calls: HashMap::new(),
@@ -1653,11 +1661,11 @@ mod tests {
         handle
     }
 
-    /// BridgeComponents with a custom max_cost_units ceiling.
-    fn test_components_with_cost(max_cost: u64) -> BridgeComponents {
+    /// BridgeComponents with a custom max_tokens ceiling.
+    fn test_components_with_cost(max_tokens: u64) -> BridgeComponents {
         BridgeComponents {
             registry:          ToolRegistry::new(),
-            limits:            Limits { max_steps: 100, max_cost_units: max_cost, timeout_ms: 30_000 },
+            limits:            Limits { max_steps: 100, max_tokens, timeout_ms: 30_000 },
             named_limits:      HashMap::new(),
             allowed_tools:     vec!["http_get".to_string()],
             per_tool_max_calls: HashMap::new(),
@@ -1666,12 +1674,12 @@ mod tests {
 
     /// BridgeComponents with a "researcher" named limit for enter/exit tests.
     fn test_components_with_named_limit() -> BridgeComponents {
-        let researcher = Limits { max_steps: 50, max_cost_units: 500, timeout_ms: 60_000 };
+        let researcher = Limits { max_steps: 50, max_tokens: 500, timeout_ms: 60_000 };
         let mut named  = HashMap::new();
         named.insert("researcher".to_string(), researcher);
         BridgeComponents {
             registry:          ToolRegistry::new(),
-            limits:            Limits { max_steps: 100, max_cost_units: 1000, timeout_ms: 30_000 },
+            limits:            Limits { max_steps: 100, max_tokens: 1000, timeout_ms: 30_000 },
             named_limits:      named,
             allowed_tools:     vec!["http_get".to_string()],
             per_tool_max_calls: HashMap::new(),
@@ -1793,18 +1801,18 @@ mod tests {
     #[test]
     fn shared_budget_across_clients() {
         // Two independent mTLS clients connect to ONE server (shared budget,
-        // max_cost = 25).
+        // max_tokens = 25).
         //
-        // Call 1 (client 1, cost 10) → allowed (total 10)
-        // Call 2 (client 2, cost 10) → allowed (total 20, still below 25)
-        // Call 3 (client 1, cost 10) → LimitsPolicy pre-check: 20+10=30 > 25
-        //                               → denied BudgetExhausted (returns 200 JSON "denied")
-        // Call 4 (client 2)          → 410 (execution stopped after call 3 denial)
+        // Call 1 (client 1, tokens 10) → allowed (total 10)
+        // Call 2 (client 2, tokens 10) → allowed (total 20, still below 25)
+        // Call 3 (client 1, tokens 10) → LimitsPolicy pre-check: 20+10=30 > 25
+        //                                → denied BudgetExhausted (returns 200 JSON "denied")
+        // Call 4 (client 2)            → 410 (execution stopped after call 3 denial)
         //
-        // Note: using max_cost=25 (not 20) is intentional.  With max_cost=20,
+        // Note: using max_tokens=25 (not 20) is intentional.  With max_tokens=20,
         // call 2 triggers the post-check boundary (20 >= 20 → mark_stopped, but
         // returns "allowed").  Call 3 then receives 410 instead of a "denied" JSON
-        // body.  max_cost=25 ensures call 3 hits the LimitsPolicy pre-check
+        // body.  max_tokens=25 ensures call 3 hits the LimitsPolicy pre-check
         // (30 > 25) which returns a proper denial response.
         let dir = test_certs_dir();
         gen_certs_for_test(&dir);
@@ -1828,7 +1836,7 @@ mod tests {
                 $client
                     .post(format!("{}/tool/call", base))
                     .header("X-Nanny-Session-Token", &token)
-                    .body(r#"{"tool":"http_get","cost":10}"#)
+                    .body(r#"{"tool":"http_get","tokens":10}"#)
                     .send()
                     .expect("tool/call must reach server")
             };
@@ -2141,7 +2149,7 @@ mod tests {
         let resp = client
             .post(format!("http://127.0.0.1:{port}/tool/call"))
             .header("X-Nanny-Session-Token", &token)
-            .body(r#"{"tool":"echo","cost":5}"#)
+            .body(r#"{"tool":"echo","tokens":5}"#)
             .send()
             .expect("POST /tool/call must reach plain HTTP server");
 
@@ -2188,10 +2196,10 @@ mod tests {
     // on client 1's call blocks client 2's next call.
     #[test]
     fn loopback_plain_http_shared_budget_across_clients() {
-        // Use a budget of 25 with cost=10 per call (same reasoning as mTLS test).
-        // Call 1 (c1, cost 10) → allowed (10 spent)
-        // Call 2 (c2, cost 10) → allowed (20 spent)
-        // Call 3 (c1, cost 10) → LimitsPolicy pre-check: 30 > 25 → denied
+        // Use a budget of 25 with tokens=10 per call (same reasoning as mTLS test).
+        // Call 1 (c1, tokens 10) → allowed (10 spent)
+        // Call 2 (c2, tokens 10) → allowed (20 spent)
+        // Call 3 (c1, tokens 10) → LimitsPolicy pre-check: 30 > 25 → denied
         // Call 4 (c2)          → 410 (execution stopped after call 3)
         let token = format!("plain-budget-{}", next_port());
         let port  = {
@@ -2223,7 +2231,7 @@ mod tests {
                 $client
                     .post(format!("{}/tool/call", base))
                     .header("X-Nanny-Session-Token", &token)
-                    .body(r#"{"tool":"http_get","cost":10}"#)
+                    .body(r#"{"tool":"http_get","tokens":10}"#)
                     .send()
                     .expect("tool call must reach server")
             };
@@ -2258,8 +2266,8 @@ mod tests {
     //
     // GET /status is what the Python SDK reads to populate PolicyContext.
     // The bridge-to-SDK field mapping is a documented contract:
-    //   bridge "step"       → SDK "step_count"
-    //   bridge "cost_spent" → SDK "cost_units_spent"
+    //   bridge "step"          → SDK "step_count"
+    //   bridge "tokens_spent"  → SDK "tokens_spent"
     // A regression here breaks @rule evaluation silently.
 
     #[test]
@@ -2273,7 +2281,7 @@ mod tests {
         client
             .post(format!("{base}/tool/call"))
             .header("X-Nanny-Session-Token", &token)
-            .body(r#"{"tool":"echo","cost":7,"args":{"x":"y"}}"#)
+            .body(r#"{"tool":"echo","tokens":7,"args":{"x":"y"}}"#)
             .send()
             .expect("tool call must succeed");
 
@@ -2289,8 +2297,8 @@ mod tests {
         // These are the exact field names the Python SDK reads.
         assert!(body["step"].is_number(),
             "/status must have numeric 'step' field; got: {body}");
-        assert!(body["cost_spent"].is_number(),
-            "/status must have numeric 'cost_spent' field; got: {body}");
+        assert!(body["tokens_spent"].is_number(),
+            "/status must have numeric 'tokens_spent' field; got: {body}");
         assert!(body["elapsed_ms"].is_number(),
             "/status must have numeric 'elapsed_ms' field; got: {body}");
         assert!(body["tool_call_counts"].is_object(),
@@ -2299,8 +2307,8 @@ mod tests {
             "/status must have array 'tool_call_history' field; got: {body}");
 
         // Verify the values reflect the call we just made.
-        assert_eq!(body["cost_spent"], 7,
-            "cost_spent must equal the charged cost; got: {body}");
+        assert_eq!(body["tokens_spent"], 7,
+            "tokens_spent must equal the charged tokens; got: {body}");
         assert!(body["tool_call_counts"]["echo"].as_u64().unwrap_or(0) >= 1,
             "tool_call_counts must count the echo call; got: {body}");
         let history = body["tool_call_history"].as_array().unwrap();
@@ -2355,7 +2363,7 @@ mod tests {
         client
             .post(format!("{base}/tool/call"))
             .header("X-Nanny-Session-Token", &token)
-            .body(r#"{"tool":"echo","cost":1}"#)
+            .body(r#"{"tool":"echo","tokens":1}"#)
             .send()
             .expect("tool call must reach server");
 
@@ -2388,7 +2396,7 @@ mod tests {
         client
             .post(format!("{base}/tool/call"))
             .header("X-Nanny-Session-Token", &token)
-            .body(r#"{"tool":"not_allowed_tool","cost":0}"#)
+            .body(r#"{"tool":"not_allowed_tool","tokens":0}"#)
             .send()
             .expect("tool call must reach server");
 

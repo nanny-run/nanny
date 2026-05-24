@@ -12,7 +12,7 @@ cmd = "uv run metrics-crew analyze --data fixtures/sample_metrics.csv"
 
 [limits]
 steps   = 200
-cost    = 500
+tokens  = 10000
 timeout = 600000
 
 # ── Per-role scopes ───────────────────────────────────────────────────────────
@@ -22,25 +22,25 @@ timeout = 600000
 [limits.ingestion]
 # Ingestion is cheap: just reading and validating the CSV.
 steps   = 20
-cost    = 20
+tokens  = 400
 timeout = 30000
 
 [limits.analysis]
 # Analysis is expensive: stat computation, anomaly detection, correlation.
 steps   = 60
-cost    = 150
+tokens  = 3000
 timeout = 600000
 
 [limits.visualization]
 # Visualization: one chart per signal, limited chart calls.
 steps   = 20
-cost    = 50
+tokens  = 1000
 timeout = 30000
 
 [limits.reporter]
 # Reporting: one write_report call produces the final incident doc.
 steps   = 10
-cost    = 20
+tokens  = 400
 timeout = 20000
 
 # ── Demo limit sets ───────────────────────────────────────────────────────────
@@ -48,16 +48,16 @@ timeout = 20000
 # Usage: nanny run --limits=<name>
 
 [limits.demo-budget]
-# BudgetExhausted: validate_schema(1) + load_metrics(3) = 4 spent,
-# leaving only 1 unit. Any subsequent tool call (cost >= 2) is denied.
+# BudgetExhausted: validate_schema(20) + load_metrics(60) = 80 tokens spent,
+# leaving only 20 tokens. Any subsequent tool call (tokens >= 20) is denied.
 steps   = 60
-cost    = 5
+tokens  = 100
 timeout = 600000
 
 [limits.demo-steps]
 # MaxStepsReached: cap at 4 steps — fires before analysis completes.
 steps   = 4
-cost    = 500
+tokens  = 10000
 timeout = 600000
 
 [limits.demo-rule]
@@ -66,7 +66,7 @@ timeout = 600000
 # compute_stats call succeeds; the second fires RuleDenied: compute_stats.max_calls.
 # Generous budget and steps so only the per-tool call limit fires.
 steps   = 100
-cost    = 1000
+tokens  = 20000
 timeout = 600000
 
 # ── Tool allowlist ────────────────────────────────────────────────────────────
@@ -86,32 +86,32 @@ allowed = [
 ]
 
 [tools.load_metrics]
-cost_per_call = 3
-max_calls     = 5
+tokens_per_call = 60
+max_calls       = 5
 
 [tools.validate_schema]
-cost_per_call = 1
-max_calls     = 5
+tokens_per_call = 20
+max_calls       = 5
 
 [tools.compute_stats]
-cost_per_call = 10
-max_calls     = 20
+tokens_per_call = 200
+max_calls       = 20
 
 [tools.detect_anomalies]
-cost_per_call = 10
-max_calls     = 10
+tokens_per_call = 200
+max_calls       = 10
 
 [tools.correlate_signals]
-cost_per_call = 15
-max_calls     = 5
+tokens_per_call = 300
+max_calls       = 5
 
 [tools.generate_chart]
-cost_per_call = 8
-max_calls     = 10
+tokens_per_call = 160
+max_calls       = 10
 
 [tools.write_report]
-cost_per_call = 5
-max_calls     = 3
+tokens_per_call = 100
+max_calls       = 3
 
 # ── HTTP proxy (optional) ─────────────────────────────────────────────────────
 # Activate when running the governance server for cross-process or cross-machine

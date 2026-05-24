@@ -9,7 +9,7 @@ from nanny_sdk import tool as nanny_tool
 
 
 @crew_tool
-@nanny_tool(cost=10)
+@nanny_tool(tokens=200)
 def compute_stats(metric: str, path: str) -> str:
     """Compute descriptive statistics for one metric column in the CSV at path.
 

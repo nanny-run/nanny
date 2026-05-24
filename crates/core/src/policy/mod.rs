@@ -30,14 +30,14 @@ pub struct PolicyContext {
     /// `None` means no tool call is being made this step.
     pub requested_tool: Option<String>,
 
-    /// Total cost units spent across all steps so far.
-    pub cost_units_spent: u64,
+    /// Total tokens spent across all steps so far.
+    pub tokens_spent: u64,
 
-    /// The declared cost of the tool call currently being evaluated.
+    /// The declared token cost of the tool call currently being evaluated.
     /// Zero when no tool call is in flight or when the tool has no declared cost.
     /// LimitsPolicy uses this to deny a call before it executes if the remaining
     /// budget is insufficient to cover it.
-    pub next_tool_cost: u64,
+    pub next_tool_tokens: u64,
 
     /// How many times each tool has been called in this execution.
     /// Key: tool name. Value: call count. Updated by the executor after each tool call.

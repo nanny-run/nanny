@@ -8,6 +8,7 @@ Run your agent under ``nanny run agent.py``. All decorators are no-ops when
 """
 
 from nanny_sdk._decorators import agent, rule, tool
+from nanny_sdk.instrument import instrument
 from nanny_sdk.exceptions import (
     AgentCompleted,
     AgentNotFound,
@@ -25,6 +26,8 @@ __all__ = [
     "tool",
     "rule",
     "agent",
+    # LLM instrumentation
+    "instrument",
     # Exceptions
     "NannyStop",
     "MaxStepsReached",

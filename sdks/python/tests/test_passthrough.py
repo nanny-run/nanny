@@ -77,12 +77,12 @@ def test_tool_sync_passthrough_returns_original_function() -> None:
     def original(x: int) -> int:
         return x * 2
 
-    decorated = tool(cost=10)(original)
+    decorated = tool(tokens=10)(original)
     assert decorated is original
 
 
 def test_tool_sync_passthrough_returns_value() -> None:
-    @tool(cost=10)
+    @tool(tokens=10)
     def fetch(url: str) -> str:
         return f"result: {url}"
 
@@ -90,7 +90,7 @@ def test_tool_sync_passthrough_returns_value() -> None:
 
 
 def test_tool_sync_passthrough_no_exception() -> None:
-    @tool(cost=99)
+    @tool(tokens=99)
     def search(query: str) -> list[str]:
         return [query]
 
@@ -108,12 +108,12 @@ async def test_tool_async_passthrough_returns_original_function() -> None:
     async def original(x: int) -> int:
         return x * 2
 
-    decorated = tool(cost=10)(original)
+    decorated = tool(tokens=10)(original)
     assert decorated is original
 
 
 async def test_tool_async_passthrough_returns_value() -> None:
-    @tool(cost=10)
+    @tool(tokens=10)
     async def fetch(url: str) -> str:
         return f"async: {url}"
 
@@ -145,7 +145,7 @@ def test_rule_never_called_in_passthrough() -> None:
         call_count += 1
         return True
 
-    @tool(cost=10)
+    @tool(tokens=10)
     def fetch(url: str) -> str:
         return "result"
 
@@ -219,7 +219,7 @@ def test_all_decorators_together_sync() -> None:
     def check_loop(ctx: object) -> bool:
         return True
 
-    @tool(cost=10)
+    @tool(tokens=10)
     def fetch(url: str) -> str:
         return f"result: {url}"
 
@@ -237,7 +237,7 @@ async def test_all_decorators_together_async() -> None:
     def check_loop(ctx: object) -> bool:
         return True
 
-    @tool(cost=10)
+    @tool(tokens=10)
     async def fetch(url: str) -> str:
         return f"async: {url}"
 

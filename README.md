@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <strong>Open-source execution boundary for autonomous systems.</strong><br/>
+  <strong>Open-source enforcement primitive for autonomous systems.</strong><br/>
   Hard limits. Deterministic stops. Structured audit trail.
 </p>
 
@@ -36,13 +36,13 @@ You deploy a multi-agent system on Friday. Monday morning your CFO sends a Slack
 
 This is happening right now at hundreds of companies.
 
-Nanny is the execution boundary that prevents it.
+Nanny is the enforcement layer that prevents it.
 
 You tell Nanny what each agent is allowed to do — how many steps, how much budget, which tools, how long. The moment any limit is crossed, Nanny kills the process immediately, emits a structured log saying exactly what happened and why, and exits. No grace period. No recovery logic. No second chances.
 
 When you have multiple specialized agents — a researcher, an analyst, a reporter — Nanny gives each one its own budget, its own tool allowlist, and its own kill switch. The analysis agent cannot call the reporter's tools. A loop-detection rule stops any agent from running the same computation five times in a row. The moment any agent steps outside its role or hits its ceiling, it stops. You get a full audit trail of every call, every decision, and every stop reason.
 
-Think of it as a **hard execution boundary** — deterministic, auditable, and structurally impossible for any agent to bypass.
+Think of it as a **deterministic enforcement layer** — auditable, and structurally impossible for any agent to bypass.
 
 ```mermaid
 flowchart TD
@@ -77,7 +77,7 @@ flowchart TD
 
 | Layer                           | What it does                                                                                                                             |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| **Nanny CLI**                   | Hard timeout, step, and cost limits for any agent process in any language.                                                               |
+| **Nanny CLI**                   | Token budget, step ceiling, and timeout for any agent process in any language.                                                           |
 | **Rust SDK**                    | Per-function cost metering, allowlist enforcement, and custom rules — in-process.                                                        |
 | **Python SDK**                  | Per-function and per-role governance for Python agents — each agent in your fleet gets its own budget, tool allowlist, and custom rules. |
 | **Governance server**           | Cross-process and cross-machine enforcement via a long-lived server with mutual TLS.                                                     |

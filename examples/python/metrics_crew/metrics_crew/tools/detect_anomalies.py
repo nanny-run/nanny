@@ -10,7 +10,7 @@ from nanny_sdk import tool as nanny_tool
 
 
 @crew_tool
-@nanny_tool(cost=10)
+@nanny_tool(tokens=200)
 def detect_anomalies(metric: str, path: str) -> str:
     """Detect anomalous spikes in one metric column using z-score thresholding.
 

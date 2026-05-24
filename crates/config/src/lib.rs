@@ -6,7 +6,7 @@
 //
 // TOML field naming vs Rust field naming:
 //   TOML uses short human-facing names: steps, cost, timeout
-//   Rust uses descriptive names:        max_steps, max_cost_units, timeout_ms
+//   Rust uses descriptive names:        max_steps, max_tokens, timeout_ms
 //   The gap is bridged by #[serde(rename = "...")] on each field.
 //   This means the Rust code is clear, and the config file is concise.
 
@@ -115,8 +115,8 @@ pub struct StartConfig {
 
 /// Global execution limits — applied to all runs unless a named set is selected.
 ///
-/// TOML field names are short: steps, cost, timeout.
-/// Rust field names are descriptive: max_steps, max_cost_units, timeout_ms.
+/// TOML field names are short: steps, tokens, timeout.
+/// Rust field names are descriptive: max_steps, max_tokens, timeout_ms.
 ///
 /// Named limit sets live as subtables: [limits.researcher], [limits.writer], etc.
 /// A named set inherits all fields from [limits] and overrides only what it declares.
@@ -127,11 +127,11 @@ pub struct LimitsConfig {
     #[serde(rename = "steps")]
     pub max_steps: u32,
 
-    /// Maximum cost units before the agent is stopped.
-    /// Abstract in local mode. Maps to real currency in managed mode.
-    /// TOML key: cost
-    #[serde(rename = "cost")]
-    pub max_cost_units: u64,
+    /// Maximum LLM tokens before the agent is stopped.
+    /// Charged per tool call via `tokens_per_call` or measured via `nanny.instrument`.
+    /// TOML key: tokens
+    #[serde(rename = "tokens")]
+    pub max_tokens: u64,
 
     /// Wall-clock timeout in milliseconds.
     /// TOML key: timeout
@@ -153,9 +153,9 @@ pub struct PartialLimitsConfig {
     #[serde(rename = "steps", default)]
     pub max_steps: Option<u32>,
 
-    /// Override for max_cost_units. If None, inherits from [limits].
-    #[serde(rename = "cost", default)]
-    pub max_cost_units: Option<u64>,
+    /// Override for max_tokens. If None, inherits from [limits].
+    #[serde(rename = "tokens", default)]
+    pub max_tokens: Option<u64>,
 
     /// Override for timeout_ms. If None, inherits from [limits].
     #[serde(rename = "timeout", default)]
@@ -184,8 +184,8 @@ pub struct ToolConfig {
     /// Maximum number of times this tool may be called in one execution.
     pub max_calls: Option<u32>,
 
-    /// Cost units charged per call to this tool.
-    pub cost_per_call: Option<u64>,
+    /// Tokens charged per call to this tool.
+    pub tokens_per_call: Option<u64>,
 }
 
 // ── ObservabilityConfig ───────────────────────────────────────────────────────
@@ -342,7 +342,7 @@ pub fn resolve_named_limits(
 
     Ok(ResolvedLimits {
         max_steps: partial.max_steps.unwrap_or(config.limits.max_steps),
-        max_cost_units: partial.max_cost_units.unwrap_or(config.limits.max_cost_units),
+        max_tokens: partial.max_tokens.unwrap_or(config.limits.max_tokens),
         timeout_ms: partial.timeout_ms.unwrap_or(config.limits.timeout_ms),
     })
 }
@@ -352,7 +352,7 @@ pub fn resolve_named_limits(
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedLimits {
     pub max_steps: u32,
-    pub max_cost_units: u64,
+    pub max_tokens: u64,
     pub timeout_ms: u64,
 }
 
@@ -392,11 +392,10 @@ cmd = "python agent.py"
 # Maximum number of tool calls before the agent is stopped.
 steps = 100
 
-# Maximum cost units before the agent is stopped.
-# Cost units are charged per tool call via @tool(cost=N) or #[tool(cost = N)].
-# In local mode these are abstract units you define.
-# In managed mode they map to real currency via your nanny cloud config.
-cost = 1000
+# Maximum LLM tokens before the agent is stopped.
+# Tokens are charged per tool call via @tool(tokens=N) or #[tool(tokens = N)],
+# or measured automatically via nanny.instrument(client).
+tokens = 50000
 
 # Wall-clock timeout in milliseconds.
 timeout = 30000
@@ -406,7 +405,7 @@ timeout = 30000
 # Activate with: nanny run --limits=researcher
 # [limits.researcher]
 # steps   = 500
-# cost    = 5000
+# tokens  = 200000
 # timeout = 600000
 
 [tools]
@@ -417,12 +416,12 @@ timeout = 30000
 # http_get is a built-in Rust SDK tool. Replace or extend with your own names.
 allowed = ["http_get"]
 
-# Per-tool limits. Override cost and max calls per tool.
+# Per-tool limits. Override token cost and max calls per tool.
 # Keys must match an entry in the allowed list above.
 #
 # [tools.http_get]
-# max_calls     = 10
-# cost_per_call = 10
+# max_calls      = 10
+# tokens_per_call = 200
 
 [observability]
 # Where to write the structured NDJSON event log.
@@ -454,27 +453,27 @@ mode = "local"
 
 [limits]
 steps   = 100
-cost    = 1000
+tokens  = 50000
 timeout = 30000
 
 [limits.researcher]
 steps   = 500
-cost    = 5000
+tokens  = 200000
 timeout = 600000
 
 [limits.writer]
-cost = 2000
+tokens = 80000
 
 [tools]
 allowed = ["http_get", "send_email"]
 
 [tools.http_get]
-max_calls     = 10
-cost_per_call = 10
+max_calls       = 10
+tokens_per_call = 200
 
 [tools.send_email]
-max_calls     = 2
-cost_per_call = 50
+max_calls       = 2
+tokens_per_call = 500
 
 [observability]
 log = "stdout"
@@ -487,7 +486,7 @@ log = "stdout"
             toml::from_str(default_toml()).expect("default_toml() must always be valid TOML");
 
         assert_eq!(config.limits.max_steps, 100);
-        assert_eq!(config.limits.max_cost_units, 1000);
+        assert_eq!(config.limits.max_tokens, 50000);
         assert_eq!(config.limits.timeout_ms, 30000);
         assert_eq!(config.runtime.mode, Mode::Local);
         assert_eq!(config.tools.allowed, vec!["http_get"]);
@@ -522,7 +521,7 @@ mode = "cloud"
 
 [limits]
 steps   = 10
-cost    = 100
+tokens  = 5000
 timeout = 5000
 "#;
         assert!(
@@ -541,7 +540,7 @@ timeout = 5000
         );
         let r = &config.limits.named["researcher"];
         assert_eq!(r.max_steps, Some(500));
-        assert_eq!(r.max_cost_units, Some(5000));
+        assert_eq!(r.max_tokens, Some(200_000));
         assert_eq!(r.timeout_ms, Some(600_000));
     }
 
@@ -551,7 +550,7 @@ timeout = 5000
         let config: NannyConfig = toml::from_str(full_config_toml()).expect("must parse");
 
         let writer = &config.limits.named["writer"];
-        assert_eq!(writer.max_cost_units, Some(2000));
+        assert_eq!(writer.max_tokens, Some(80_000));
         assert_eq!(writer.max_steps, None, "writer does not override steps");
         assert_eq!(writer.timeout_ms, None, "writer does not override timeout");
     }
@@ -563,13 +562,13 @@ timeout = 5000
         // researcher overrides all three
         let r = resolve_named_limits(&config, "researcher").expect("must resolve");
         assert_eq!(r.max_steps, 500);
-        assert_eq!(r.max_cost_units, 5000);
+        assert_eq!(r.max_tokens, 200_000);
         assert_eq!(r.timeout_ms, 600_000);
 
-        // writer only overrides cost — steps and timeout inherit from [limits]
+        // writer only overrides tokens — steps and timeout inherit from [limits]
         let w = resolve_named_limits(&config, "writer").expect("must resolve");
         assert_eq!(w.max_steps, 100, "inherits from [limits]");
-        assert_eq!(w.max_cost_units, 2000, "overridden by [limits.writer]");
+        assert_eq!(w.max_tokens, 80_000, "overridden by [limits.writer]");
         assert_eq!(w.timeout_ms, 30000, "inherits from [limits]");
     }
 
@@ -590,11 +589,11 @@ timeout = 5000
 
         let http = config.tools.per_tool.get("http_get").expect("http_get must be present");
         assert_eq!(http.max_calls, Some(10));
-        assert_eq!(http.cost_per_call, Some(10));
+        assert_eq!(http.tokens_per_call, Some(200));
 
         let email = config.tools.per_tool.get("send_email").expect("send_email must be present");
         assert_eq!(email.max_calls, Some(2));
-        assert_eq!(email.cost_per_call, Some(50));
+        assert_eq!(email.tokens_per_call, Some(500));
     }
 
     #[test]
@@ -603,7 +602,7 @@ timeout = 5000
             r#"
 [limits]
 steps   = 10
-cost    = 100
+tokens  = 5000
 timeout = 5000
 "#,
         )
@@ -619,7 +618,7 @@ timeout = 5000
             r#"
 [limits]
 steps   = 10
-cost    = 100
+tokens  = 5000
 timeout = 5000
 "#,
         )
@@ -637,7 +636,7 @@ cmd = "cargo run --release"
 
 [limits]
 steps   = 10
-cost    = 100
+tokens  = 5000
 timeout = 5000
 "#,
         )
@@ -653,7 +652,7 @@ timeout = 5000
             r#"
 [limits]
 steps   = 10
-cost    = 100
+tokens  = 5000
 timeout = 5000
 "#,
         )
@@ -677,7 +676,7 @@ timeout = 5000
             r#"
 [limits]
 steps   = 10
-cost    = 100
+tokens  = 5000
 timeout = 5000
 "#,
         )
@@ -692,7 +691,7 @@ timeout = 5000
             r#"
 [limits]
 steps   = 10
-cost    = 100
+tokens  = 5000
 timeout = 5000
 
 [proxy]
@@ -712,7 +711,7 @@ allowed_hosts = ["api.openai.com", "*.anthropic.com"]
             r#"
 [limits]
 steps   = 10
-cost    = 100
+tokens  = 5000
 timeout = 5000
 
 [proxy]
@@ -732,7 +731,7 @@ allowed_hosts = []
             r#"
 [limits]
 steps   = 10
-cost    = 100
+tokens  = 5000
 timeout = 5000
 
 [proxy]
@@ -753,7 +752,7 @@ mode = "managed"
 
 [limits]
 steps   = 10
-cost    = 100
+tokens  = 5000
 timeout = 5000
 
 [managed]
