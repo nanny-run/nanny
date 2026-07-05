@@ -76,7 +76,7 @@ flowchart TD
 
 Each agent activates its own named limit set via `@agent("role")`. Tool calls from any agent flow through Nanny’s enforcement layer. Each agent's budget is tracked independently — hitting the analysis budget does not kill the reporter.
 
-For cross-process and cross-machine enforcement, use the [governance server](/v0.2/guides/governance-server).
+For cross-process and cross-machine enforcement, use the [governance server](/v0.3/guides/governance-server).
 
 ---
 
@@ -91,7 +91,7 @@ All three limits are enforced on every run:
 | `tokens`  | Rust SDK or Python SDK       | Killed when accumulated tokens reach the configured budget   |
 
 Timeout enforcement works for any process in any language — no SDK required.
-Step and token enforcement require the agent to report tool calls — either via the [Rust SDK](/v0.2/guides/rust-sdk) macros or the Python SDK decorators.
+Step and token enforcement require the agent to report tool calls — either via the [Rust SDK](/v0.3/guides/rust-sdk) macros or the Python SDK decorators.
 
 ## Passthrough mode
 

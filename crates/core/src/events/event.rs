@@ -92,6 +92,23 @@ pub enum ExecutionEvent {
         step: u32,
     },
 
+    /// Emitted when LLM token usage is reported to the bridge — via
+    /// `nanny::report_usage` (Rust) or `nanny.instrument()` (Python).
+    ///
+    /// `input`/`output` are the measured token counts debited from the active
+    /// budget. `model`/`provider` are optional attribution labels: identifiers
+    /// only, never prompt or response content, and never pricing — cost is a
+    /// hosted-layer concern, never the engine's.
+    LlmUsageRecorded {
+        ts: u64,
+        input: u64,
+        output: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provider: Option<String>,
+    },
+
     /// Emitted when the agent activates a named limits set via `agent_enter`.
     ///
     /// Records the name of the limits set and the limits now in effect,

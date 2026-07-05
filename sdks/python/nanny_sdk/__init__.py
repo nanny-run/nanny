@@ -8,7 +8,6 @@ Run your agent under ``nanny run agent.py``. All decorators are no-ops when
 """
 
 from nanny_sdk._decorators import agent, rule, tool
-from nanny_sdk.instrument import instrument
 from nanny_sdk.exceptions import (
     AgentCompleted,
     AgentNotFound,
@@ -20,6 +19,7 @@ from nanny_sdk.exceptions import (
     TimeoutExpired,
     ToolDenied,
 )
+from nanny_sdk.instrument import instrument
 
 __all__ = [
     # Decorators

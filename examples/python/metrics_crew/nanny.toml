@@ -5,15 +5,16 @@
 mode = "local"
 
 [start]
-cmd = "uv run metrics-crew analyze --data fixtures/sample_metrics.csv"
+cmd = "uvicorn metrics_crew.api:app --host 0.0.0.0 --port 8080"
 
 # ── Global ceiling ────────────────────────────────────────────────────────────
-# Applies to every run unless a named scope overrides.
+# Process-lifetime limits for the long-running server process.
+# Per-role scopes below handle individual analysis runs.
 
 [limits]
-steps   = 200
-tokens  = 10000
-timeout = 600000
+steps   = 10000
+tokens  = 50000
+timeout = 86400000  # 24 hours — server stays up
 
 # ── Per-role scopes ───────────────────────────────────────────────────────────
 # Activated by @nanny_agent("<role>") in each agent file.
@@ -139,4 +140,5 @@ max_calls       = 3
 # ── Observability ─────────────────────────────────────────────────────────────
 
 [observability]
-log = "stdout"
+log      = "stdout"
+log_file = "nanny.log"

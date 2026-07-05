@@ -221,3 +221,27 @@ Emitted when a permitted tool fails at runtime. Distinct from `ToolDenied` — t
 |-------|------|-------------|
 | `tool` | string | The name of the tool that failed. |
 | `error` | string | A description of the error. |
+
+---
+
+## LlmUsageRecorded
+
+Emitted when LLM token usage is reported to Nanny — via the Python SDK's `instrument()` or the Rust SDK's `report_usage()`. Records the measured input and output tokens debited from the budget, plus optional model and provider labels.
+
+```json
+{
+  "event": "LlmUsageRecorded",
+  "ts": 1711234568150,
+  "input": 1200,
+  "output": 340,
+  "model": "gpt-4o",
+  "provider": "openai"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `input` | integer | Prompt / input tokens consumed by the LLM call. |
+| `output` | integer | Completion / output tokens produced by the LLM call. |
+| `model` | string | Optional. Model identifier reported by the SDK (e.g. `"gpt-4o"`). Omitted when not provided. |
+| `provider` | string | Optional. Provider identifier reported by the SDK (e.g. `"openai"`). Omitted when not provided. |

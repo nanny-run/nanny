@@ -727,6 +727,56 @@ impl NetworkServer {
     }
 }
 
+// ── Test cert generator (used by network tests) ───────────────────────────────
+
+/// Generate a minimal test cert bundle using rcgen — called only from tests.
+#[cfg(test)]
+fn gen_certs_for_test(dir: &Path) {
+    use rcgen::{BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
+    use time::OffsetDateTime;
+
+    let not_before = OffsetDateTime::now_utc();
+    let not_after  = not_before + time::Duration::days(30);
+
+    // CA
+    let mut ca_dn = DistinguishedName::new();
+    ca_dn.push(DnType::CommonName, "Test CA");
+    let mut ca_params = CertificateParams::new(vec![]).unwrap();
+    ca_params.distinguished_name = ca_dn;
+    ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    ca_params.not_before = not_before;
+    ca_params.not_after = not_after;
+    let ca_key = KeyPair::generate().unwrap();
+    let ca_cert = ca_params.self_signed(&ca_key).unwrap();
+
+    // Server cert
+    let mut srv_dn = DistinguishedName::new();
+    srv_dn.push(DnType::CommonName, "Test Server");
+    let mut srv_params = CertificateParams::new(vec!["localhost".to_string(), "127.0.0.1".to_string()]).unwrap();
+    srv_params.distinguished_name = srv_dn;
+    srv_params.not_before = not_before;
+    srv_params.not_after = not_after;
+    let srv_key = KeyPair::generate().unwrap();
+    let srv_cert = srv_params.signed_by(&srv_key, &ca_cert, &ca_key).unwrap();
+
+    // Client cert
+    let mut cli_dn = DistinguishedName::new();
+    cli_dn.push(DnType::CommonName, "Test Client");
+    let mut cli_params = CertificateParams::new(vec!["nanny-client".to_string()]).unwrap();
+    cli_params.distinguished_name = cli_dn;
+    cli_params.not_before = not_before;
+    cli_params.not_after = not_after;
+    let cli_key = KeyPair::generate().unwrap();
+    let cli_cert = cli_params.signed_by(&cli_key, &ca_cert, &ca_key).unwrap();
+
+    std::fs::write(dir.join("ca.crt"),     ca_cert.pem()).unwrap();
+    std::fs::write(dir.join("ca.key"),     ca_key.serialize_pem()).unwrap();
+    std::fs::write(dir.join("server.crt"), srv_cert.pem()).unwrap();
+    std::fs::write(dir.join("server.key"), srv_key.serialize_pem()).unwrap();
+    std::fs::write(dir.join("client.crt"), cli_cert.pem()).unwrap();
+    std::fs::write(dir.join("client.key"), cli_key.serialize_pem()).unwrap();
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1200,8 +1250,9 @@ mod tests {
     ) -> impl std::io::Read + std::io::Write {
         use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 
+        let mut ca_reader = ca_pem;
         let ca_certs: Vec<CertificateDer<'static>> =
-            rustls_pemfile::certs(&mut ca_pem.as_ref())
+            rustls_pemfile::certs(&mut ca_reader)
                 .collect::<std::result::Result<Vec<_>, _>>()
                 .unwrap();
         let mut root_store = rustls::RootCertStore::empty();
@@ -1209,12 +1260,14 @@ mod tests {
             root_store.add(cert).unwrap();
         }
 
+        let mut client_cert_reader = client_cert_pem;
         let client_certs: Vec<CertificateDer<'static>> =
-            rustls_pemfile::certs(&mut client_cert_pem.as_ref())
+            rustls_pemfile::certs(&mut client_cert_reader)
                 .collect::<std::result::Result<Vec<_>, _>>()
                 .unwrap();
+        let mut client_key_reader = client_key_pem;
         let client_key: PrivateKeyDer<'static> =
-            rustls_pemfile::private_key(&mut client_key_pem.as_ref())
+            rustls_pemfile::private_key(&mut client_key_reader)
                 .unwrap()
                 .unwrap();
 
@@ -1595,7 +1648,7 @@ mod tests {
 
     /// Build a blocking mTLS reqwest client that trusts the test CA and
     /// presents the test client cert.
-    fn make_mtls_client(dir: &PathBuf, _port: u16) -> reqwest::blocking::Client {
+    fn make_mtls_client(dir: &Path, _port: u16) -> reqwest::blocking::Client {
         let ca_pem   = std::fs::read(dir.join("ca.crt")).unwrap();
         let ca_cert  = reqwest::Certificate::from_pem(&ca_pem).unwrap();
         let cert_pem = std::fs::read(dir.join("client.crt")).unwrap();
@@ -1617,7 +1670,7 @@ mod tests {
         components: BridgeComponents,
         port: u16,
         token: String,
-        dir: &PathBuf,
+        dir: &Path,
         rps: u32,
     ) -> axum_server::Handle {
         let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
@@ -2598,54 +2651,4 @@ mod tests {
 
         std::fs::remove_dir_all(&dir).ok();
     }
-}
-
-// ── Test cert generator (used by network tests) ───────────────────────────────
-
-/// Generate a minimal test cert bundle using rcgen — called only from tests.
-#[cfg(test)]
-fn gen_certs_for_test(dir: &Path) {
-    use rcgen::{BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
-    use time::OffsetDateTime;
-
-    let not_before = OffsetDateTime::now_utc();
-    let not_after  = not_before + time::Duration::days(30);
-
-    // CA
-    let mut ca_dn = DistinguishedName::new();
-    ca_dn.push(DnType::CommonName, "Test CA");
-    let mut ca_params = CertificateParams::new(vec![]).unwrap();
-    ca_params.distinguished_name = ca_dn;
-    ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-    ca_params.not_before = not_before;
-    ca_params.not_after = not_after;
-    let ca_key = KeyPair::generate().unwrap();
-    let ca_cert = ca_params.self_signed(&ca_key).unwrap();
-
-    // Server cert
-    let mut srv_dn = DistinguishedName::new();
-    srv_dn.push(DnType::CommonName, "Test Server");
-    let mut srv_params = CertificateParams::new(vec!["localhost".to_string(), "127.0.0.1".to_string()]).unwrap();
-    srv_params.distinguished_name = srv_dn;
-    srv_params.not_before = not_before;
-    srv_params.not_after = not_after;
-    let srv_key = KeyPair::generate().unwrap();
-    let srv_cert = srv_params.signed_by(&srv_key, &ca_cert, &ca_key).unwrap();
-
-    // Client cert
-    let mut cli_dn = DistinguishedName::new();
-    cli_dn.push(DnType::CommonName, "Test Client");
-    let mut cli_params = CertificateParams::new(vec!["nanny-client".to_string()]).unwrap();
-    cli_params.distinguished_name = cli_dn;
-    cli_params.not_before = not_before;
-    cli_params.not_after = not_after;
-    let cli_key = KeyPair::generate().unwrap();
-    let cli_cert = cli_params.signed_by(&cli_key, &ca_cert, &ca_key).unwrap();
-
-    std::fs::write(dir.join("ca.crt"),     ca_cert.pem()).unwrap();
-    std::fs::write(dir.join("ca.key"),     ca_key.serialize_pem()).unwrap();
-    std::fs::write(dir.join("server.crt"), srv_cert.pem()).unwrap();
-    std::fs::write(dir.join("server.key"), srv_key.serialize_pem()).unwrap();
-    std::fs::write(dir.join("client.crt"), cli_cert.pem()).unwrap();
-    std::fs::write(dir.join("client.key"), cli_key.serialize_pem()).unwrap();
 }

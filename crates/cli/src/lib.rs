@@ -4,7 +4,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! nanny = "0.1"
+//! nanny = "0.3"
 //! ```
 //!
 //! ```rust,ignore
@@ -85,6 +85,63 @@ pub fn http_get(url: String) -> Result<String, String> {
 
     let args_json = serde_json::json!({"url": url}).to_string();
     runtime::call_bridge_tool("http_get", &args_json)
+}
+
+// ── LLM token usage reporting ─────────────────────────────────────────────────
+
+/// Measured LLM token usage, reported to the bridge via [`report_usage`].
+///
+/// Only `input` and `output` are ever required. `model` and `provider` are
+/// optional attribution labels — identifiers only, never prompt or response
+/// content, and never pricing. Omit them with `..Default::default()`:
+///
+/// ```rust,ignore
+/// nanny::report_usage(nanny::Usage { input: 1200, output: 340, ..Default::default() });
+/// ```
+#[derive(Debug, Default, Clone)]
+pub struct Usage {
+    /// Prompt / input tokens consumed by the LLM call.
+    pub input: u64,
+    /// Completion / output tokens produced by the LLM call.
+    pub output: u64,
+    /// Optional model identifier (e.g. `"gpt-4o"`). Label only — no pricing.
+    pub model: Option<String>,
+    /// Optional provider identifier (e.g. `"openai"`). Label only — no pricing.
+    pub provider: Option<String>,
+}
+
+/// Report measured LLM token usage to the nanny bridge.
+///
+/// This is the Rust counterpart to Python's `nanny.instrument()`. Rust cannot
+/// monkey-patch an LLM client, so — idiomatically — usage is reported
+/// explicitly: after an LLM call, hand nanny the token counts already present
+/// on the response.
+///
+/// `input + output` is debited from the active budget; `model`/`provider` (if
+/// set) are recorded as attribution labels in the audit log. Only numbers and
+/// identifiers cross the boundary — never prompt or response content.
+///
+/// # Passthrough mode
+///
+/// When running outside `nanny run` (no bridge active) this is a no-op — the
+/// same passthrough contract as `#[nanny::tool]`.
+///
+/// Fire-and-forget: never blocks the agent and never panics. Transport errors
+/// are swallowed and a zero-token report is skipped.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let resp = client.chat().create(req).await?;
+/// nanny::report_usage(nanny::Usage {
+///     input:  resp.usage.prompt_tokens,
+///     output: resp.usage.completion_tokens,
+///     model:  Some("gpt-4o".into()),
+///     ..Default::default()
+/// });
+/// ```
+pub fn report_usage(usage: Usage) {
+    runtime::report_usage(usage.input, usage.output, usage.model, usage.provider);
 }
 
 // ── Private runtime — for generated code only ─────────────────────────────────
@@ -578,6 +635,27 @@ mod runtime {
         let _ = http_post("/stop", &body);
     }
 
+    // ── LLM usage reporting ───────────────────────────────────────────────────
+
+    /// POST /llm/usage — report measured LLM token usage.
+    ///
+    /// No-op in passthrough mode (no bridge) and for zero-token reports.
+    /// Fire-and-forget: the bridge response is ignored and transport errors are
+    /// swallowed, so reporting usage never interrupts the agent.
+    pub fn report_usage(input: u64, output: u64, model: Option<String>, provider: Option<String>) {
+        if !is_active() || input + output == 0 {
+            return;
+        }
+        let mut body = serde_json::json!({"input": input, "output": output});
+        if let Some(m) = model {
+            body["model"] = serde_json::Value::String(m);
+        }
+        if let Some(p) = provider {
+            body["provider"] = serde_json::Value::String(p);
+        }
+        let _ = http_post("/llm/usage", &body.to_string());
+    }
+
     // ── Agent enter / exit ────────────────────────────────────────────────────
 
     /// POST /agent/enter — switch to a named limits set.
@@ -634,5 +712,23 @@ mod tests {
     #[test]
     fn no_rules_registered_allows_all() {
         assert!(evaluate_local_rules("any_tool", ::std::collections::HashMap::new()).is_none());
+    }
+
+    #[test]
+    fn report_usage_noop_in_passthrough() {
+        // SAFETY: see `inactive_when_no_env_vars` — single-threaded harness.
+        unsafe {
+            std::env::remove_var("NANNY_BRIDGE_SOCKET");
+            std::env::remove_var("NANNY_BRIDGE_PORT");
+            std::env::remove_var("NANNY_BRIDGE_ADDR");
+        }
+        // No bridge active → no-op. Must not panic or attempt any connection.
+        crate::report_usage(crate::Usage { input: 100, output: 50, ..Default::default() });
+        crate::report_usage(crate::Usage {
+            input: 8,
+            output: 3,
+            model: Some("gpt-4o".into()),
+            provider: Some("openai".into()),
+        });
     }
 }

@@ -37,16 +37,22 @@ returns the client unchanged. No wrapping, no overhead.
 **Non-intrusive:** ``instrument`` monkey-patches the client's completion method.
 It does not inspect message content — only the numeric token counts from
 the response usage object. No manifesto violation.
+
+**Streaming:** streamed responses are wrapped so usage is submitted once the
+stream is fully consumed. The provider must emit token usage in the stream
+(e.g. OpenAI ``stream_options={"include_usage": True}``); without it, a streamed
+call reports 0 tokens.
 """
 
 from __future__ import annotations
 
 import inspect
 import threading
+from collections.abc import Callable
 from typing import Any
+from weakref import WeakSet
 
 import nanny_sdk._client as _bridge
-
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -76,18 +82,25 @@ def instrument(client: Any) -> Any:
 # Internal patching logic
 # ---------------------------------------------------------------------------
 
-# Guard against double-patching the same client.
-_patched_clients: set[int] = set()
+# Guard against double-patching the same client. Keyed on the client OBJECT via
+# a WeakSet — not id(), which Python recycles after GC (a recycled id would
+# wrongly cause a brand-new client to be treated as already patched, so its
+# usage would never be reported).
+_patched_clients: WeakSet[Any] = WeakSet()
 _patched_lock = threading.Lock()
 
 
 def _patch_client(client: Any) -> None:
     """Monkey-patch the completion method(s) on *client* to submit usage."""
-    client_id = id(client)
     with _patched_lock:
-        if client_id in _patched_clients:
-            return
-        _patched_clients.add(client_id)
+        try:
+            if client in _patched_clients:
+                return
+            _patched_clients.add(client)
+        except TypeError:
+            # Client isn't hashable / weak-referenceable — instrument it anyway
+            # rather than fail to, forgoing only the dedup guard.
+            pass
 
     # Detection order matters — see module docstring for rationale.
     _try_patch_openai(client)      # client.chat.completions.create
@@ -104,7 +117,7 @@ def _patch_client(client: Any) -> None:
 def _try_patch_openai(client: Any) -> None:
     """Patch ``client.chat.completions.create`` — OpenAI / Groq / Together / LiteLLM."""
     try:
-        completions = client.chat.completions  # type: ignore[attr-defined]
+        completions = client.chat.completions
     except AttributeError:
         return
 
@@ -114,7 +127,7 @@ def _try_patch_openai(client: Any) -> None:
 def _try_patch_anthropic(client: Any) -> None:
     """Patch ``client.messages.create`` — Anthropic."""
     try:
-        messages = client.messages  # type: ignore[attr-defined]
+        messages = client.messages
     except AttributeError:
         return
 
@@ -129,7 +142,7 @@ def _try_patch_mistral(client: Any) -> None:
     that also happen to expose ``.complete``.
     """
     try:
-        chat = client.chat  # type: ignore[attr-defined]
+        chat = client.chat
     except AttributeError:
         return
 
@@ -142,7 +155,7 @@ def _try_patch_mistral(client: Any) -> None:
 def _try_patch_gemini(client: Any) -> None:
     """Patch ``client.models.generate_content`` — Google Gemini (google-genai SDK)."""
     try:
-        models = client.models  # type: ignore[attr-defined]
+        models = client.models
     except AttributeError:
         return
 
@@ -168,16 +181,12 @@ def _try_patch_cohere(client: Any) -> None:
 
     if inspect.iscoroutinefunction(original):
         async def _async_chat(*args: Any, **kwargs: Any) -> Any:
-            response = await original(*args, **kwargs)
-            _submit(_extract_usage(response))
-            return response
+            return _capture(await original(*args, **kwargs), _extract_usage)
 
         client.chat = _async_chat
     else:
         def _sync_chat(*args: Any, **kwargs: Any) -> Any:
-            response = original(*args, **kwargs)
-            _submit(_extract_usage(response))
-            return response
+            return _capture(original(*args, **kwargs), _extract_usage)
 
         client.chat = _sync_chat
 
@@ -194,18 +203,127 @@ def _wrap_method(obj: Any, method_name: str, extractor: Any) -> None:
 
     if inspect.iscoroutinefunction(original):
         async def _async_wrapper(*args: Any, **kwargs: Any) -> Any:
-            response = await original(*args, **kwargs)
-            _submit(extractor(response))
-            return response
+            return _capture(await original(*args, **kwargs), extractor)
 
         setattr(obj, method_name, _async_wrapper)
     else:
         def _sync_wrapper(*args: Any, **kwargs: Any) -> Any:
-            response = original(*args, **kwargs)
-            _submit(extractor(response))
-            return response
+            return _capture(original(*args, **kwargs), extractor)
 
         setattr(obj, method_name, _sync_wrapper)
+
+
+# ---------------------------------------------------------------------------
+# Stream-aware usage capture
+# ---------------------------------------------------------------------------
+
+def _capture(response: Any, extractor: Callable[[Any], tuple[int, int]]) -> Any:
+    """Submit usage for *response*, transparently handling streaming.
+
+    A non-stream response carries ``.usage`` immediately — extract and submit.
+    A streaming response is an iterator (``__next__`` / ``__anext__``) whose
+    usage only appears in the final chunk, so wrap it and submit once the stream
+    is fully consumed. (Requires the provider to emit usage in the stream — e.g.
+    OpenAI ``stream_options={"include_usage": True}``; otherwise 0 is reported.)
+    """
+    if hasattr(response, "__anext__"):
+        return _AsyncUsageStream(response, extractor)
+    if hasattr(response, "__next__"):
+        return _SyncUsageStream(response, extractor)
+    _submit(extractor(response))
+    return response
+
+
+class _SyncUsageStream:
+    """Wraps a sync streaming response; submits usage once, at end of stream.
+
+    Delegates all other attribute access + the context-manager protocol to the
+    underlying stream, so callers using ``with`` / ``.close()`` still work.
+    """
+
+    def __init__(self, stream: Any, extractor: Callable[[Any], tuple[int, int]]) -> None:
+        self._stream = stream
+        self._extractor = extractor
+        self._counts: tuple[int, int] = (0, 0)
+        self._flushed = False
+
+    def __iter__(self) -> _SyncUsageStream:
+        return self
+
+    def __next__(self) -> Any:
+        try:
+            chunk = next(self._stream)
+        except StopIteration:
+            self._flush()
+            raise
+        counts = self._extractor(chunk)
+        if counts[0] or counts[1]:
+            self._counts = counts
+        return chunk
+
+    def _flush(self) -> None:
+        if not self._flushed:
+            self._flushed = True
+            _submit(self._counts)
+
+    def __enter__(self) -> _SyncUsageStream:
+        enter = getattr(self._stream, "__enter__", None)
+        if enter is not None:
+            enter()
+        return self
+
+    def __exit__(self, *exc_info: object) -> bool:
+        self._flush()
+        exit_ = getattr(self._stream, "__exit__", None)
+        return bool(exit_(*exc_info)) if exit_ is not None else False
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._stream, name)
+
+
+class _AsyncUsageStream:
+    """Wraps an async streaming response; submits usage once, at end of stream."""
+
+    def __init__(self, stream: Any, extractor: Callable[[Any], tuple[int, int]]) -> None:
+        self._stream = stream
+        self._extractor = extractor
+        self._counts: tuple[int, int] = (0, 0)
+        self._flushed = False
+
+    def __aiter__(self) -> _AsyncUsageStream:
+        return self
+
+    async def __anext__(self) -> Any:
+        try:
+            chunk = await self._stream.__anext__()
+        except StopAsyncIteration:
+            self._flush()
+            raise
+        counts = self._extractor(chunk)
+        if counts[0] or counts[1]:
+            self._counts = counts
+        return chunk
+
+    def _flush(self) -> None:
+        if not self._flushed:
+            self._flushed = True
+            _submit(self._counts)
+
+    async def __aenter__(self) -> _AsyncUsageStream:
+        aenter = getattr(self._stream, "__aenter__", None)
+        if aenter is not None:
+            await aenter()
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> bool:
+        self._flush()
+        aexit = getattr(self._stream, "__aexit__", None)
+        if aexit is not None:
+            return bool(await aexit(*exc_info))
+        return False
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._stream, name)
 
 
 # ---------------------------------------------------------------------------

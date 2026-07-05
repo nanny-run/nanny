@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.1] - 2026-05-24
+## [0.3.0] - 2026-07-05
 
 ### Changed
 
@@ -22,8 +22,18 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   OpenAI, Groq, Together AI, Azure OpenAI, LiteLLM, Anthropic, Mistral, Google
   Gemini (google-genai), and Cohere v2. Uses duck-typing — no provider package is
   imported. No-op in passthrough mode.
-- **`POST /llm/usage` bridge endpoint** — receives `{"input": N, "output": N}` and
-  debits `input + output` from the token ledger. Used internally by `instrument()`.
+- **`nanny::report_usage(Usage { .. })` (Rust SDK)** — the Rust counterpart to
+  Python's `instrument()`. Rust cannot monkey-patch an LLM client, so usage is
+  reported explicitly: after an LLM call, hand Nanny the `input`/`output` token
+  counts from the response. Accepts optional `model`/`provider` attribution labels
+  (identifiers only — never prompt/response content, never pricing). No-op in
+  passthrough mode; fire-and-forget.
+- **`LlmUsageRecorded` event** — reported LLM token usage now appears in the NDJSON
+  event log with `input`, `output`, and optional `model`/`provider` labels.
+  Previously usage was debited silently with no audit record.
+- **`POST /llm/usage` bridge endpoint** — receives `{"input": N, "output": N}` (plus
+  optional `model`/`provider` labels) and debits `input + output` from the token
+  ledger. Used by `instrument()` (Python) and `report_usage()` (Rust).
 
 ---
 
@@ -305,6 +315,7 @@ First public release of Nanny — an execution boundary for autonomous AI agents
   SHA256 checksums for each binary are computed and pushed to the homebrew tap automatically
   on every tagged release.
 
+[0.3.0]: https://github.com/nanny-run/nanny/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/nanny-run/nanny/compare/v0.1.8...v0.2.0
 [0.1.8]: https://github.com/nanny-run/nanny/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/nanny-run/nanny/compare/v0.1.5...v0.1.7

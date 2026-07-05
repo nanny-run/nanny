@@ -114,6 +114,41 @@ In passthrough mode (no `nanny run`), `nanny::http_get` makes the request direct
 
 ---
 
+## `nanny::report_usage` — report LLM token usage
+
+`#[tool(tokens = N)]` charges a *declared* token cost per call. To charge the *actual* tokens an LLM used, report them after the call with `nanny::report_usage`. Hand Nanny the token counts already present on the response — Nanny debits `input + output` from the budget.
+
+```rust
+use nanny::{report_usage, Usage};
+
+let resp = client.chat().create(request).await?;
+
+report_usage(Usage {
+    input:  resp.usage.prompt_tokens,
+    output: resp.usage.completion_tokens,
+    ..Default::default()
+});
+```
+
+Only `input` and `output` are required. You can optionally attach `model` and `provider` labels — identifiers only, never prompt or response content:
+
+```rust
+report_usage(Usage {
+    input:  resp.usage.prompt_tokens,
+    output: resp.usage.completion_tokens,
+    model:    Some("gpt-4o".into()),
+    provider: Some("openai".into()),
+});
+```
+
+Each call emits an `LlmUsageRecorded` event to the log. `report_usage` is fire-and-forget: it never blocks your agent and never panics. In passthrough mode (no `nanny run`) it is a no-op.
+
+<Note>
+Rust reports usage explicitly, one call per LLM response. In Python, `nanny_sdk.instrument(client)` does the same thing automatically by wrapping the client — Rust cannot patch a client at runtime, so the reporting is an explicit call instead.
+</Note>
+
+---
+
 ## `#[rule]` — declare an enforcement rule
 
 A rule is a function that returns a verdict on whether execution should continue.
@@ -145,7 +180,7 @@ The `ctx` parameter gives you a snapshot of the current execution state:
 | `step_count`        | `u32`                     | Number of steps completed                                                                |
 | `elapsed_ms`        | `u64`                     | Wall-clock time elapsed                                                                  |
 | `tokens_spent`      | `u64`                     | Total tokens spent so far                                                                |
-| `next_tool_cost`    | `u64`                     | Declared token cost of the tool currently being evaluated. `0` when no tool call is in flight. |
+| `next_tool_tokens`  | `u64`                     | Declared token cost of the tool currently being evaluated. `0` when no tool call is in flight. |
 | `tool_call_counts`  | `HashMap<String, u32>`    | Per-tool call counts                                                                     |
 | `tool_call_history` | `Vec<String>`             | Ordered log of tool names called                                                         |
 | `requested_tool`    | `Option<String>`          | The tool being evaluated right now                                                       |

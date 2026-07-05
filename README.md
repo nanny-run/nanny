@@ -297,7 +297,14 @@ client = openai.OpenAI()
 nanny_sdk.instrument(client)   # one line — done
 ```
 
-→ Full Python SDK guide at [docs.nanny.run/v0.2/guides/python-sdk](https://docs.nanny.run/v0.2/guides/python-sdk)
+For Rust agents, report usage explicitly after each LLM call — Rust can't patch a client at runtime:
+
+```rust
+use nanny::{report_usage, Usage};
+report_usage(Usage { input: resp.usage.prompt_tokens, output: resp.usage.completion_tokens, ..Default::default() });
+```
+
+→ Full Python SDK guide at [docs.nanny.run/v0.3/guides/python-sdk](https://docs.nanny.run/v0.3/guides/python-sdk)
 
 ---
 

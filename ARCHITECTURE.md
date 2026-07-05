@@ -85,7 +85,7 @@ A **tool** is a function your agent calls to do work. When you declare a functio
 
 - It is registered on the allowlist
 - Each call passes through the bridge for policy enforcement
-- Cost is charged and the step count increments on each successful call
+- Tokens are charged and the step count increments on each successful call
 - Any rule denial stops execution before the function body runs
 
 Tools are declared in `nanny.toml` under `[tools] allowed`. The SDK decorator/macro marks the corresponding function in your code. Both are required — the config says what is permitted, the code says when it is used.

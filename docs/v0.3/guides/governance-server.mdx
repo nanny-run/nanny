@@ -9,7 +9,7 @@ For most projects, `nanny run` is all you need. It starts a local enforcement br
 
 Use the governance server when agents run in **separate processes or on separate machines** and you need a shared enforcement boundary across all of them. Common scenarios:
 
-- **Microservices:** three containers, each running an agent, all sharing a single cost budget
+- **Microservices:** three containers, each running an agent, all sharing a single token budget
 - **CI workers:** a coordinator spins up worker processes on different machines; you want each worker's tool calls counted against the same budget
 - **Development clusters:** a Kubernetes pod runs the server; a local dev agent connects to it while you iterate
 
@@ -216,7 +216,7 @@ Partial imports are supported: omit any key to leave the existing file unchanged
 
 The governance server can also act as an HTTP CONNECT proxy on the same port. Any outbound HTTP or HTTPS request your agent makes through the proxy is subject to Nanny's allowlist — even calls from code that has no `@nanny_tool` decorator.
 
-See [HTTP proxy mode](/v0.2/guides/http-proxy-mode) for setup and configuration.
+See [HTTP proxy mode](/v0.3/guides/http-proxy-mode) for setup and configuration.
 
 ---
 

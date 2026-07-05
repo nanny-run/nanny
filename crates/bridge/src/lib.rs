@@ -688,10 +688,12 @@ pub(crate) fn handle_step(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
     }
 }
 
-/// POST /llm/usage {"input": N, "output": N}
+/// POST /llm/usage {"input": N, "output": N, "model"?: "...", "provider"?: "..."}
 ///
-/// Submits LLM token usage from a nanny.instrument()-wrapped client.
-/// Debits `input + output` tokens from the shared ledger.
+/// Submits LLM token usage from `nanny::report_usage` (Rust) or a
+/// nanny.instrument()-wrapped client (Python). Debits `input + output` tokens
+/// from the shared ledger and emits an `LlmUsageRecorded` audit event. The
+/// optional `model`/`provider` are recorded as labels only — no pricing.
 ///
 /// Returns `{"status":"ok"}` if accepted.
 /// Returns `{"status":"denied","reason":"BudgetExhausted"}` if the submission
@@ -703,6 +705,11 @@ pub(crate) fn handle_llm_usage(body: &[u8], shared: &Arc<Mutex<BridgeState>>) ->
         input: u64,
         #[serde(default)]
         output: u64,
+        // Optional attribution labels — identifiers only, never content or pricing.
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        provider: Option<String>,
     }
 
     let req: LlmUsageRequest = match serde_json::from_slice(body) {
@@ -718,6 +725,14 @@ pub(crate) fn handle_llm_usage(body: &[u8], shared: &Arc<Mutex<BridgeState>>) ->
     let mut guard = shared.lock().unwrap();
     let _ = guard.ledger.debit(total);
     guard.tokens_spent += total;
+
+    append_event(&mut guard, ExecutionEvent::LlmUsageRecorded {
+        ts: now_ms(),
+        input: req.input,
+        output: req.output,
+        model: req.model,
+        provider: req.provider,
+    });
 
     let max_tokens = guard.current_limits.max_tokens;
     if guard.tokens_spent >= max_tokens {
@@ -1537,6 +1552,73 @@ mod tests {
         assert_eq!(v["status"], "stopped");
         assert_eq!(v["reason"], "MaxStepsReached");
         assert!(matches!(b.execution_state(), ExecutionState::Stopped { .. }));
+    }
+
+    #[test]
+    fn llm_usage_debits_tokens_and_records_event() {
+        let b = started(1000);
+        let (s, body) = post(
+            &b,
+            "/llm/usage",
+            r#"{"input":30,"output":12,"model":"gpt-4o","provider":"openai"}"#,
+        );
+        assert_eq!(s, 200);
+        assert_eq!(json_val(&body)["status"], "ok");
+
+        // Debited from the budget.
+        let (_, status) = get(&b, "/status");
+        assert_eq!(json_val(&status)["tokens_spent"], 42);
+
+        // Recorded in the audit log with attribution labels.
+        let (_, events) = get(&b, "/events");
+        let usage = events
+            .lines()
+            .map(json_val)
+            .find(|e| e["event"] == "LlmUsageRecorded")
+            .expect("LlmUsageRecorded event must appear in /events");
+        assert_eq!(usage["input"], 30);
+        assert_eq!(usage["output"], 12);
+        assert_eq!(usage["model"], "gpt-4o");
+        assert_eq!(usage["provider"], "openai");
+    }
+
+    #[test]
+    fn llm_usage_without_labels_omits_them() {
+        let b = started(1000);
+        post(&b, "/llm/usage", r#"{"input":5,"output":5}"#);
+        let (_, events) = get(&b, "/events");
+        let usage = events
+            .lines()
+            .map(json_val)
+            .find(|e| e["event"] == "LlmUsageRecorded")
+            .expect("LlmUsageRecorded event must appear");
+        // Absent labels are skipped, not serialized as null.
+        assert!(usage.get("model").is_none());
+        assert!(usage.get("provider").is_none());
+    }
+
+    #[test]
+    fn llm_usage_exhausts_budget() {
+        let b = started(50);
+        let (s, body) = post(&b, "/llm/usage", r#"{"input":40,"output":20}"#);
+        assert_eq!(s, 200);
+        let v = json_val(&body);
+        assert_eq!(v["status"], "denied");
+        assert_eq!(v["reason"], "BudgetExhausted");
+        assert!(matches!(b.execution_state(), ExecutionState::Stopped { .. }));
+    }
+
+    #[test]
+    fn llm_usage_zero_tokens_is_noop() {
+        let b = started(1000);
+        let (s, body) = post(&b, "/llm/usage", r#"{"input":0,"output":0}"#);
+        assert_eq!(s, 200);
+        assert_eq!(json_val(&body)["status"], "ok");
+        // No debit, no event.
+        let (_, status) = get(&b, "/status");
+        assert_eq!(json_val(&status)["tokens_spent"], 0);
+        let (_, events) = get(&b, "/events");
+        assert!(!events.contains("LlmUsageRecorded"));
     }
 
     #[test]
