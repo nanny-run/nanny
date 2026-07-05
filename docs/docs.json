@@ -33,6 +33,10 @@
   "navbar": {
     "links": [
       {
+        "label": "Support",
+        "href": "mailto:support@nanny.run"
+      },
+      {
         "type": "github",
         "href": "https://github.com/nanny-run/nanny"
       }
