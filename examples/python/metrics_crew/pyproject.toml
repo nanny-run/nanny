@@ -5,13 +5,24 @@ description = "metrics_crew — CrewAI incident analysis pipeline governed by Na
 requires-python = ">=3.11"
 dependencies = [
     "crewai[litellm]>=0.80",
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.29",
     "pandas>=2",
     "plotly>=5",
     "typer>=0.12",
     "rich>=13",
     "python-dotenv>=1.0",
-    "nanny-sdk==0.2.0",
+    "nanny-sdk>=0.2.1",
 ]
+
+# ── Local development override ────────────────────────────────────────────────
+# To test against a local nanny-sdk build, uncomment the block below and run
+# `uv sync`. Also rebuild the nanny binary: `cargo install --path crates/cli`
+# (from the workspace root) so both SDK and bridge are in sync.
+# To switch back: re-comment and run `uv sync`.
+#
+# [tool.uv.sources]
+# nanny-sdk = { path = "../../../sdks/python" }
 
 [project.scripts]
 metrics-crew = "metrics_crew.cli.main:app"

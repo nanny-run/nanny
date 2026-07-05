@@ -30,7 +30,7 @@ pub struct ToolRegistry {
     /// regardless of its concrete type. This is Rust's runtime polymorphism.
     tools: HashMap<String, Box<dyn Tool>>,
 
-    /// Cost overrides from nanny.toml [tools.<name>] cost_per_call.
+    /// Token overrides from nanny.toml [tools.<name>] tokens_per_call.
     /// When set, this value replaces the tool's own declared_cost().
     cost_overrides: HashMap<String, u64>,
 }
@@ -44,9 +44,9 @@ impl ToolRegistry {
         }
     }
 
-    /// Override the declared cost for a tool.
+    /// Override the declared token cost for a tool.
     ///
-    /// Reads from nanny.toml `[tools.<name>] cost_per_call`.
+    /// Reads from nanny.toml `[tools.<name>] tokens_per_call`.
     /// When set, `declared_cost()` returns this value instead of the
     /// tool's own declared cost.
     pub fn set_cost_override(&mut self, tool_name: &str, cost: u64) {

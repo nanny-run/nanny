@@ -2,7 +2,7 @@
 
 ## About this project
 
-- This is a documentation site for [Nanny](https://github.com/nanny-run/nanny) — an open-source execution boundary for autonomous AI agents
+- This is a documentation site for [Nanny](https://github.com/nanny-run/nanny) — an open-source enforcement layer for autonomous AI agents
 - Pages are MDX files with YAML frontmatter, published at [docs.nanny.run](https://docs.nanny.run) via [Mintlify](https://mintlify.com)
 - Configuration lives in `docs.json`
 - Run `mint dev` to preview locally
@@ -10,17 +10,17 @@
 
 ## Versioning policy
 
-- Docs are versioned at the **minor** level: `v0.1/`, `v0.2/`, `v1.0/`, etc. — never at the patch level
+- Docs are versioned at the **minor** level: `v0.3/`, `v1.0/`, etc. — never at the patch level
 - A new docs version is only created when the content would meaningfully mislead a user on a different release line (new mental model, removed commands, changed APIs)
 - Patch releases update the existing version folder in place
 - **Keep at most 4 versions** in the `docs.json` version switcher; drop the oldest when adding a fifth (add a redirect and a banner to the dropped version if it still has active users)
-- All internal links must include the version prefix: `/v0.1/quickstart`, not `/quickstart`
+- All internal links must include the version prefix: `/v0.3/quickstart`, not `/quickstart`
 - Redirects for removed or renamed paths live in the `"redirects"` array in `docs.json`
 
 ## Terminology
 
 - **Nanny** — the product name; capitalise in prose, lowercase as the CLI command (`nanny run`)
-- **execution boundary** — the correct description of what Nanny is; not "middleware", "wrapper", "proxy", or "SDK"
+- **enforcement primitive** — the correct description of what Nanny is; not "middleware", "wrapper", "proxy", or "SDK"
 - **governed run** — a process running under `nanny run` with enforcement active
 - **passthrough mode** — when macros/decorators are no-ops because `nanny run` is not active
 - **stop reason** — the value in `ExecutionStopped.reason`; always use exact enum name (`BudgetExhausted`, not "budget exceeded")
@@ -28,7 +28,7 @@
 - **tool** — a function annotated with `#[nanny::tool]` or `@tool`; not "action", "function", or "capability"
 - **rule** — a function annotated with `#[nanny::rule]` or `@rule`; not "policy", "check", or "validator"
 - **agent scope** — a named execution context activated by `#[nanny::agent]` or `@agent`
-- **cost units** — the unit of budget; not "tokens", "credits", or "points"
+- **tokens** — the unit of budget; the field name is `tokens` in `nanny.toml` and `tokens_spent` in `PolicyContext`; not "cost units", "credits", or "points"
 - **`nanny.toml`** — always in backticks; not "the config file" or "nanny config"
 - **bridge** — internal implementation term; **never use in user-facing docs**; describe externally as "Nanny's enforcement layer"
 

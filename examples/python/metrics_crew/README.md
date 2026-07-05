@@ -14,10 +14,10 @@ In most multi-agent systems, governance is an afterthought. You get a global tim
 
 `metrics_crew` shows what proper multi-agent governance looks like:
 
-- **The analysis agent cannot call `write_report`.** If it tries — because the model hallucinated a tool call, or because you wired something wrong — `ToolDenied` fires immediately. The file is never written. The cost is never charged.
+- **The analysis agent cannot call `write_report`.** If it tries — because the model hallucinated a tool call, or because you wired something wrong — `ToolDenied` fires immediately. The file is never written. No tokens are charged.
 - **The reporter agent cannot call `compute_stats`.** Same story. Wrong tool for the role, instant stop.
 - **If the analysis agent runs `compute_stats` five times in a row on the same metric**, the `no_analysis_loop` rule fires before the sixth call executes. The agent was stuck. Nanny stopped it. You get a log entry showing exactly why.
-- **Each agent has its own cost ceiling.** Hitting the analysis budget does not kill the reporter. The pipeline continues with the agents that haven't exhausted their limits.
+- **Each agent has its own token ceiling.** Hitting the analysis budget does not kill the reporter. The pipeline continues with the agents that haven't exhausted their limits.
 - **Every call is in the audit log.** Every `ToolAllowed`, every `StepCompleted`, every `ExecutionStopped` — structured NDJSON on stdout from the moment the process starts to the moment it ends.
 
 This is 200 lines of Python showing the full pattern. Read the source in `metrics_crew/crew.py`, `metrics_crew/agents/`, and `metrics_crew/tools/`.
@@ -53,38 +53,76 @@ cp .env.example .env
 uv sync
 ```
 
-`uv sync` installs all dependencies including `nanny-sdk`. No separate `pip install` needed.
-
 ---
 
-## Run under enforcement
+## Run under enforcement (server mode)
 
 ```bash
 nanny run
 ```
 
-Reads `[start].cmd` from `nanny.toml` and runs the full four-agent pipeline under Nanny governance. Charts are written to `reports/`. The NDJSON event log goes to stdout.
+Reads `[start].cmd` from `nanny.toml` and starts a FastAPI server at `http://localhost:8080`, wrapped by Nanny governance. The NDJSON event log goes to stdout and `nanny.log`.
+
+Submit a CSV and poll for results:
+
+```bash
+# Submit a job
+JOB=$(curl -s -X POST http://localhost:8080/analyze \
+  -F "file=@fixtures/sample_metrics.csv" | jq -r .job_id)
+
+# Poll until done
+curl http://localhost:8080/jobs/$JOB
+```
+
+### API endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Liveness probe |
+| `POST` | `/analyze` | Upload a metrics CSV — returns `{"job_id": "..."}` |
+| `GET` | `/jobs/{job_id}` | Poll status: `queued` → `running` → `done` / `stopped` / `failed` |
+
+### Demo scenarios
+
+Trigger specific Nanny stop reasons without waiting for a real limit to be hit:
+
+```bash
+# BudgetExhausted — activates [limits.demo-budget] (100 tokens)
+curl -s -X POST "http://localhost:8080/analyze?scenario=demo-budget" \
+  -F "file=@fixtures/sample_metrics.csv" | jq .job_id
+
+# MaxStepsReached — activates [limits.demo-steps] (4 steps)
+curl -s -X POST "http://localhost:8080/analyze?scenario=demo-steps" \
+  -F "file=@fixtures/sample_metrics.csv" | jq .job_id
+```
 
 ---
 
 ## Run without enforcement (passthrough)
 
-All decorators are no-ops outside `nanny run`. The full pipeline runs normally with no Nanny enforcement layer required:
+All decorators are no-ops outside `nanny run`. Run the CLI directly:
 
 ```bash
 uv run metrics-crew analyze --data fixtures/sample_metrics.csv
+```
+
+Or start the server without the Nanny wrapper:
+
+```bash
+uvicorn metrics_crew.api:app --reload --port 8080
 ```
 
 ---
 
 ## Nanny features demonstrated
 
-| Feature                      | What it does                                                                                                               |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `@tool(cost=N)` on each tool | Each tool call charges its declared cost against the active budget                                                         |
-| Per-role limits              | `[limits.ingestion]`, `[limits.analysis]`, `[limits.visualization]`, `[limits.reporter]` — each agent gets its own ceiling |
-| Per-role tool allowlists     | Each agent only receives the tools it needs; calling another role's tool raises `ToolDenied`                               |
-| `@rule("no_analysis_loop")`  | Stops if `compute_stats` is called 5+ times in a row — prevents the analysis agent from looping on the same metric         |
+| Feature | What it does |
+|---------|-------------|
+| `@tool(tokens=N)` on each tool | Each tool call charges its declared tokens against the active budget |
+| Per-role limits | `[limits.ingestion]`, `[limits.analysis]`, `[limits.visualization]`, `[limits.reporter]` — each agent gets its own ceiling |
+| Per-role tool allowlists | Each agent only receives the tools it needs; calling another role's tool raises `ToolDenied` |
+| `@rule("no_analysis_loop")` | Stops if `compute_stats` is called 5+ times in a row — prevents the analysis agent from looping on the same metric |
+| Demo limit sets | `[limits.demo-budget]` and `[limits.demo-steps]` trigger governed stops on demand via `?scenario=` |
 
 ---
 
@@ -102,50 +140,48 @@ Multi-agent scopes entering and exiting with live NDJSON enforcement events:
 
 ## Stop reasons you may see
 
-| Reason                         | What caused it                                                                                   |
-| ------------------------------ | ------------------------------------------------------------------------------------------------ |
-| `BudgetExhausted`              | Hit the cost ceiling during analysis before all signals were checked                             |
-| `RuleDenied: no_analysis_loop` | Analysis agent kept re-running `compute_stats` on the same metric                                |
-| `ToolDenied`                   | An agent tried to call a tool outside its allowlist (e.g. analysis agent calling `write_report`) |
-| `AgentCompleted`               | All four agents finished within their limits; charts and report produced                         |
+| Reason | What caused it |
+|--------|---------------|
+| `BudgetExhausted` | Hit the token ceiling during analysis before all signals were checked |
+| `RuleDenied: no_analysis_loop` | Analysis agent kept re-running `compute_stats` on the same metric |
+| `ToolDenied` | An agent tried to call a tool outside its allowlist (e.g. analysis agent calling `write_report`) |
+| `MaxStepsReached` | Hit the step ceiling — use `[limits.demo-steps]` to trigger this deliberately |
+| `AgentCompleted` | All four agents finished within their limits; charts and report produced |
+
+---
 
 ## Development
 
-This example uses the published `nanny-sdk` package from PyPI.
-During active development on the nanny SDK itself, switch to a path dependency:
+### Testing against local builds (pre-publish)
 
-```toml
-# pyproject.toml
-[tool.uv.sources]
-nanny-sdk = { path = "../../../sdks/python" }   # instead of nanny-sdk==<version>
-```
+To test a local nanny build before publishing:
 
-Then run `uv sync` to install from the local source.
-
-The `[tool.uv.sources]` override wires this example to the local SDK. The `nanny` CLI binary (which contains the bridge) is separate — reinstall it from local source so both are in sync:
-
-```sh
-# from the workspace root (nanny/)
-
-# If nanny was installed via Homebrew, unlink it first so the local build takes precedence:
-brew unlink nannyd
-
+**1. Install the local nanny binary:**
+```bash
+# From the workspace root (nanny/)
+brew unlink nannyd   # if installed via Homebrew — prevents PATH conflict
 cargo install --path crates/cli --force
 ```
 
-To switch back to the published version, remove the `[tool.uv.sources]` block and pin the version in `dependencies`:
-
+**2. Point the SDK at local source — uncomment in `pyproject.toml`:**
 ```toml
-# pyproject.toml
-dependencies = [
-    ...
-    "nanny-sdk==0.1.8",   # pin to the published release
-]
+[tool.uv.sources]
+nanny-sdk = { path = "../../../sdks/python" }
 ```
 
-Then run `uv sync` again. Also restore the published `nanny` CLI:
+**3. Sync and run:**
+```bash
+uv sync
+nanny run
+```
 
-```sh
+`nanny run` now uses the binary from `~/.cargo/bin/nanny` (local build) and the SDK from `sdks/python/` (local source).
+
+### Switching back to published versions
+
+Re-comment the `[tool.uv.sources]` block, run `uv sync`, then restore the published binary:
+
+```bash
 cargo uninstall nannyd
 brew link nannyd   # if originally installed via Homebrew
 ```

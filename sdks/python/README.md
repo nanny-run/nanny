@@ -8,9 +8,9 @@
 
 # nanny-sdk
 
-Python SDK for [Nanny](https://github.com/nanny-run/nanny) — an execution boundary for autonomous AI agents.
+Python SDK for [Nanny](https://github.com/nanny-run/nanny) — the enforcement primitive for autonomous AI agents.
 
-`@tool`, `@rule`, and `@agent` decorators that enforce step limits, cost budgets, tool allowlists, and custom rules per function call. Works with LangChain, CrewAI, or any Python agent framework.
+`@tool`, `@rule`, and `@agent` decorators that enforce step limits, token budgets, tool allowlists, and custom rules per function call. Works with LangChain, CrewAI, or any Python agent framework.
 
 ```bash
 pip install nanny-sdk
@@ -40,23 +40,38 @@ uv run agent.py
 ```python
 from nanny_sdk import tool
 
-@tool(cost=10)
+@tool(tokens=10)
 def fetch_page(url: str) -> str:
     import httpx
     return httpx.get(url).text
 ```
 
-Before `fetch_page` runs, Nanny checks the allowlist, per-tool call limits, and charges 10 cost units against the budget. If any check fails, a `NannyStop` exception is raised and the function body never executes.
+Before `fetch_page` runs, Nanny checks the allowlist, per-tool call limits, and charges 10 tokens against the budget. If any check fails, a `NannyStop` exception is raised and the function body never executes.
 
 Async functions work identically:
 
 ```python
-@tool(cost=10)
+@tool(tokens=10)
 async def fetch_page(url: str) -> str:
     async with httpx.AsyncClient() as client:
         r = await client.get(url)
         return r.text
 ```
+
+---
+
+## `instrument` — automatic LLM token tracking
+
+```python
+import nanny_sdk, openai
+
+client = openai.OpenAI()
+nanny_sdk.instrument(client)   # one line — done
+```
+
+Call once at startup. Every LLM completion response is intercepted and its token counts are reported to Nanny's budget automatically — no `@tool` decorator needed on the LLM call itself.
+
+Supported: OpenAI, Groq, Together AI, Azure OpenAI, LiteLLM, Anthropic, Mistral, Google Gemini (google-genai), Cohere v2. No-op in passthrough mode.
 
 ---
 
@@ -104,12 +119,12 @@ cmd = "uv run agent.py"
 
 [limits]
 steps   = 50
-cost    = 200
+tokens  = 200
 timeout = 120000
 
 [limits.researcher]
-steps = 30
-cost  = 100
+steps  = 30
+tokens = 100
 
 [tools]
 allowed = ["fetch_page", "search"]
@@ -123,7 +138,7 @@ When a limit is exceeded, a `NannyStop` exception is raised with one of these re
 
 | Reason              | Cause                                                                        |
 | ------------------- | ---------------------------------------------------------------------------- |
-| `BudgetExhausted`   | Cost ceiling reached                                                         |
+| `BudgetExhausted`   | Token ceiling reached                                                        |
 | `MaxStepsReached`   | Step limit reached                                                           |
 | `TimeoutExpired`    | Wall-clock limit reached                                                     |
 | `ToolDenied`        | Tool not in the allowlist                                                    |

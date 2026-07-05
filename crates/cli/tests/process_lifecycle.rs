@@ -46,7 +46,7 @@ cmd = "{cmd}"
 
 [limits]
 steps   = 100
-cost    = 1000
+tokens  = 1000
 timeout = {timeout_ms}
 
 [tools]
@@ -162,7 +162,7 @@ cmd = \"{slow_cmd}\"
 
 [limits]
 steps   = 100
-cost    = 1000
+tokens  = 1000
 timeout = 30000
 
 [limits.fast]
@@ -238,7 +238,7 @@ fn execution_stopped_is_always_last_line() {
     );
 }
 
-/// ExecutionStopped carries numeric `steps` and `cost_spent` fields.
+/// ExecutionStopped carries numeric `steps` and `tokens_spent` fields.
 ///
 /// This test uses `echo` — no bridge tool calls — so both values are
 /// legitimately 0. The point is to assert the fields are present and
@@ -272,8 +272,8 @@ fn execution_stopped_has_accounting_fields() {
         "ExecutionStopped must have a numeric `steps` field; got: {v}"
     );
     assert!(
-        v["cost_spent"].is_number(),
-        "ExecutionStopped must have a numeric `cost_spent` field; got: {v}"
+        v["tokens_spent"].is_number(),
+        "ExecutionStopped must have a numeric `tokens_spent` field; got: {v}"
     );
     assert!(
         v["elapsed_ms"].is_number(),
@@ -327,7 +327,7 @@ mode = "local"
 
 [limits]
 steps   = 10
-cost    = 100
+tokens  = 100
 timeout = 5000
 
 [observability]
@@ -376,7 +376,7 @@ cmd = "echo hello"
 
 [limits]
 steps   = 10
-cost    = 100
+tokens  = 100
 timeout = 5000
 
 [observability]
@@ -440,7 +440,7 @@ cmd = "echo hello"
 
 [limits]
 steps   = 10
-cost    = 100
+tokens  = 100
 timeout = 5000
 
 [observability]
@@ -511,7 +511,7 @@ cmd = "echo nanny-detection-test"
 
 [limits]
 steps   = 10
-cost    = 100
+tokens  = 100
 timeout = 10000
 
 [observability]
@@ -535,7 +535,7 @@ cmd = "echo unused"
 
 [limits]
 steps   = 100
-cost    = 1000
+tokens  = 1000
 timeout = 60000
 
 [observability]
@@ -618,7 +618,7 @@ cmd = "echo nanny-stale-test"
 
 [limits]
 steps   = 10
-cost    = 100
+tokens  = 100
 timeout = 10000
 
 [observability]

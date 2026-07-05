@@ -20,13 +20,13 @@ cmd = "python agent.py"   # required, the command nanny run executes
 
 [limits]
 steps   = 100
-cost    = 1000
+tokens  = 1000
 timeout = 30000
 
 # Named limit sets — inherit from [limits], override only declared fields.
 [limits.researcher]
 steps   = 200
-cost    = 5000
+tokens  = 5000
 timeout = 120000
 
 # ── Tools ─────────────────────────────────────────────────────────────────────
@@ -36,8 +36,8 @@ allowed = ["http_get", "read_file"]   # empty list denies every tool call
 
 # Per-tool configuration — tool name must match the function name in code.
 [tools.http_get]
-max_calls     = 10    # max number of calls in one execution
-cost_per_call = 20    # overrides the decorator/macro default if set
+max_calls       = 10    # max number of calls in one execution
+tokens_per_call = 20    # overrides the decorator/macro default if set
 
 # ── Observability ─────────────────────────────────────────────────────────────
 
@@ -83,7 +83,7 @@ The global execution ceiling. Any one limit stopping the agent stops the entire 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `steps` | integer | — | Maximum tool calls allowed. Requires SDK instrumentation. |
-| `cost` | integer | — | Maximum cost units allowed. Requires SDK instrumentation. |
+| `tokens` | integer | — | Maximum tokens allowed. Requires SDK instrumentation. |
 | `timeout` | integer (ms) | — | Maximum wall-clock time in milliseconds. Enforced for any process, no SDK required. |
 
 **Named limit sets** — `[limits.<name>]` inherits all fields from `[limits]` and overrides only the fields it declares:
@@ -91,16 +91,16 @@ The global execution ceiling. Any one limit stopping the agent stops the entire 
 ```toml
 [limits]
 steps   = 50
-cost    = 500
+tokens  = 500
 timeout = 15000
 
 [limits.researcher]
 steps   = 200       # overrides 50
-cost    = 5000      # overrides 500
+tokens  = 5000      # overrides 500
 # timeout inherits 15000
 
 [limits.reporter]
-cost    = 100       # overrides 500 only; steps and timeout inherit
+tokens  = 100       # overrides 500 only; steps and timeout inherit
 ```
 
 Activate a named set from the CLI:
@@ -123,14 +123,14 @@ Or from inside agent code using `@agent("researcher")` (Python) or `#[nanny::age
 
 ```toml
 [tools.http_get]
-max_calls     = 10
-cost_per_call = 20
+max_calls       = 10
+tokens_per_call = 20
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `max_calls` | integer | unlimited | Maximum number of calls to this tool in one execution. Exceeding this limit fires `RuleDenied` with `rule_name = "<tool>.max_calls"`. |
-| `cost_per_call` | integer | decorator/macro value | Cost units charged per call. Overrides the value declared in `@tool(cost=N)` or `#[tool(cost = N)]`. |
+| `tokens_per_call` | integer | decorator/macro value | Tokens charged per call. Overrides the value declared in `@tool(tokens=N)` or `#[tool(tokens = N)]`. |
 
 The tool name in `[tools.<name>]` must exactly match the function name used in the `@tool` decorator or `#[nanny::tool]` macro.
 
@@ -155,7 +155,7 @@ Proxy mode is active only when `allowed_hosts` is present and non-empty. An empt
 |-------|------|---------|-------------|
 | `allowed_hosts` | string array | `[]` | Hostnames the proxy may forward to. Supports exact names (`api.openai.com`) and `*.suffix` wildcard patterns. Loopback, link-local, and RFC-1918 ranges are always blocked regardless of this list. |
 
-See [HTTP proxy mode](/v0.2/guides/http-proxy-mode) for full details.
+See [HTTP proxy mode](/v0.3/guides/http-proxy-mode) for full details.
 
 ---
 

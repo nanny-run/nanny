@@ -28,7 +28,7 @@ def test_rule_allow_bridge_called(mock_bridge: HTTPServer) -> None:
     def allow_all(ctx: PolicyContext) -> bool:
         return True
 
-    @tool(cost=10)
+    @tool(tokens=10)
     def my_func() -> str:
         return "result"
 
@@ -48,7 +48,7 @@ def test_rule_deny_raises_rule_denied(mock_bridge: HTTPServer) -> None:
     def no_everything(ctx: PolicyContext) -> bool:
         return False
 
-    @tool(cost=10)
+    @tool(tokens=10)
     def my_func() -> str:
         return "result"
 
@@ -69,7 +69,7 @@ def test_rule_deny_tool_call_never_made(mock_bridge: HTTPServer) -> None:
     def always_deny(ctx: PolicyContext) -> bool:
         return False
 
-    @tool(cost=10)
+    @tool(tokens=10)
     def my_func() -> str:
         return "result"
 
@@ -89,7 +89,7 @@ def test_rule_deny_function_body_never_runs(mock_bridge: HTTPServer) -> None:
     def deny_rule(ctx: PolicyContext) -> bool:
         return False
 
-    @tool(cost=10)
+    @tool(tokens=10)
     def my_func() -> str:
         nonlocal executed
         executed = True
@@ -115,7 +115,7 @@ def test_rule_ctx_last_tool_args(mock_bridge: HTTPServer) -> None:
         captured.append(ctx)
         return True
 
-    @tool(cost=10)
+    @tool(tokens=10)
     def read_file(path: str) -> str:
         return ""
 
@@ -133,7 +133,7 @@ def test_rule_ctx_requested_tool(mock_bridge: HTTPServer) -> None:
         captured.append(ctx)
         return True
 
-    @tool(cost=10)
+    @tool(tokens=10)
     def search_web(query: str) -> str:
         return ""
 
@@ -151,7 +151,7 @@ def test_rule_ctx_bridge_fields_populated_from_status(mock_bridge: HTTPServer) -
     mock_bridge.expect_oneshot_request("/status", method="GET").respond_with_json({
         "state": "running",
         "step": 7,
-        "cost_spent": 70,
+        "tokens_spent": 70,
         "elapsed_ms": 3500,
         "tool_call_counts": {"file_reader": 7},
         "tool_call_history": ["file_reader"] * 7,
@@ -163,7 +163,7 @@ def test_rule_ctx_bridge_fields_populated_from_status(mock_bridge: HTTPServer) -
         captured.append(ctx)
         return True
 
-    @tool(cost=10)
+    @tool(tokens=10)
     def file_reader(path: str) -> str:
         return ""
 
@@ -171,7 +171,7 @@ def test_rule_ctx_bridge_fields_populated_from_status(mock_bridge: HTTPServer) -
     ctx = captured[0]
     # Bridge-tracked counters come from /status
     assert ctx.step_count == 7
-    assert ctx.cost_units_spent == 70
+    assert ctx.tokens_spent == 70
     assert ctx.elapsed_ms == 3500
     assert ctx.tool_call_counts == {"file_reader": 7}
     assert ctx.tool_call_history == ["file_reader"] * 7
@@ -198,7 +198,7 @@ def test_rule_ctx_status_failure_fails_closed(mock_bridge: HTTPServer) -> None:
     def should_not_run(ctx: PolicyContext) -> bool:  # pragma: no cover
         return True
 
-    @tool(cost=0)
+    @tool(tokens=0)
     def my_func() -> str:  # pragma: no cover
         return "ok"
 
@@ -226,7 +226,7 @@ def test_multiple_rules_all_evaluated_when_passing(mock_bridge: HTTPServer) -> N
         call_log.append("b")
         return True
 
-    @tool(cost=10)
+    @tool(tokens=10)
     def my_func() -> str:
         return "ok"
 
@@ -248,7 +248,7 @@ def test_multiple_rules_first_deny_stops_evaluation(mock_bridge: HTTPServer) -> 
         call_log.append("second")
         return True
 
-    @tool(cost=10)
+    @tool(tokens=10)
     def my_func() -> str:
         return "ok"
 
@@ -279,7 +279,7 @@ def test_rules_evaluated_in_registration_order(mock_bridge: HTTPServer) -> None:
         call_log.append("third")
         return True
 
-    @tool(cost=10)
+    @tool(tokens=10)
     def my_func() -> str:
         return "ok"
 
@@ -313,7 +313,7 @@ def test_rule_deny_stop_payload_contains_tool_and_rule_name(mock_bridge: HTTPSer
     def block_dotenv(ctx: PolicyContext) -> bool:
         return False
 
-    @tool(cost=5)
+    @tool(tokens=5)
     def read_file(path: str) -> str:
         return ""
 
@@ -339,7 +339,7 @@ def test_rule_deny_stop_payload_uses_decorated_function_name(mock_bridge: HTTPSe
     def deny_all(ctx: PolicyContext) -> bool:
         return False
 
-    @tool(cost=5)
+    @tool(tokens=5)
     def fetch_url(url: str) -> str:
         return ""
 
@@ -365,7 +365,7 @@ def test_passthrough_rules_not_evaluated(monkeypatch: pytest.MonkeyPatch) -> Non
 
     monkeypatch.delenv("NANNY_BRIDGE_PORT", raising=False)
 
-    @tool(cost=10)
+    @tool(tokens=10)
     def my_func() -> str:
         return "direct"
 

@@ -297,9 +297,9 @@ def get_status() -> PolicyContext:
     return PolicyContext.from_dict(resp.json())
 
 
-def call_tool(tool_name: str, cost: int, args: dict[str, Any]) -> None:
+def call_tool(tool_name: str, tokens: int, args: dict[str, Any]) -> None:
     """POST /tool/call — raises a NannyStop subclass if denied, returns None if allowed."""
-    payload = {"tool": tool_name, "cost": cost, "args": args}
+    payload = {"tool": tool_name, "tokens": tokens, "args": args}
     with _make_client(timeout=10.0) as c:
         resp = c.post("/tool/call", json=payload, headers=_headers())
     resp.raise_for_status()

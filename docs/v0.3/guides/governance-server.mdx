@@ -9,7 +9,7 @@ For most projects, `nanny run` is all you need. It starts a local enforcement br
 
 Use the governance server when agents run in **separate processes or on separate machines** and you need a shared enforcement boundary across all of them. Common scenarios:
 
-- **Microservices:** three containers, each running an agent, all sharing a single cost budget
+- **Microservices:** three containers, each running an agent, all sharing a single token budget
 - **CI workers:** a coordinator spins up worker processes on different machines; you want each worker's tool calls counted against the same budget
 - **Development clusters:** a Kubernetes pod runs the server; a local dev agent connects to it while you iterate
 
@@ -134,15 +134,15 @@ When an agent is launched with `nanny run` and these variables are set, it conne
 
 ## Shared budget
 
-All agents connected to the same governance server share one enforcement state. Budget, steps, and timeout are tracked across all of them simultaneously.
+All agents connected to the same governance server share one enforcement state. Token budget, steps, and timeout are tracked across all of them simultaneously.
 
 This means:
-- If Agent A spends 400 cost units and Agent B spends 600, and the budget is 1000, the next call from either agent stops the execution — regardless of which agent makes it.
+- If Agent A spends 400 tokens and Agent B spends 600, and the budget is 1000, the next call from either agent stops the execution — regardless of which agent makes it.
 - A loop in Agent B counts toward the global step limit alongside Agent A's steps.
 
-The governance server is a **shared execution boundary** for a team of agents working on one task. Each agent is subject to the same limits as every other agent.
+The governance server is a **shared enforcement layer** for a team of agents working on one task. Each agent is subject to the same limits as every other agent.
 
-**Named limits still work the same way.** When an agent activates `@agent("researcher")`, it enters the `[limits.researcher]` scope from `nanny.toml`. That scope's ceiling applies for the duration of that function. The shared budget still tracks total cost across all agents — a named scope does not isolate budget from other agents, it only sets the ceiling for that scope.
+**Named limits still work the same way.** When an agent activates `@agent("researcher")`, it enters the `[limits.researcher]` scope from `nanny.toml`. That scope's ceiling applies for the duration of that function. The shared token budget still tracks totals across all agents — a named scope does not isolate budget from other agents, it only sets the ceiling for that scope.
 
 ---
 
@@ -216,7 +216,7 @@ Partial imports are supported: omit any key to leave the existing file unchanged
 
 The governance server can also act as an HTTP CONNECT proxy on the same port. Any outbound HTTP or HTTPS request your agent makes through the proxy is subject to Nanny's allowlist — even calls from code that has no `@nanny_tool` decorator.
 
-See [HTTP proxy mode](/v0.2/guides/http-proxy-mode) for setup and configuration.
+See [HTTP proxy mode](/v0.3/guides/http-proxy-mode) for setup and configuration.
 
 ---
 

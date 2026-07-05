@@ -36,7 +36,7 @@ def test_bridge_called_and_result_returned(mock_bridge: HTTPServer) -> None:
     call_log: list[str] = []
     mock_bridge.expect_request("/tool/call", method="POST").respond_with_json(_allow())
 
-    @tool(cost=10)
+    @tool(tokens=10)
     def my_func() -> str:
         call_log.append("ran")
         return "result"
@@ -48,10 +48,10 @@ def test_bridge_called_and_result_returned(mock_bridge: HTTPServer) -> None:
 def test_payload_tool_name_and_cost(mock_bridge: HTTPServer) -> None:
     """POST body includes the function name as 'tool' and the declared cost."""
     mock_bridge.expect_request(
-        "/tool/call", method="POST", json={"tool": "fetch", "cost": 25, "args": {}}
+        "/tool/call", method="POST", json={"tool": "fetch", "tokens": 25, "args": {}}
     ).respond_with_json(_allow())
 
-    @tool(cost=25)
+    @tool(tokens=25)
     def fetch() -> str:
         return "ok"
 
@@ -64,10 +64,10 @@ def test_payload_args_stringified(mock_bridge: HTTPServer) -> None:
     mock_bridge.expect_request(
         "/tool/call",
         method="POST",
-        json={"tool": "read_file", "cost": 10, "args": {"path": "src/main.rs"}},
+        json={"tool": "read_file", "tokens": 10, "args": {"path": "src/main.rs"}},
     ).respond_with_json(_allow())
 
-    @tool(cost=10)
+    @tool(tokens=10)
     def read_file(path: str) -> str:
         return ""
 
@@ -80,10 +80,10 @@ def test_multiple_args_all_sent(mock_bridge: HTTPServer) -> None:
     mock_bridge.expect_request(
         "/tool/call",
         method="POST",
-        json={"tool": "write_file", "cost": 5, "args": {"path": "out.txt", "content": "hello"}},
+        json={"tool": "write_file", "tokens": 5, "args": {"path": "out.txt", "content": "hello"}},
     ).respond_with_json(_allow())
 
-    @tool(cost=5)
+    @tool(tokens=5)
     def write_file(path: str, content: str) -> None:
         pass
 
@@ -99,7 +99,7 @@ def test_multiple_args_all_sent(mock_bridge: HTTPServer) -> None:
 def test_deny_budget_exhausted(mock_bridge: HTTPServer) -> None:
     mock_bridge.expect_request("/tool/call").respond_with_json(_deny("BudgetExhausted"))
 
-    @tool(cost=10)
+    @tool(tokens=10)
     def my_func() -> str:
         return "result"
 
@@ -110,7 +110,7 @@ def test_deny_budget_exhausted(mock_bridge: HTTPServer) -> None:
 def test_deny_max_steps_reached(mock_bridge: HTTPServer) -> None:
     mock_bridge.expect_request("/tool/call").respond_with_json(_deny("MaxStepsReached"))
 
-    @tool(cost=10)
+    @tool(tokens=10)
     def my_func() -> str:
         return "result"
 
@@ -123,7 +123,7 @@ def test_deny_tool_denied_carries_name(mock_bridge: HTTPServer) -> None:
         _deny("ToolDenied", tool_name="write_file")
     )
 
-    @tool(cost=10)
+    @tool(tokens=10)
     def my_func() -> str:
         return "result"
 
@@ -137,7 +137,7 @@ def test_deny_rule_denied_carries_name(mock_bridge: HTTPServer) -> None:
         _deny("RuleDenied", rule_name="no_spiral")
     )
 
-    @tool(cost=10)
+    @tool(tokens=10)
     def my_func() -> str:
         return "result"
 
@@ -151,7 +151,7 @@ def test_function_body_never_runs_on_deny(mock_bridge: HTTPServer) -> None:
     executed = False
     mock_bridge.expect_request("/tool/call").respond_with_json(_deny("BudgetExhausted"))
 
-    @tool(cost=10)
+    @tool(tokens=10)
     def my_func() -> str:
         nonlocal executed
         executed = True
@@ -171,7 +171,7 @@ def test_passthrough_calls_function_directly(monkeypatch: pytest.MonkeyPatch) ->
     """Without NANNY_BRIDGE_PORT the function runs directly, no network calls."""
     monkeypatch.delenv("NANNY_BRIDGE_PORT", raising=False)
 
-    @tool(cost=10)
+    @tool(tokens=10)
     def my_func() -> str:
         return "direct"
 
@@ -186,7 +186,7 @@ def test_passthrough_calls_function_directly(monkeypatch: pytest.MonkeyPatch) ->
 async def test_async_allowed(mock_bridge: HTTPServer) -> None:
     mock_bridge.expect_request("/tool/call").respond_with_json(_allow())
 
-    @tool(cost=10)
+    @tool(tokens=10)
     async def my_async_func() -> str:
         return "async result"
 
@@ -196,7 +196,7 @@ async def test_async_allowed(mock_bridge: HTTPServer) -> None:
 async def test_async_denied_raises(mock_bridge: HTTPServer) -> None:
     mock_bridge.expect_request("/tool/call").respond_with_json(_deny("BudgetExhausted"))
 
-    @tool(cost=10)
+    @tool(tokens=10)
     async def my_async_func() -> str:
         return "result"
 
@@ -208,7 +208,7 @@ async def test_async_body_not_called_on_deny(mock_bridge: HTTPServer) -> None:
     executed = False
     mock_bridge.expect_request("/tool/call").respond_with_json(_deny("MaxStepsReached"))
 
-    @tool(cost=10)
+    @tool(tokens=10)
     async def my_async_func() -> str:
         nonlocal executed
         executed = True

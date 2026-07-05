@@ -9,7 +9,7 @@ from nanny_sdk import tool as nanny_tool
 
 
 @crew_tool
-@nanny_tool(cost=3)
+@nanny_tool(tokens=60)
 def load_metrics(path: str) -> str:
     """Load a metrics CSV from path and return a JSON summary.
 

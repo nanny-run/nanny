@@ -21,7 +21,7 @@ pub struct RuntimeComponents {
     /// Hard limits passed to the Executor.
     pub limits: Limits,
 
-    /// In-memory budget ledger. Starts at `max_cost_units` and counts down.
+    /// In-memory budget ledger. Starts at `max_tokens` and counts down.
     pub ledger: FakeLedger,
 
     /// All registered built-in tools. The policy controls which are permitted.
@@ -45,7 +45,7 @@ pub struct RuntimeComponents {
 pub fn build_from_config(config: &NannyConfig) -> RuntimeComponents {
     let limits = Limits {
         max_steps: config.limits.max_steps,
-        max_cost_units: config.limits.max_cost_units,
+        max_tokens: config.limits.max_tokens,
         timeout_ms: config.limits.timeout_ms,
     };
     build_components(config, limits)
@@ -68,7 +68,7 @@ pub fn build_from_config_named(
 
     let limits = Limits {
         max_steps: resolved.max_steps,
-        max_cost_units: resolved.max_cost_units,
+        max_tokens: resolved.max_tokens,
         timeout_ms: resolved.timeout_ms,
     };
 
@@ -81,12 +81,12 @@ pub fn build_from_config_named(
 /// Shared by both build_from_config and build_from_config_named.
 fn build_components(config: &NannyConfig, limits: Limits) -> RuntimeComponents {
     // Ledger starts at the full budget.
-    let ledger = FakeLedger::new(limits.max_cost_units);
+    let ledger = FakeLedger::new(limits.max_tokens);
 
-    // Registry with cost_per_call overrides from [tools.<name>].
+    // Registry with tokens_per_call overrides from [tools.<name>].
     let mut registry = nanny_runtime::default_registry();
     for (tool_name, tool_cfg) in &config.tools.per_tool {
-        if let Some(cost) = tool_cfg.cost_per_call {
+        if let Some(cost) = tool_cfg.tokens_per_call {
             registry.set_cost_override(tool_name, cost);
         }
     }
@@ -122,13 +122,13 @@ pub fn build_bridge_components(
                 let l = if enforce_ceiling {
                     Limits {
                         max_steps:      partial.max_steps.min(limits.max_steps),
-                        max_cost_units: partial.max_cost_units.min(limits.max_cost_units),
+                        max_tokens: partial.max_tokens.min(limits.max_tokens),
                         timeout_ms:     partial.timeout_ms.min(limits.timeout_ms),
                     }
                 } else {
                     Limits {
                         max_steps:      partial.max_steps,
-                        max_cost_units: partial.max_cost_units,
+                        max_tokens: partial.max_tokens,
                         timeout_ms:     partial.timeout_ms,
                     }
                 };
@@ -146,7 +146,7 @@ pub fn build_bridge_components(
 
     let mut registry = nanny_runtime::default_registry();
     for (tool_name, tool_cfg) in &config.tools.per_tool {
-        if let Some(cost) = tool_cfg.cost_per_call {
+        if let Some(cost) = tool_cfg.tokens_per_call {
             registry.set_cost_override(tool_name, cost);
         }
     }
@@ -178,7 +178,7 @@ mod tests {
             start: None,
             limits: LimitsConfig {
                 max_steps: 42,
-                max_cost_units: 500,
+                max_tokens: 500,
                 timeout_ms: 15_000,
                 named: HashMap::new(),
             },
@@ -198,7 +198,7 @@ mod tests {
             "researcher".to_string(),
             PartialLimitsConfig {
                 max_steps: Some(200),
-                max_cost_units: Some(2000),
+                max_tokens: Some(2000),
                 timeout_ms: None, // inherits from global
             },
         );
@@ -208,7 +208,7 @@ mod tests {
             start: None,
             limits: LimitsConfig {
                 max_steps: 42,
-                max_cost_units: 500,
+                max_tokens: 500,
                 timeout_ms: 15_000,
                 named,
             },
@@ -227,16 +227,16 @@ mod tests {
         let components = build_from_config(&test_config());
 
         assert_eq!(components.limits.max_steps, 42);
-        assert_eq!(components.limits.max_cost_units, 500);
+        assert_eq!(components.limits.max_tokens, 500);
         assert_eq!(components.limits.timeout_ms, 15_000);
     }
 
     #[test]
-    fn ledger_starts_at_max_cost_units() {
+    fn ledger_starts_at_max_tokens() {
         let config = test_config();
         let components = build_from_config(&config);
 
-        assert_eq!(components.ledger.balance(), config.limits.max_cost_units);
+        assert_eq!(components.ledger.balance(), config.limits.max_tokens);
     }
 
     #[test]
@@ -256,7 +256,7 @@ mod tests {
         let c2 = build_from_config(&config);
 
         assert_eq!(c1.limits.max_steps, c2.limits.max_steps);
-        assert_eq!(c1.limits.max_cost_units, c2.limits.max_cost_units);
+        assert_eq!(c1.limits.max_tokens, c2.limits.max_tokens);
         assert_eq!(c1.limits.timeout_ms, c2.limits.timeout_ms);
         assert_eq!(c1.ledger.balance(), c2.ledger.balance());
     }
@@ -268,7 +268,7 @@ mod tests {
             start: None,
             limits: LimitsConfig {
                 max_steps: 10,
-                max_cost_units: 100,
+                max_tokens: 100,
                 timeout_ms: 5_000,
                 named: HashMap::new(),
             },
@@ -294,7 +294,7 @@ mod tests {
 
         // Overridden fields
         assert_eq!(components.limits.max_steps, 200);
-        assert_eq!(components.limits.max_cost_units, 2000);
+        assert_eq!(components.limits.max_tokens, 2000);
 
         // Inherited field (timeout_ms is None in partial, inherits from global 15_000)
         assert_eq!(components.limits.timeout_ms, 15_000);
@@ -322,7 +322,7 @@ mod tests {
             start: None,
             limits: LimitsConfig {
                 max_steps: 10,
-                max_cost_units: 100,
+                max_tokens: 100,
                 timeout_ms: 5_000,
                 named: HashMap::new(),
             },
@@ -351,7 +351,7 @@ mod tests {
             "big".to_string(),
             PartialLimitsConfig {
                 max_steps: Some(500),
-                max_cost_units: Some(9999),
+                max_tokens: Some(9999),
                 timeout_ms: Some(60_000),
             },
         );
@@ -360,7 +360,7 @@ mod tests {
             start: None,
             limits: LimitsConfig {
                 max_steps: 100,
-                max_cost_units: 1000,
+                max_tokens: 1000,
                 timeout_ms: 30_000,
                 named,
             },
@@ -369,11 +369,11 @@ mod tests {
             managed: None,
             proxy: None,
         };
-        let ceiling = Limits { max_steps: 100, max_cost_units: 1000, timeout_ms: 30_000 };
+        let ceiling = Limits { max_steps: 100, max_tokens: 1000, timeout_ms: 30_000 };
         let components = build_bridge_components(&config, ceiling, true);
         let big = components.named_limits.get("big").expect("big must be resolved");
         assert_eq!(big.max_steps, 100, "steps must be capped to CLI ceiling");
-        assert_eq!(big.max_cost_units, 1000, "cost must be capped to CLI ceiling");
+        assert_eq!(big.max_tokens, 1000, "cost must be capped to CLI ceiling");
         assert_eq!(big.timeout_ms, 30_000, "timeout must be capped to CLI ceiling");
     }
 
@@ -385,7 +385,7 @@ mod tests {
             "big".to_string(),
             PartialLimitsConfig {
                 max_steps: Some(500),
-                max_cost_units: Some(9999),
+                max_tokens: Some(9999),
                 timeout_ms: Some(60_000),
             },
         );
@@ -394,7 +394,7 @@ mod tests {
             start: None,
             limits: LimitsConfig {
                 max_steps: 100,
-                max_cost_units: 1000,
+                max_tokens: 1000,
                 timeout_ms: 30_000,
                 named,
             },
@@ -403,11 +403,11 @@ mod tests {
             managed: None,
             proxy: None,
         };
-        let base = Limits { max_steps: 100, max_cost_units: 1000, timeout_ms: 30_000 };
+        let base = Limits { max_steps: 100, max_tokens: 1000, timeout_ms: 30_000 };
         let components = build_bridge_components(&config, base, false);
         let big = components.named_limits.get("big").expect("big must be resolved");
         assert_eq!(big.max_steps, 500, "steps must not be capped without enforce flag");
-        assert_eq!(big.max_cost_units, 9999, "cost must not be capped without enforce flag");
+        assert_eq!(big.max_tokens, 9999, "cost must not be capped without enforce flag");
         assert_eq!(big.timeout_ms, 60_000, "timeout must not be capped without enforce flag");
     }
 
@@ -419,14 +419,14 @@ mod tests {
         let mut per_tool = HashMap::new();
         per_tool.insert(
             "http_get".to_string(),
-            ToolConfig { max_calls: None, cost_per_call: Some(25) },
+            ToolConfig { max_calls: None, tokens_per_call: Some(25) },
         );
         let config = NannyConfig {
             runtime: RuntimeConfig::default(),
             start: None,
             limits: LimitsConfig {
                 max_steps: 10,
-                max_cost_units: 500,
+                max_tokens: 500,
                 timeout_ms: 5_000,
                 named: HashMap::new(),
             },

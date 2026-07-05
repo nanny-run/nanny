@@ -55,7 +55,7 @@ Add a new tool to the standard library. Each built-in tool lives in `crates/runt
 Use `crates/runtime/src/tools/http_get.rs` as the template. A tool must:
 
 - Implement the `Tool` trait from `nanny-core`
-- Declare a fixed `name()` and `cost_per_call()` default
+- Declare a fixed `name()` and `declared_cost()` default
 - Be deterministic and side-effect-bounded (not network-stateful)
 
 ### Config validation
@@ -131,8 +131,7 @@ This repository has three doc surfaces. Keep each one in scope and consistent wi
 Entry points:
 
 - **Docs site**
-  - `docs/v0.2/index.mdx` (current version)
-  - `docs/v0.1/index.mdx` (previous version — maintained for existing links)
+  - `docs/v0.3/index.mdx` (current version)
   - `docs/docs.json` (navigation, versions, redirects)
 - **Root docs**
   - `README.md` (product overview and first-run path)

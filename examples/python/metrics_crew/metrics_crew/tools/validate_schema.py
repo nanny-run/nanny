@@ -8,7 +8,7 @@ from nanny_sdk import tool as nanny_tool
 
 
 @crew_tool
-@nanny_tool(cost=1)
+@nanny_tool(tokens=20)
 def validate_schema(path: str) -> str:
     """Validate that the metrics CSV at path has all required columns.
 

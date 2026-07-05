@@ -11,7 +11,7 @@
 //
 // HTTP fetching uses nanny's built-in http_get tool, executed bridge-side.
 // The child process never opens a network connection — nanny enforces all
-// fetch policy (allowlist, cost, step limits) before making the request.
+// fetch policy (allowlist, token budget, step limits) before making the request.
 //
 // Run:
 //   nanny run                            # researches a default topic

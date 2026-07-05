@@ -42,7 +42,7 @@ Always the first event. Emitted immediately before the child process is spawned.
   "command": "python agent.py",
   "limits": {
     "steps": 100,
-    "cost": 1000,
+    "tokens": 1000,
     "timeout": 30000
   }
 }
@@ -58,13 +58,13 @@ Always the last event. Emitted on every exit path — clean exit, timeout, error
   "ts": 1711234572000,
   "reason": "AgentCompleted",
   "steps": 7,
-  "cost_spent": 70,
+  "tokens_spent": 70,
   "elapsed_ms": 4823
 }
 ```
 
 If the process was killed, `reason` will be one of the stop reasons listed in
-[Limits & Enforcement](/v0.1/concepts/limits).
+[Limits & Enforcement](/v0.3/concepts/limits).
 
 ## SDK events
 
@@ -81,7 +81,7 @@ When the Rust SDK macros or Python SDK decorators are active, additional events 
 | `AgentScopeExited` | When a `#[nanny::agent("name")]` function returns |
 
 `ToolDenied` and `RuleDenied` are distinct denial events — `ToolDenied` means the tool was not permitted at all; `RuleDenied` means the tool was permitted but a rule blocked this specific call.
-`ToolFailed` is different from both — the tool was allowed and called, but encountered a runtime error. No cost is charged on failure.
+`ToolFailed` is different from both — the tool was allowed and called, but encountered a runtime error. No tokens are charged on failure.
 
 ## Using the log
 

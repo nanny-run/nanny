@@ -10,7 +10,7 @@ from nanny_sdk import tool as nanny_tool
 
 
 @crew_tool
-@nanny_tool(cost=8)
+@nanny_tool(tokens=160)
 def generate_chart(metric: str, path: str, output_dir: str = "reports") -> str:
     """Generate a Plotly time-series line chart for one metric and save it as HTML.
 

@@ -104,18 +104,18 @@ Every proxied request produces an event in the NDJSON log:
 **Denied request (not in allowlist):**
 ```json
 {"event":"ToolDenied","ts":1711234567320,"tool":"http_proxy","target":"malicious.example.com:443"}
-{"event":"ExecutionStopped","ts":1711234567321,"reason":"ToolDenied","steps":3,"cost_spent":30,"elapsed_ms":1250}
+{"event":"ExecutionStopped","ts":1711234567321,"reason":"ToolDenied","steps":3,"tokens_spent":30,"elapsed_ms":1250}
 ```
 
 A proxy denial is a hard stop — the same outcome as any other `ToolDenied` event. The agent process exits immediately.
 
 ---
 
-## Cost accounting and HTTPS content
+## Token accounting and HTTPS content
 
 Two things to be aware of when combining proxy mode with the rest of Nanny:
 
-- **Cost accounting requires `@nanny_tool`.** Proxy requests are logged as events but not charged against your cost budget. For cost-tracked HTTP calls, decorate the function with `@nanny_tool` or use `nanny::http_get`.
+- **Token accounting requires `@tool`.** Proxy requests are logged as events but not charged against your token budget. For token-tracked HTTP calls, decorate the function with `@tool` or use `nanny::http_get`.
 - **HTTPS content is not inspected.** The proxy allows or denies by hostname. It cannot read request or response bodies inside HTTPS tunnels.
 
 ---

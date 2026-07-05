@@ -7,7 +7,7 @@ the file is ever written. Demonstrates allowlist enforcement.
 from nanny_sdk import tool
 
 
-@tool(cost=5)
+@tool(tokens=100)
 def write_file(path: str, content: str) -> str:
     """Write content to a file at path."""
     with open(path, "w") as f:

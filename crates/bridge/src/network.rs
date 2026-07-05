@@ -44,7 +44,7 @@ use super::{
     append_event, now_ms,
     BridgeComponents, BridgeResp, BridgeState, ContentType,
     handle_agent_enter, handle_agent_exit, handle_events, handle_health,
-    handle_rule_evaluate, handle_status, handle_step, handle_stop,
+    handle_llm_usage, handle_rule_evaluate, handle_status, handle_step, handle_stop,
     handle_tool_call, init_shared_state, is_stopped,
 };
 
@@ -195,6 +195,13 @@ async fn route_step(State(app): State<AppState>) -> Response {
         return (StatusCode::from_u16(410).unwrap(), r#"{"error":"execution stopped"}"#).into_response();
     }
     to_response(handle_step(&app.shared))
+}
+
+async fn route_llm_usage(State(app): State<AppState>, body: Bytes) -> Response {
+    if is_stopped(&app.shared) {
+        return (StatusCode::from_u16(410).unwrap(), r#"{"error":"execution stopped"}"#).into_response();
+    }
+    to_response(handle_llm_usage(&body, &app.shared))
 }
 
 // ── IP / host SSRF guard ──────────────────────────────────────────────────────
@@ -437,6 +444,7 @@ fn build_router(app: AppState) -> Router {
         .route("/agent/enter",   post(route_agent_enter))
         .route("/agent/exit",    post(route_agent_exit))
         .route("/step",          post(route_step))
+        .route("/llm/usage",     post(route_llm_usage))
         // Token auth — runs before every handler.
         .layer(middleware::from_fn_with_state(app.clone(), require_token))
         // Rate limiting — outermost layer, runs first.
@@ -719,6 +727,56 @@ impl NetworkServer {
     }
 }
 
+// ── Test cert generator (used by network tests) ───────────────────────────────
+
+/// Generate a minimal test cert bundle using rcgen — called only from tests.
+#[cfg(test)]
+fn gen_certs_for_test(dir: &Path) {
+    use rcgen::{BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
+    use time::OffsetDateTime;
+
+    let not_before = OffsetDateTime::now_utc();
+    let not_after  = not_before + time::Duration::days(30);
+
+    // CA
+    let mut ca_dn = DistinguishedName::new();
+    ca_dn.push(DnType::CommonName, "Test CA");
+    let mut ca_params = CertificateParams::new(vec![]).unwrap();
+    ca_params.distinguished_name = ca_dn;
+    ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    ca_params.not_before = not_before;
+    ca_params.not_after = not_after;
+    let ca_key = KeyPair::generate().unwrap();
+    let ca_cert = ca_params.self_signed(&ca_key).unwrap();
+
+    // Server cert
+    let mut srv_dn = DistinguishedName::new();
+    srv_dn.push(DnType::CommonName, "Test Server");
+    let mut srv_params = CertificateParams::new(vec!["localhost".to_string(), "127.0.0.1".to_string()]).unwrap();
+    srv_params.distinguished_name = srv_dn;
+    srv_params.not_before = not_before;
+    srv_params.not_after = not_after;
+    let srv_key = KeyPair::generate().unwrap();
+    let srv_cert = srv_params.signed_by(&srv_key, &ca_cert, &ca_key).unwrap();
+
+    // Client cert
+    let mut cli_dn = DistinguishedName::new();
+    cli_dn.push(DnType::CommonName, "Test Client");
+    let mut cli_params = CertificateParams::new(vec!["nanny-client".to_string()]).unwrap();
+    cli_params.distinguished_name = cli_dn;
+    cli_params.not_before = not_before;
+    cli_params.not_after = not_after;
+    let cli_key = KeyPair::generate().unwrap();
+    let cli_cert = cli_params.signed_by(&cli_key, &ca_cert, &ca_key).unwrap();
+
+    std::fs::write(dir.join("ca.crt"),     ca_cert.pem()).unwrap();
+    std::fs::write(dir.join("ca.key"),     ca_key.serialize_pem()).unwrap();
+    std::fs::write(dir.join("server.crt"), srv_cert.pem()).unwrap();
+    std::fs::write(dir.join("server.key"), srv_key.serialize_pem()).unwrap();
+    std::fs::write(dir.join("client.crt"), cli_cert.pem()).unwrap();
+    std::fs::write(dir.join("client.key"), cli_key.serialize_pem()).unwrap();
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -877,7 +935,7 @@ mod tests {
     fn test_components() -> BridgeComponents {
         BridgeComponents {
             registry: ToolRegistry::new(),
-            limits: Limits { max_steps: 100, max_cost_units: 1000, timeout_ms: 30_000 },
+            limits: Limits { max_steps: 100, max_tokens: 1000, timeout_ms: 30_000 },
             named_limits: HashMap::new(),
             allowed_tools: vec!["echo".to_string()],
             per_tool_max_calls: HashMap::new(),
@@ -1192,8 +1250,9 @@ mod tests {
     ) -> impl std::io::Read + std::io::Write {
         use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 
+        let mut ca_reader = ca_pem;
         let ca_certs: Vec<CertificateDer<'static>> =
-            rustls_pemfile::certs(&mut ca_pem.as_ref())
+            rustls_pemfile::certs(&mut ca_reader)
                 .collect::<std::result::Result<Vec<_>, _>>()
                 .unwrap();
         let mut root_store = rustls::RootCertStore::empty();
@@ -1201,12 +1260,14 @@ mod tests {
             root_store.add(cert).unwrap();
         }
 
+        let mut client_cert_reader = client_cert_pem;
         let client_certs: Vec<CertificateDer<'static>> =
-            rustls_pemfile::certs(&mut client_cert_pem.as_ref())
+            rustls_pemfile::certs(&mut client_cert_reader)
                 .collect::<std::result::Result<Vec<_>, _>>()
                 .unwrap();
+        let mut client_key_reader = client_key_pem;
         let client_key: PrivateKeyDer<'static> =
-            rustls_pemfile::private_key(&mut client_key_pem.as_ref())
+            rustls_pemfile::private_key(&mut client_key_reader)
                 .unwrap()
                 .unwrap();
 
@@ -1587,7 +1648,7 @@ mod tests {
 
     /// Build a blocking mTLS reqwest client that trusts the test CA and
     /// presents the test client cert.
-    fn make_mtls_client(dir: &PathBuf, _port: u16) -> reqwest::blocking::Client {
+    fn make_mtls_client(dir: &Path, _port: u16) -> reqwest::blocking::Client {
         let ca_pem   = std::fs::read(dir.join("ca.crt")).unwrap();
         let ca_cert  = reqwest::Certificate::from_pem(&ca_pem).unwrap();
         let cert_pem = std::fs::read(dir.join("client.crt")).unwrap();
@@ -1609,7 +1670,7 @@ mod tests {
         components: BridgeComponents,
         port: u16,
         token: String,
-        dir: &PathBuf,
+        dir: &Path,
         rps: u32,
     ) -> axum_server::Handle {
         let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
@@ -1653,11 +1714,11 @@ mod tests {
         handle
     }
 
-    /// BridgeComponents with a custom max_cost_units ceiling.
-    fn test_components_with_cost(max_cost: u64) -> BridgeComponents {
+    /// BridgeComponents with a custom max_tokens ceiling.
+    fn test_components_with_cost(max_tokens: u64) -> BridgeComponents {
         BridgeComponents {
             registry:          ToolRegistry::new(),
-            limits:            Limits { max_steps: 100, max_cost_units: max_cost, timeout_ms: 30_000 },
+            limits:            Limits { max_steps: 100, max_tokens, timeout_ms: 30_000 },
             named_limits:      HashMap::new(),
             allowed_tools:     vec!["http_get".to_string()],
             per_tool_max_calls: HashMap::new(),
@@ -1666,12 +1727,12 @@ mod tests {
 
     /// BridgeComponents with a "researcher" named limit for enter/exit tests.
     fn test_components_with_named_limit() -> BridgeComponents {
-        let researcher = Limits { max_steps: 50, max_cost_units: 500, timeout_ms: 60_000 };
+        let researcher = Limits { max_steps: 50, max_tokens: 500, timeout_ms: 60_000 };
         let mut named  = HashMap::new();
         named.insert("researcher".to_string(), researcher);
         BridgeComponents {
             registry:          ToolRegistry::new(),
-            limits:            Limits { max_steps: 100, max_cost_units: 1000, timeout_ms: 30_000 },
+            limits:            Limits { max_steps: 100, max_tokens: 1000, timeout_ms: 30_000 },
             named_limits:      named,
             allowed_tools:     vec!["http_get".to_string()],
             per_tool_max_calls: HashMap::new(),
@@ -1793,18 +1854,18 @@ mod tests {
     #[test]
     fn shared_budget_across_clients() {
         // Two independent mTLS clients connect to ONE server (shared budget,
-        // max_cost = 25).
+        // max_tokens = 25).
         //
-        // Call 1 (client 1, cost 10) → allowed (total 10)
-        // Call 2 (client 2, cost 10) → allowed (total 20, still below 25)
-        // Call 3 (client 1, cost 10) → LimitsPolicy pre-check: 20+10=30 > 25
-        //                               → denied BudgetExhausted (returns 200 JSON "denied")
-        // Call 4 (client 2)          → 410 (execution stopped after call 3 denial)
+        // Call 1 (client 1, tokens 10) → allowed (total 10)
+        // Call 2 (client 2, tokens 10) → allowed (total 20, still below 25)
+        // Call 3 (client 1, tokens 10) → LimitsPolicy pre-check: 20+10=30 > 25
+        //                                → denied BudgetExhausted (returns 200 JSON "denied")
+        // Call 4 (client 2)            → 410 (execution stopped after call 3 denial)
         //
-        // Note: using max_cost=25 (not 20) is intentional.  With max_cost=20,
+        // Note: using max_tokens=25 (not 20) is intentional.  With max_tokens=20,
         // call 2 triggers the post-check boundary (20 >= 20 → mark_stopped, but
         // returns "allowed").  Call 3 then receives 410 instead of a "denied" JSON
-        // body.  max_cost=25 ensures call 3 hits the LimitsPolicy pre-check
+        // body.  max_tokens=25 ensures call 3 hits the LimitsPolicy pre-check
         // (30 > 25) which returns a proper denial response.
         let dir = test_certs_dir();
         gen_certs_for_test(&dir);
@@ -1828,7 +1889,7 @@ mod tests {
                 $client
                     .post(format!("{}/tool/call", base))
                     .header("X-Nanny-Session-Token", &token)
-                    .body(r#"{"tool":"http_get","cost":10}"#)
+                    .body(r#"{"tool":"http_get","tokens":10}"#)
                     .send()
                     .expect("tool/call must reach server")
             };
@@ -2141,7 +2202,7 @@ mod tests {
         let resp = client
             .post(format!("http://127.0.0.1:{port}/tool/call"))
             .header("X-Nanny-Session-Token", &token)
-            .body(r#"{"tool":"echo","cost":5}"#)
+            .body(r#"{"tool":"echo","tokens":5}"#)
             .send()
             .expect("POST /tool/call must reach plain HTTP server");
 
@@ -2188,10 +2249,10 @@ mod tests {
     // on client 1's call blocks client 2's next call.
     #[test]
     fn loopback_plain_http_shared_budget_across_clients() {
-        // Use a budget of 25 with cost=10 per call (same reasoning as mTLS test).
-        // Call 1 (c1, cost 10) → allowed (10 spent)
-        // Call 2 (c2, cost 10) → allowed (20 spent)
-        // Call 3 (c1, cost 10) → LimitsPolicy pre-check: 30 > 25 → denied
+        // Use a budget of 25 with tokens=10 per call (same reasoning as mTLS test).
+        // Call 1 (c1, tokens 10) → allowed (10 spent)
+        // Call 2 (c2, tokens 10) → allowed (20 spent)
+        // Call 3 (c1, tokens 10) → LimitsPolicy pre-check: 30 > 25 → denied
         // Call 4 (c2)          → 410 (execution stopped after call 3)
         let token = format!("plain-budget-{}", next_port());
         let port  = {
@@ -2223,7 +2284,7 @@ mod tests {
                 $client
                     .post(format!("{}/tool/call", base))
                     .header("X-Nanny-Session-Token", &token)
-                    .body(r#"{"tool":"http_get","cost":10}"#)
+                    .body(r#"{"tool":"http_get","tokens":10}"#)
                     .send()
                     .expect("tool call must reach server")
             };
@@ -2258,8 +2319,8 @@ mod tests {
     //
     // GET /status is what the Python SDK reads to populate PolicyContext.
     // The bridge-to-SDK field mapping is a documented contract:
-    //   bridge "step"       → SDK "step_count"
-    //   bridge "cost_spent" → SDK "cost_units_spent"
+    //   bridge "step"          → SDK "step_count"
+    //   bridge "tokens_spent"  → SDK "tokens_spent"
     // A regression here breaks @rule evaluation silently.
 
     #[test]
@@ -2273,7 +2334,7 @@ mod tests {
         client
             .post(format!("{base}/tool/call"))
             .header("X-Nanny-Session-Token", &token)
-            .body(r#"{"tool":"echo","cost":7,"args":{"x":"y"}}"#)
+            .body(r#"{"tool":"echo","tokens":7,"args":{"x":"y"}}"#)
             .send()
             .expect("tool call must succeed");
 
@@ -2289,8 +2350,8 @@ mod tests {
         // These are the exact field names the Python SDK reads.
         assert!(body["step"].is_number(),
             "/status must have numeric 'step' field; got: {body}");
-        assert!(body["cost_spent"].is_number(),
-            "/status must have numeric 'cost_spent' field; got: {body}");
+        assert!(body["tokens_spent"].is_number(),
+            "/status must have numeric 'tokens_spent' field; got: {body}");
         assert!(body["elapsed_ms"].is_number(),
             "/status must have numeric 'elapsed_ms' field; got: {body}");
         assert!(body["tool_call_counts"].is_object(),
@@ -2299,8 +2360,8 @@ mod tests {
             "/status must have array 'tool_call_history' field; got: {body}");
 
         // Verify the values reflect the call we just made.
-        assert_eq!(body["cost_spent"], 7,
-            "cost_spent must equal the charged cost; got: {body}");
+        assert_eq!(body["tokens_spent"], 7,
+            "tokens_spent must equal the charged tokens; got: {body}");
         assert!(body["tool_call_counts"]["echo"].as_u64().unwrap_or(0) >= 1,
             "tool_call_counts must count the echo call; got: {body}");
         let history = body["tool_call_history"].as_array().unwrap();
@@ -2355,7 +2416,7 @@ mod tests {
         client
             .post(format!("{base}/tool/call"))
             .header("X-Nanny-Session-Token", &token)
-            .body(r#"{"tool":"echo","cost":1}"#)
+            .body(r#"{"tool":"echo","tokens":1}"#)
             .send()
             .expect("tool call must reach server");
 
@@ -2388,7 +2449,7 @@ mod tests {
         client
             .post(format!("{base}/tool/call"))
             .header("X-Nanny-Session-Token", &token)
-            .body(r#"{"tool":"not_allowed_tool","cost":0}"#)
+            .body(r#"{"tool":"not_allowed_tool","tokens":0}"#)
             .send()
             .expect("tool call must reach server");
 
@@ -2590,54 +2651,4 @@ mod tests {
 
         std::fs::remove_dir_all(&dir).ok();
     }
-}
-
-// ── Test cert generator (used by network tests) ───────────────────────────────
-
-/// Generate a minimal test cert bundle using rcgen — called only from tests.
-#[cfg(test)]
-fn gen_certs_for_test(dir: &Path) {
-    use rcgen::{BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
-    use time::OffsetDateTime;
-
-    let not_before = OffsetDateTime::now_utc();
-    let not_after  = not_before + time::Duration::days(30);
-
-    // CA
-    let mut ca_dn = DistinguishedName::new();
-    ca_dn.push(DnType::CommonName, "Test CA");
-    let mut ca_params = CertificateParams::new(vec![]).unwrap();
-    ca_params.distinguished_name = ca_dn;
-    ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-    ca_params.not_before = not_before;
-    ca_params.not_after = not_after;
-    let ca_key = KeyPair::generate().unwrap();
-    let ca_cert = ca_params.self_signed(&ca_key).unwrap();
-
-    // Server cert
-    let mut srv_dn = DistinguishedName::new();
-    srv_dn.push(DnType::CommonName, "Test Server");
-    let mut srv_params = CertificateParams::new(vec!["localhost".to_string(), "127.0.0.1".to_string()]).unwrap();
-    srv_params.distinguished_name = srv_dn;
-    srv_params.not_before = not_before;
-    srv_params.not_after = not_after;
-    let srv_key = KeyPair::generate().unwrap();
-    let srv_cert = srv_params.signed_by(&srv_key, &ca_cert, &ca_key).unwrap();
-
-    // Client cert
-    let mut cli_dn = DistinguishedName::new();
-    cli_dn.push(DnType::CommonName, "Test Client");
-    let mut cli_params = CertificateParams::new(vec!["nanny-client".to_string()]).unwrap();
-    cli_params.distinguished_name = cli_dn;
-    cli_params.not_before = not_before;
-    cli_params.not_after = not_after;
-    let cli_key = KeyPair::generate().unwrap();
-    let cli_cert = cli_params.signed_by(&cli_key, &ca_cert, &ca_key).unwrap();
-
-    std::fs::write(dir.join("ca.crt"),     ca_cert.pem()).unwrap();
-    std::fs::write(dir.join("ca.key"),     ca_key.serialize_pem()).unwrap();
-    std::fs::write(dir.join("server.crt"), srv_cert.pem()).unwrap();
-    std::fs::write(dir.join("server.key"), srv_key.serialize_pem()).unwrap();
-    std::fs::write(dir.join("client.crt"), cli_cert.pem()).unwrap();
-    std::fs::write(dir.join("client.key"), cli_key.serialize_pem()).unwrap();
 }

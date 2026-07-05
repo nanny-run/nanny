@@ -11,7 +11,7 @@ from nanny_sdk import AgentNotFound, agent
 
 
 def _enter_ok() -> dict[str, object]:
-    return {"status": "ok", "limits": {"steps": 10, "cost": 100, "timeout": 5000}}
+    return {"status": "ok", "limits": {"steps": 10, "tokens": 100, "timeout": 5000}}
 
 
 def _exit_ok() -> dict[str, str]:

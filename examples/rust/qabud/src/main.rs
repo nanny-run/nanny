@@ -5,7 +5,7 @@
 //   nanny run -- ./src  # reviews ./src only
 //
 // Nanny features exercised:
-//   #[nanny::tool(cost = 10)]            — each file read charges 10 cost units
+//   #[nanny::tool(tokens = 200)]         — each file read charges 200 tokens
 //   #[nanny::rule("no_read_loop")]       — guard against runaway reads (history-based)
 //   #[nanny::rule("no_sensitive_files")] — block .env / secret paths (args-based)
 //   #[nanny::agent("reviewer")]          — activates [limits.reviewer] for the review scope
@@ -26,14 +26,14 @@ use rig::providers::groq;
 
 /// Read a file from disk and return its contents.
 ///
-/// Decorated with #[nanny::tool(cost = 10)]:
+/// Decorated with #[nanny::tool(tokens = 200)]:
 ///   - contacts the bridge before each call
-///   - charges 10 cost units on each successful call
+///   - charges 200 tokens on each successful call
 ///   - panics with "nanny: stopped — ..." when budget, steps, or a rule fires
 ///
 /// Must be synchronous — the macro generates a sync inner wrapper.
 /// Called from async context via tokio::task::spawn_blocking.
-#[nanny::tool(cost = 10)]
+#[nanny::tool(tokens = 200)]
 fn read_file(path: String) -> String {
     std::fs::read_to_string(&path).unwrap_or_default()
 }
@@ -59,7 +59,7 @@ async fn run_review(dir: &str) -> Result<String> {
         // Read directly — nanny governs each call before disk access.
         //   no_sensitive_files fires for .env/secret paths (file never opened).
         //   no_read_loop fires if consecutive reads exceed threshold.
-        //   Step and cost limits fire when the budget is exhausted.
+        //   Step and token limits fire when the budget is exhausted.
         let content = match tokio::task::spawn_blocking({
             let p = path.clone();
             move || read_file(p)

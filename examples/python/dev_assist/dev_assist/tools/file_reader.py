@@ -9,7 +9,7 @@ from nanny_sdk import tool
 _FILE_CHAR_LIMIT = 8_000
 
 
-@tool(cost=5)
+@tool(tokens=100)
 def file_reader(path: str) -> str:
     """Read a source file from disk and return its full contents.
 

@@ -102,7 +102,7 @@ def _stop_copy(exc: Exception, kind: str) -> tuple[str, str]:
     if kind == "BudgetExhausted":
         return (
             "Analysis stopped — the pipeline exhausted its compute budget.",
-            "Try a narrower analysis window, or raise the cost limit in nanny.toml.",
+            "Try a narrower analysis window, or raise the token budget in nanny.toml.",
         )
     if kind == "MaxStepsReached":
         return (

@@ -12,44 +12,45 @@ cmd = "cargo run --release"
 # Global ceiling — the entire pipeline cannot exceed these totals.
 [limits]
 steps   = 30
-cost    = 800
+tokens  = 16000
 timeout = 120000
 
 # Agent 1: Planner — one LLM call, no tools. Tight budget by design.
 [limits.planner]
 steps   = 5
-cost    = 100
+tokens  = 2000
 timeout = 15000
 
 # Agent 2: Researcher — fetches multiple URLs. The most expensive stage.
 # The no_loop rule fires before this budget is exhausted if the model spirals.
 [limits.researcher]
 steps   = 15
-cost    = 500
+tokens  = 10000
 timeout = 60000
 
 # Agent 3: Synthesizer — one LLM call, no tools.
 [limits.synthesizer]
 steps   = 5
-cost    = 150
+tokens  = 3000
 timeout = 30000
 
 [tools]
-# http_get is nanny's built-in tool — executed bridge-side, cost 10 per call.
+# http_get is nanny's built-in tool — executed bridge-side, 200 tokens per call.
 # write_file, exec, and all other tools remain denied.
 allowed = ["http_get"]
 
 [tools.http_get]
-max_calls = 15
+max_calls       = 15
+tokens_per_call = 200
 
 # Demo recordings
 # Use: nanny run --limits=<name> -- "best Rust HTTP clients"
 
 # demo-budget-exhausted: BudgetExhausted before 3rd http_get executes
-# cost_per_call=10: call1→10, call2→20, call3 pre-check: 20+10>25 → BudgetExhausted
+# tokens_per_call=200: call1→200, call2→400, call3 pre-check: 400+200>500 → BudgetExhausted
 [limits.budget-demo]
 steps   = 10
-cost    = 25
+tokens  = 500
 timeout = 120000
 
 # demo-timeout: TimeoutExpired — fires after 6s, before LLM returns, no SDK needed
@@ -59,7 +60,7 @@ timeout = 6000
 # demo-agent-scopes: generous limits — lets all 3 scopes run and exit cleanly
 [limits.agent-scopes-demo]
 steps   = 50
-cost    = 2000
+tokens  = 40000
 timeout = 180000
 
 [observability]

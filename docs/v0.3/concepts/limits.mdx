@@ -1,6 +1,6 @@
 ---
 title: Limits & Enforcement
-description: How steps, cost, and timeout work — and how to configure them.
+description: How steps, tokens, and timeout work — and how to configure them.
 ---
 
 ## The three limit types
@@ -28,49 +28,49 @@ The maximum number of agent steps allowed. Requires `#[nanny::tool]` (Rust) or `
 steps = 100
 ```
 
-### Cost
+### Tokens
 
-The maximum number of cost units the agent may spend. Each tool declares its cost per call;
+The maximum number of tokens the agent may spend. Each tool declares its token cost per call;
 Nanny tracks the running total and stops the moment the budget is exhausted.
 
 ```toml
 [limits]
-cost = 1000
+tokens = 1000
 ```
 
 ## Named limit sets
 
-In a multi-agent system, each agent has a different risk profile. The analysis agent makes expensive API calls — it deserves a tight cost ceiling. The reporter just writes a file — it barely needs a budget at all. Named limit sets let each role get exactly the ceiling it deserves, configured once in `nanny.toml`.
+In a multi-agent system, each agent has a different risk profile. The analysis agent makes expensive API calls — it deserves a tight token ceiling. The reporter just writes a file — it barely needs a budget at all. Named limit sets let each role get exactly the ceiling it deserves, configured once in `nanny.toml`.
 
 ```toml
 [limits]
 # Global ceiling — applies to any run not using a named set
 steps   = 200
-cost    = 500
+tokens  = 500
 timeout = 120000
 
 [limits.ingestion]
 steps   = 20
-cost    = 50
+tokens  = 50
 timeout = 30000
 
 [limits.analysis]
 steps   = 60
-cost    = 200    # tighter — this agent makes expensive calls
+tokens  = 200    # tighter — this agent makes expensive calls
 timeout = 60000
 
 [limits.visualization]
 steps   = 20
-cost    = 100
+tokens  = 100
 timeout = 30000
 
 [limits.reporter]
 steps   = 20
-cost    = 50     # loose — this agent just writes a file
+tokens  = 50     # loose — this agent just writes a file
 timeout = 30000
 ```
 
-Named sets **inherit** from `[limits]` and override only the fields you declare. In the example above, `[limits.ingestion]` inherits from the global `[limits]` and overrides all three fields. A set that only declares `timeout` would inherit `steps` and `cost` from the base.
+Named sets **inherit** from `[limits]` and override only the fields you declare. In the example above, `[limits.ingestion]` inherits from the global `[limits]` and overrides all three fields. A set that only declares `timeout` would inherit `steps` and `tokens` from the base.
 
 Each agent activates its own set via the `@agent("role")` decorator:
 
@@ -102,7 +102,7 @@ The stop reasons are:
 | `AgentCompleted` | Process exited cleanly on its own |
 | `TimeoutExpired` | Wall-clock timeout exceeded |
 | `MaxStepsReached` | Step limit hit |
-| `BudgetExhausted` | Cost budget exhausted |
+| `BudgetExhausted` | Token budget exhausted |
 | `ToolDenied` | Tool not in allowlist |
 | `RuleDenied` | Custom rule returned denial |
 | `ManualStop` | Stopped programmatically |

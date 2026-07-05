@@ -9,7 +9,7 @@ from nanny_sdk import tool as nanny_tool
 
 
 @crew_tool
-@nanny_tool(cost=5)
+@nanny_tool(tokens=100)
 def write_report(content: str, output_dir: str = "reports") -> str:
     """Save a Markdown incident report to output_dir/incident_<timestamp>.md.
 

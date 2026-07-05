@@ -13,7 +13,7 @@ use nanny_core::ledger::{Ledger, LedgerDecision, LedgerError, Receipt};
 
 /// In-memory ledger for local mode execution.
 ///
-/// Initialized with a balance derived from `nanny.toml → limits.max_cost_units`.
+/// Initialized with a balance derived from `nanny.toml → limits.tokens`.
 /// Every debit reduces the balance. When balance hits zero, the policy stops
 /// execution via `BudgetExhausted`.
 ///
@@ -23,19 +23,19 @@ pub struct FakeLedger {
     /// Current unspent balance.
     balance: u64,
 
-    /// Running total of all units debited so far.
-    total_debited: u64,
+    /// Running total of all tokens spent so far.
+    total_spent: u64,
 }
 
 impl FakeLedger {
     /// Create a new FakeLedger with the given initial balance.
     ///
-    /// Pass `limits.max_cost_units` from your nanny.toml here.
+    /// Pass `limits.max_tokens` from your nanny.toml here.
     /// That makes the budget limit and the ledger balance consistent.
     pub fn new(initial_balance: u64) -> Self {
         Self {
             balance: initial_balance,
-            total_debited: 0,
+            total_spent: 0,
         }
     }
 }
@@ -69,7 +69,7 @@ impl Ledger for FakeLedger {
         }
 
         self.balance -= amount;
-        self.total_debited += amount;
+        self.total_spent += amount;
 
         Ok(Receipt {
             amount,
@@ -82,9 +82,9 @@ impl Ledger for FakeLedger {
         self.balance
     }
 
-    /// Total units spent across all debits.
-    fn total_debited(&self) -> u64 {
-        self.total_debited
+    /// Total tokens spent across all debits.
+    fn total_spent(&self) -> u64 {
+        self.total_spent
     }
 }
 
@@ -98,7 +98,7 @@ mod tests {
     fn starts_with_full_balance() {
         let ledger = FakeLedger::new(100);
         assert_eq!(ledger.balance(), 100);
-        assert_eq!(ledger.total_debited(), 0);
+        assert_eq!(ledger.total_spent(), 0);
     }
 
     #[test]
@@ -109,7 +109,7 @@ mod tests {
         assert_eq!(receipt.amount, 30);
         assert_eq!(receipt.balance_after, 70);
         assert_eq!(ledger.balance(), 70);
-        assert_eq!(ledger.total_debited(), 30);
+        assert_eq!(ledger.total_spent(), 30);
     }
 
     #[test]
@@ -120,7 +120,7 @@ mod tests {
         ledger.debit(30).unwrap();
 
         assert_eq!(ledger.balance(), 40);
-        assert_eq!(ledger.total_debited(), 60);
+        assert_eq!(ledger.total_spent(), 60);
     }
 
     #[test]
@@ -140,7 +140,7 @@ mod tests {
         assert!(result.is_err());
         // Balance must be unchanged after a failed debit.
         assert_eq!(ledger.balance(), 10);
-        assert_eq!(ledger.total_debited(), 0);
+        assert_eq!(ledger.total_spent(), 0);
     }
 
     #[test]
@@ -164,7 +164,7 @@ mod tests {
         ledger.debit(3).unwrap();
         let _ = ledger.debit(10); // fails
 
-        assert_eq!(ledger.total_debited(), 3); // only the successful debit counts
+        assert_eq!(ledger.total_spent(), 3); // only the successful debit counts
         assert_eq!(ledger.balance(), 2);
     }
 }

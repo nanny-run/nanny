@@ -15,7 +15,7 @@ use syn::{
     parse_macro_input, FnArg, ItemFn, LitInt, LitStr, Meta, Pat,
 };
 
-// ── #[nanny::tool(cost = N)] ─────────────────────────────────────────────────
+// ── #[nanny::tool(tokens = N)] ───────────────────────────────────────────────
 
 /// Declare a function as a governed nanny tool.
 ///
@@ -24,7 +24,7 @@ use syn::{
 /// ```rust,ignore
 /// use nanny::tool;
 ///
-/// #[tool(cost = 10)]
+/// #[tool(tokens = 200)]
 /// fn search_web(query: &str) -> String {
 ///     // your implementation
 /// }
@@ -32,26 +32,26 @@ use syn::{
 ///
 /// When active (running under `nanny run`):
 /// 1. All registered `#[nanny::rule]` functions are evaluated first.
-/// 2. The bridge is called via `POST /tool/call` — policy enforced, cost charged.
+/// 2. The bridge is called via `POST /tool/call` — policy enforced, tokens charged.
 /// 3. If allowed, the original function body runs.
 /// 4. If denied or stopped, the process panics with a `nanny: stopped —` message.
 ///
 /// When inactive (no bridge env vars), the function runs without any overhead.
 #[proc_macro_attribute]
 pub fn tool(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let cost = parse_cost(attr.into());
+    let tokens = parse_tokens(attr.into());
     let input = parse_macro_input!(item as ItemFn);
-    expand_tool(input, cost)
+    expand_tool(input, tokens)
         .unwrap_or_else(|e| e.into_compile_error())
         .into()
 }
 
-fn parse_cost(attr: TokenStream2) -> u64 {
-    // Accept `cost = N` or just `N`.
+fn parse_tokens(attr: TokenStream2) -> u64 {
+    // Accept `tokens = N` or just `N`.
     // Fall back to 0 if unparseable.
     let meta: Result<Meta, _> = syn::parse2(attr.clone());
     if let Ok(Meta::NameValue(nv)) = meta {
-        if nv.path.is_ident("cost") {
+        if nv.path.is_ident("tokens") {
             if let syn::Expr::Lit(expr_lit) = &nv.value {
                 if let syn::Lit::Int(lit) = &expr_lit.lit {
                     if let Ok(n) = lit.base10_parse::<u64>() {
@@ -70,7 +70,7 @@ fn parse_cost(attr: TokenStream2) -> u64 {
     0
 }
 
-fn expand_tool(input: ItemFn, cost: u64) -> syn::Result<TokenStream2> {
+fn expand_tool(input: ItemFn, tokens: u64) -> syn::Result<TokenStream2> {
     let vis      = &input.vis;
     let sig      = &input.sig;
     let attrs    = &input.attrs;
@@ -123,7 +123,7 @@ fn expand_tool(input: ItemFn, cost: u64) -> syn::Result<TokenStream2> {
                 ::std::process::exit(1);
             }
 
-            match ::nanny::__private::call_tool(#fn_str, #cost) {
+            match ::nanny::__private::call_tool(#fn_str, #tokens) {
                 ::nanny::__private::ToolVerdict::Run  => __nanny_impl(#(#forward_args),*),
                 ::nanny::__private::ToolVerdict::Stop(__reason) => {
                     ::std::eprintln!("nanny: stopped — {}", __reason);

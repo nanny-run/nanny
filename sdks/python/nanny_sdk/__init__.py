@@ -19,12 +19,15 @@ from nanny_sdk.exceptions import (
     TimeoutExpired,
     ToolDenied,
 )
+from nanny_sdk.instrument import instrument
 
 __all__ = [
     # Decorators
     "tool",
     "rule",
     "agent",
+    # LLM instrumentation
+    "instrument",
     # Exceptions
     "NannyStop",
     "MaxStepsReached",

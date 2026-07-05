@@ -11,10 +11,9 @@ pub struct Limits {
     /// Step N is never started if the counter has already reached max_steps.
     pub max_steps: u32,
 
-    /// Maximum cost units the agent may spend across the entire execution.
-    /// In local mode these are abstract units.
-    /// In managed mode they map to real currency via the orchestrator ledger.
-    pub max_cost_units: u64,
+    /// Maximum LLM tokens the agent may spend across the entire execution.
+    /// Charged per tool call via `tokens_per_call` or measured via `nanny.instrument`.
+    pub max_tokens: u64,
 
     /// Wall-clock timeout in milliseconds, measured from execution start.
     /// Checked at the entry of every step — not after.
@@ -28,7 +27,7 @@ impl Default for Limits {
     fn default() -> Self {
         Self {
             max_steps: 100,
-            max_cost_units: 1_000,
+            max_tokens: 50_000,
             timeout_ms: 30_000, // 30 seconds
         }
     }

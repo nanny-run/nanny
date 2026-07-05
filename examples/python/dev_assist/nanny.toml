@@ -10,7 +10,7 @@ cmd = "uv run dev debug --trace fixtures/sample_trace.txt"
 [limits]
 # Global ceiling: applies to every run unless a named scope overrides.
 steps   = 100
-cost    = 200
+tokens  = 4000
 timeout = 60000
 
 [limits.debugger]
@@ -19,21 +19,21 @@ timeout = 60000
 # timeout=60000 allows the full investigate+patch cycle; demo limit sets
 # that have timeout=30000 will still cap this to 30s for those scenarios.
 steps   = 30
-cost    = 100
+tokens  = 2000
 timeout = 60000
 
 [limits.demo-budget]
-# Demo: BudgetExhausted — file_reader costs 5 each, ripgrep costs 8 each.
-# Budget of 12 means the second file_reader call exhausts the budget.
+# Demo: BudgetExhausted — file_reader costs 100 tokens each, ripgrep 160 tokens.
+# Budget of 240 means the first ripgrep call exhausts the budget after one file read.
 steps   = 30
-cost    = 12
+tokens  = 240
 timeout = 30000
 
 [limits.demo-steps]
 # Demo: MaxStepsReached — cap at 3 steps so the agent hits the ceiling fast.
 # timeout=120000: 3 tool calls + 4 LLM calls at ~30s each = ~120s worst case.
 steps   = 3
-cost    = 100
+tokens  = 2000
 timeout = 120000
 
 [limits.demo-rule]
@@ -42,7 +42,7 @@ timeout = 120000
 # Generous budget so the agent has runway to reach the cap.
 # timeout=90000: cold model load ~28s + up to 3 file reads + 3 LLM calls.
 steps   = 50
-cost    = 500
+tokens  = 10000
 timeout = 90000
 
 [limits.demo-tool-denied]
@@ -51,7 +51,7 @@ timeout = 90000
 # [tools] allowed via sed before running, so ToolDenied fires before any file
 # is written. timeout=60000 matches [limits.debugger] for the full patch cycle.
 steps   = 30
-cost    = 200
+tokens  = 4000
 timeout = 60000
 
 [tools]
@@ -61,12 +61,12 @@ timeout = 60000
 allowed = ["file_reader", "ripgrep", "write_file"]
 
 [tools.file_reader]
-max_calls     = 15
-cost_per_call = 5
+max_calls       = 15
+tokens_per_call = 100
 
 [tools.ripgrep]
-max_calls     = 8
-cost_per_call = 8
+max_calls       = 8
+tokens_per_call = 160
 
 [observability]
 # NDJSON event log: ExecutionStopped, ToolAllowed, etc. — printed to stdout.

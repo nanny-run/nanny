@@ -27,7 +27,7 @@ Always the first event in any log.
   "command": "python agent.py",
   "limits": {
     "steps": 100,
-    "cost": 1000,
+    "tokens": 1000,
     "timeout": 30000
   }
 }
@@ -38,7 +38,7 @@ Always the first event in any log.
 | `limits_set` | string | The active limit set name. `"[limits]"` = base defaults. |
 | `command` | string | The full command string as passed to `nanny run`. |
 | `limits.steps` | integer | Active step limit. |
-| `limits.cost` | integer | Active cost limit. |
+| `limits.tokens` | integer | Active token limit. |
 | `limits.timeout` | integer | Active timeout in milliseconds. |
 
 ---
@@ -54,7 +54,7 @@ Always the last event in any log.
   "ts": 1711234572000,
   "reason": "AgentCompleted",
   "steps": 42,
-  "cost_spent": 380,
+  "tokens_spent": 380,
   "elapsed_ms": 4823
 }
 ```
@@ -63,7 +63,7 @@ Always the last event in any log.
 |-------|------|-------------|
 | `reason` | string | Why execution stopped. See reasons below. |
 | `steps` | integer | Total steps completed. |
-| `cost_spent` | integer | Total cost units spent. |
+| `tokens_spent` | integer | Total tokens spent. |
 | `elapsed_ms` | integer | Total wall-clock time in milliseconds. |
 
 ### Stop reasons
@@ -73,7 +73,7 @@ Always the last event in any log.
 | `AgentCompleted` | Process exited cleanly on its own. |
 | `TimeoutExpired` | Wall-clock timeout was reached. Process was killed. |
 | `MaxStepsReached` | Step limit was reached. Process was killed. |
-| `BudgetExhausted` | Cost budget was exhausted. Process was killed. |
+| `BudgetExhausted` | Token budget was exhausted. Process was killed. |
 | `ToolDenied` | A tool call was blocked because the tool is not in the allowlist. |
 | `RuleDenied` | A tool call was blocked by a custom rule or a per-tool `max_calls` limit. |
 | `ManualStop` | Execution was stopped programmatically. |
@@ -93,7 +93,7 @@ Emitted when a function annotated with `#[nanny::agent("name")]` is entered. Rec
   "name": "researcher",
   "limits": {
     "steps": 200,
-    "cost": 5000,
+    "tokens": 5000,
     "timeout": 120000
   }
 }
@@ -103,7 +103,7 @@ Emitted when a function annotated with `#[nanny::agent("name")]` is entered. Rec
 |-------|------|-------------|
 | `name` | string | The name of the agent scope (matches `[limits.<name>]` in `nanny.toml`). |
 | `limits.steps` | integer | Step limit active for this scope. |
-| `limits.cost` | integer | Cost limit active for this scope. |
+| `limits.tokens` | integer | Token limit active for this scope. |
 | `limits.timeout` | integer | Timeout active for this scope in milliseconds. |
 
 ---
@@ -118,7 +118,7 @@ Emitted when a function annotated with `#[nanny::agent("name")]` returns. Record
   "ts": 1711234571800,
   "name": "researcher",
   "steps_used": 12,
-  "cost_used": 240
+  "tokens_used": 240
 }
 ```
 
@@ -126,7 +126,7 @@ Emitted when a function annotated with `#[nanny::agent("name")]` returns. Record
 |-------|------|-------------|
 | `name` | string | The name of the agent scope. |
 | `steps_used` | integer | Steps consumed during this scope. |
-| `cost_used` | integer | Cost units consumed during this scope. |
+| `tokens_used` | integer | Tokens consumed during this scope. |
 
 ---
 
@@ -206,7 +206,7 @@ Emitted when a custom rule or a per-tool `max_calls` limit blocks a tool call. T
 
 ## ToolFailed
 
-Emitted when a permitted tool fails at runtime. Distinct from `ToolDenied` — the tool was allowed but encountered an error (network failure, bad arguments, timeout). No cost is charged on failure.
+Emitted when a permitted tool fails at runtime. Distinct from `ToolDenied` — the tool was allowed but encountered an error (network failure, bad arguments, timeout). No tokens are charged on failure.
 
 ```json
 {
@@ -221,3 +221,27 @@ Emitted when a permitted tool fails at runtime. Distinct from `ToolDenied` — t
 |-------|------|-------------|
 | `tool` | string | The name of the tool that failed. |
 | `error` | string | A description of the error. |
+
+---
+
+## LlmUsageRecorded
+
+Emitted when LLM token usage is reported to Nanny — via the Python SDK's `instrument()` or the Rust SDK's `report_usage()`. Records the measured input and output tokens debited from the budget, plus optional model and provider labels.
+
+```json
+{
+  "event": "LlmUsageRecorded",
+  "ts": 1711234568150,
+  "input": 1200,
+  "output": 340,
+  "model": "gpt-4o",
+  "provider": "openai"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `input` | integer | Prompt / input tokens consumed by the LLM call. |
+| `output` | integer | Completion / output tokens produced by the LLM call. |
+| `model` | string | Optional. Model identifier reported by the SDK (e.g. `"gpt-4o"`). Omitted when not provided. |
+| `provider` | string | Optional. Provider identifier reported by the SDK (e.g. `"openai"`). Omitted when not provided. |

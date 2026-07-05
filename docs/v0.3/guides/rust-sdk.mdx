@@ -35,8 +35,6 @@ nanny run
 cargo run
 ```
 
-This is safe to ship to production. The instrumentation only activates when `nanny run` is present.
-
 ---
 
 ## `#[tool]` — declare a governed tool
@@ -46,7 +44,7 @@ Mark a function as a tool that Nanny should track and charge against the budget:
 ```rust
 use nanny::tool;
 
-#[tool(cost = 10)]
+#[tool(tokens = 10)]
 fn fetch_page(url: &str) -> String {
     // HTTP call, file read, LLM call, or any side-effecting operation
     reqwest::blocking::get(url).unwrap().text().unwrap()
@@ -57,16 +55,16 @@ When the agent calls `fetch_page`:
 
 1. Nanny checks: is `fetch_page` in the `[tools] allowed` list?
 2. Nanny checks: has `fetch_page` exceeded `[tools.fetch_page] max_calls`?
-3. Nanny charges 10 cost units against the budget.
+3. Nanny charges 10 tokens against the budget.
 4. If any check fails, execution stops immediately — the function body never runs.
 
-### Cost
+### Tokens
 
-The `cost` argument is required. It is the number of cost units charged per call.
+The `tokens` argument is required. It is the number of tokens charged per call.
 Set it to `0` for tools you want tracked but not charged:
 
 ```rust
-#[tool(cost = 0)]
+#[tool(tokens = 0)]
 fn log_step(msg: &str) { ... }
 ```
 
@@ -80,15 +78,15 @@ The tool name used for allowlist checks is the **function name** as declared in 
 allowed = ["fetch_page", "read_file"]
 
 [tools.fetch_page]
-max_calls     = 20
-cost_per_call = 10   # nanny.toml cost overrides the macro default
+max_calls       = 20
+tokens_per_call = 10   # nanny.toml value overrides the macro default
 ```
 
 ---
 
 ## `nanny::http_get` — built-in HTTP tool
 
-`nanny::http_get` is a built-in governed HTTP GET function. It requires no `#[tool]` annotation — Nanny applies allowlist, call-count, and cost enforcement automatically.
+`nanny::http_get` is a built-in governed HTTP GET function. It requires no `#[tool]` annotation — Nanny applies allowlist, call-count, and token enforcement automatically.
 
 ```rust
 use nanny::http_get;
@@ -100,7 +98,7 @@ Governance applied automatically:
 
 - Checked against the `[tools] allowed` list (tool name: `"http_get"`)
 - Subject to `[tools.http_get] max_calls` limit
-- Costs 10 units per successful call (configurable via `[tools.http_get] cost_per_call`)
+- Costs 10 tokens per successful call (configurable via `[tools.http_get] tokens_per_call`)
 
 ```toml
 # nanny.toml
@@ -108,11 +106,46 @@ Governance applied automatically:
 allowed = ["http_get"]
 
 [tools.http_get]
-max_calls     = 15
-cost_per_call = 10
+max_calls       = 15
+tokens_per_call = 10
 ```
 
 In passthrough mode (no `nanny run`), `nanny::http_get` makes the request directly with no enforcement overhead.
+
+---
+
+## `nanny::report_usage` — report LLM token usage
+
+`#[tool(tokens = N)]` charges a *declared* token cost per call. To charge the *actual* tokens an LLM used, report them after the call with `nanny::report_usage`. Hand Nanny the token counts already present on the response — Nanny debits `input + output` from the budget.
+
+```rust
+use nanny::{report_usage, Usage};
+
+let resp = client.chat().create(request).await?;
+
+report_usage(Usage {
+    input:  resp.usage.prompt_tokens,
+    output: resp.usage.completion_tokens,
+    ..Default::default()
+});
+```
+
+Only `input` and `output` are required. You can optionally attach `model` and `provider` labels — identifiers only, never prompt or response content:
+
+```rust
+report_usage(Usage {
+    input:  resp.usage.prompt_tokens,
+    output: resp.usage.completion_tokens,
+    model:    Some("gpt-4o".into()),
+    provider: Some("openai".into()),
+});
+```
+
+Each call emits an `LlmUsageRecorded` event to the log. `report_usage` is fire-and-forget: it never blocks your agent and never panics. In passthrough mode (no `nanny run`) it is a no-op.
+
+<Note>
+Rust reports usage explicitly, one call per LLM response. In Python, `nanny_sdk.instrument(client)` does the same thing automatically by wrapping the client — Rust cannot patch a client at runtime, so the reporting is an explicit call instead.
+</Note>
 
 ---
 
@@ -146,8 +179,8 @@ The `ctx` parameter gives you a snapshot of the current execution state:
 | ------------------- | ------------------------- | ---------------------------------------------------------------------------------------- |
 | `step_count`        | `u32`                     | Number of steps completed                                                                |
 | `elapsed_ms`        | `u64`                     | Wall-clock time elapsed                                                                  |
-| `cost_units_spent`  | `u64`                     | Total cost units spent so far                                                            |
-| `next_tool_cost`    | `u64`                     | Declared cost of the tool currently being evaluated. `0` when no tool call is in flight. |
+| `tokens_spent`      | `u64`                     | Total tokens spent so far                                                                |
+| `next_tool_tokens`  | `u64`                     | Declared token cost of the tool currently being evaluated. `0` when no tool call is in flight. |
 | `tool_call_counts`  | `HashMap<String, u32>`    | Per-tool call counts                                                                     |
 | `tool_call_history` | `Vec<String>`             | Ordered log of tool names called                                                         |
 | `requested_tool`    | `Option<String>`          | The tool being evaluated right now                                                       |
@@ -177,7 +210,7 @@ fn run_research(topic: &str) {
 # nanny.toml
 [limits.researcher]
 steps   = 200
-cost    = 5000
+tokens  = 5000
 timeout = 120000
 ```
 
@@ -199,7 +232,7 @@ Nesting `#[agent]` functions is supported — limits revert to the caller's set 
 use nanny::{tool, rule, agent, PolicyContext};
 use std::collections::HashMap;
 
-#[tool(cost = 10)]
+#[tool(tokens = 10)]
 fn fetch_page(url: &str) -> String {
     reqwest::blocking::get(url).unwrap().text().unwrap()
 }

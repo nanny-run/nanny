@@ -36,7 +36,7 @@ Verify the installation:
 nanny --version
 ```
 
-For upgrade paths, uninstall, and troubleshooting on each platform, see [Installing Nanny](/v0.2/install).
+For upgrade paths, uninstall, and troubleshooting on each platform, see [Installing Nanny](/v0.3/install).
 
 The CLI is the enforcement engine. The SDK instruments your functions. You need both: `nanny run` owns the process lifecycle and enforces limits; `@tool`, `@rule`, and `@agent` report tool calls and activate named limit sets from inside your agent code.
 
@@ -60,7 +60,7 @@ cmd = "python agent.py"
 
 [limits]
 steps   = 100
-cost    = 1000
+tokens  = 1000
 timeout = 30000
 ```
 
@@ -81,12 +81,12 @@ Define limit sets for different workloads in the same `nanny.toml`:
 ```toml
 [limits]
 steps   = 50
-cost    = 500
+tokens  = 500
 timeout = 15000
 
 [limits.researcher]
 steps   = 200
-cost    = 5000
+tokens  = 5000
 timeout = 120000
 ```
 
@@ -103,8 +103,8 @@ Named sets inherit from `[limits]` and override only the fields you declare.
 Every run emits structured NDJSON to stdout:
 
 ```json
-{"event":"ExecutionStarted","ts":1711234567000,"limits":{"steps":100,"cost":1000,"timeout":30000},"limits_set":"[limits]","command":"python agent.py"}
-{"event":"ExecutionStopped","ts":1711234572000,"reason":"AgentCompleted","steps":7,"cost_spent":70,"elapsed_ms":4823}
+{"event":"ExecutionStarted","ts":1711234567000,"limits":{"steps":100,"tokens":1000,"timeout":30000},"limits_set":"[limits]","command":"python agent.py"}
+{"event":"ExecutionStopped","ts":1711234572000,"reason":"AgentCompleted","steps":7,"tokens_spent":70,"elapsed_ms":4823}
 ```
 
 Pipe it to a file or your log aggregator:
