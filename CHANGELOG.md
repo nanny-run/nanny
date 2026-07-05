@@ -7,14 +7,6 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [0.3.0] - 2026-07-05
 
-### Changed
-
-- **`cost` renamed to `tokens`** — all developer-facing surfaces now use `tokens`:
-  `nanny.toml` fields (`tokens`, `tokens_per_call`), Python decorator (`@tool(tokens=N)`),
-  Rust macro (`#[tool(tokens = N)]`), `PolicyContext.tokens_spent`, and the
-  `ExecutionStopped` event field (`tokens_spent`). This is a breaking change for
-  any `nanny.toml` files and agent code using the old `cost` field names.
-
 ### Added
 
 - **`nanny_sdk.instrument(client)`** — call once at agent startup to automatically
@@ -34,6 +26,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **`POST /llm/usage` bridge endpoint** — receives `{"input": N, "output": N}` (plus
   optional `model`/`provider` labels) and debits `input + output` from the token
   ledger. Used by `instrument()` (Python) and `report_usage()` (Rust).
+
+### Changed
+
+- **`cost` renamed to `tokens`** — all developer-facing surfaces now use `tokens`:
+  `nanny.toml` fields (`tokens`, `tokens_per_call`), Python decorator (`@tool(tokens=N)`),
+  Rust macro (`#[tool(tokens = N)]`), `PolicyContext.tokens_spent`, and the
+  `ExecutionStopped` event field (`tokens_spent`). This is a breaking change for
+  any `nanny.toml` files and agent code using the old `cost` field names.
 
 ---
 
