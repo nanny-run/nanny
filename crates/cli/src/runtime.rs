@@ -329,8 +329,7 @@ mod tests {
             tools: ToolsConfig::default(),
             observability: ObservabilityConfig::default(),
             managed: Some(ManagedConfig {
-                endpoint: "https://api.nanny.run".to_string(),
-                org_id: "org_test".to_string(),
+                endpoint: "https://api.nanny.run/v1".to_string(),
                 api_key: "nny_test_key".to_string(),
             }),
             proxy: None,

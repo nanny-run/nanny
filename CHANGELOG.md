@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — Unreleased
+
+### Added
+
+- **Managed-mode cloud sender** — when `nanny.toml` sets `[runtime] mode = "managed"`,
+  the runtime forwards a copy of its append-only event log to the cloud endpoint you
+  configure (`[managed] endpoint` + `api_key`). Enforcement stays fully local;
+  forwarding is best-effort — batched, non-blocking, and fail-safe (a slow or
+  unreachable cloud never blocks or fails the run). No-op in local mode.
+
+### Changed
+
+- **`[managed]` config: `org_id` removed.** The organization is derived from the
+  API key on the cloud side, so `ManagedConfig` is now `{ endpoint, api_key }`.
+  Breaking for any `[managed]` block that set `org_id`, but managed mode shipped
+  in 0.3.0 as an inert stub, so there is no functional break.
+
 ## [0.3.0] - 2026-07-05
 
 ### Added
