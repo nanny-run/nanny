@@ -387,6 +387,7 @@ fn dispatch(
         ("POST", "/agent/exit")    => handle_agent_exit(shared),
         ("POST", "/step")          => handle_step(shared),
         ("POST", "/llm/usage")     => handle_llm_usage(&req.body, shared),
+        ("POST", "/harness")       => handle_harness(&req.body, shared),
         _                          => BridgeResp::json(404, r#"{"error":"Not Found"}"#),
     }
 }
@@ -745,6 +746,41 @@ pub(crate) fn handle_llm_usage(body: &[u8], shared: &Arc<Mutex<BridgeState>>) ->
     } else {
         BridgeResp::json(200, r#"{"status":"ok"}"#)
     }
+}
+
+/// POST /harness {"name": "...", "version"?: "..."}
+///
+/// Records the agentic harness that ran the loop (opencode, langgraph, …),
+/// declared via `nanny::set_harness`. Emits a `HarnessIdentified` audit event —
+/// our equivalent of OpenRouter's "app" column. Attribution label only: never
+/// content, never pricing, and it does not touch the ledger.
+///
+/// Returns `{"status":"ok"}` if accepted, `400` for a missing/empty name.
+pub(crate) fn handle_harness(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
+    #[derive(serde::Deserialize)]
+    struct HarnessRequest {
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        version: Option<String>,
+    }
+
+    let req: HarnessRequest = match serde_json::from_slice(body) {
+        Ok(r) => r,
+        Err(_) => return BridgeResp::json(400, r#"{"error":"invalid request body"}"#),
+    };
+    if req.name.trim().is_empty() {
+        return BridgeResp::json(400, r#"{"error":"harness name required"}"#);
+    }
+
+    let mut guard = shared.lock().unwrap();
+    append_event(&mut guard, ExecutionEvent::HarnessIdentified {
+        ts: now_ms(),
+        name: req.name,
+        version: req.version,
+    });
+
+    BridgeResp::json(200, r#"{"status":"ok"}"#)
 }
 
 // ── Unix domain socket transport ──────────────────────────────────────────────
@@ -1595,6 +1631,51 @@ mod tests {
         // Absent labels are skipped, not serialized as null.
         assert!(usage.get("model").is_none());
         assert!(usage.get("provider").is_none());
+    }
+
+    #[test]
+    fn harness_records_event_and_does_not_touch_ledger() {
+        let b = started(1000);
+        let (s, body) = post(&b, "/harness", r#"{"name":"opencode","version":"0.3.2"}"#);
+        assert_eq!(s, 200);
+        assert_eq!(json_val(&body)["status"], "ok");
+
+        // Attribution only — no tokens debited.
+        let (_, status) = get(&b, "/status");
+        assert_eq!(json_val(&status)["tokens_spent"], 0);
+
+        // Recorded in the audit log.
+        let (_, events) = get(&b, "/events");
+        let harness = events
+            .lines()
+            .map(json_val)
+            .find(|e| e["event"] == "HarnessIdentified")
+            .expect("HarnessIdentified event must appear in /events");
+        assert_eq!(harness["name"], "opencode");
+        assert_eq!(harness["version"], "0.3.2");
+    }
+
+    #[test]
+    fn harness_without_version_omits_it() {
+        let b = started(1000);
+        post(&b, "/harness", r#"{"name":"langgraph"}"#);
+        let (_, events) = get(&b, "/events");
+        let harness = events
+            .lines()
+            .map(json_val)
+            .find(|e| e["event"] == "HarnessIdentified")
+            .expect("HarnessIdentified event must appear");
+        assert_eq!(harness["name"], "langgraph");
+        assert!(harness.get("version").is_none());
+    }
+
+    #[test]
+    fn harness_empty_name_rejected() {
+        let b = started(1000);
+        let (s, _) = post(&b, "/harness", r#"{"name":"  "}"#);
+        assert_eq!(s, 400);
+        let (_, events) = get(&b, "/events");
+        assert!(!events.contains("HarnessIdentified"));
     }
 
     #[test]

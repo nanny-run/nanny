@@ -109,6 +109,21 @@ pub enum ExecutionEvent {
         provider: Option<String>,
     },
 
+    /// Emitted once when the agent declares the agentic harness that ran it —
+    /// via `nanny::set_harness` (Rust) or the SDK.
+    ///
+    /// `name` is the harness identifier (e.g. `"opencode"`, `"langgraph"`);
+    /// `version` is optional. This is our equivalent of OpenRouter's "app"
+    /// column — an attribution label only, never content and never pricing.
+    /// Distinct from `AgentScopeEntered`, which names a `@nanny::agent` limits
+    /// scope, not the harness.
+    HarnessIdentified {
+        ts: u64,
+        name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
+    },
+
     /// Emitted when the agent activates a named limits set via `agent_enter`.
     ///
     /// Records the name of the limits set and the limits now in effect,

@@ -14,6 +14,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   configure (`[managed] endpoint` + `api_key`). Enforcement stays fully local;
   forwarding is best-effort — batched, non-blocking, and fail-safe (a slow or
   unreachable cloud never blocks or fails the run). No-op in local mode.
+- **`nanny::set_harness(Harness { name, version })` (Rust SDK)** — declare the
+  agentic harness that ran the agent (e.g. `opencode`, `langgraph`, `crewai`).
+  Emits a `HarnessIdentified` attribution event (bridge `POST /harness`) that the
+  managed sender forwards to the cloud — powering Fleet Intelligence's harness
+  breakdown (our equivalent of OpenRouter's "app" column). Attribution label only:
+  never content, never pricing, never touches the ledger. Distinct from
+  `#[nanny::agent(...)]`, which names a limits scope. No-op in passthrough mode.
+  (Python auto-detection via `instrument` is a follow-up; Rust declares explicitly.)
 
 ### Changed
 
