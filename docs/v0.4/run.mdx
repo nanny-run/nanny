@@ -59,7 +59,7 @@ This message is separate from the structured event log, which goes to stdout (or
 
 ## Event log
 
-Every run emits [NDJSON events](/v0.3/concepts/event-log) to stdout. `ExecutionStarted` is always first; `ExecutionStopped` is always last:
+Every run emits [NDJSON events](/v0.4/concepts/event-log) to stdout. `ExecutionStarted` is always first; `ExecutionStopped` is always last:
 
 ```json
 {"event":"ExecutionStarted","ts":1711234567000,"limits":{"steps":100,"tokens":1000,"timeout":30000},"limits_set":"[limits]","command":"python agent.py"}
@@ -76,4 +76,4 @@ nanny run > nanny.log
 
 ---
 
-For per-function governance (marking individual tools and rules in code), see the [Rust SDK guide](/v0.3/guides/rust-sdk) or [Python SDK guide](/v0.3/guides/python-sdk).
+For per-function governance (marking individual tools and rules in code), see the [Rust SDK guide](/v0.4/guides/rust-sdk) or [Python SDK guide](/v0.4/guides/python-sdk).

@@ -40,7 +40,7 @@ Maintainers have the right and responsibility to remove, edit, or reject comment
 
 ## Reporting
 
-If you witness or experience behaviour that violates this standard, report it privately to the maintainers at **say-hi@nanny.run**. Reports are handled confidentially. We will respond within 72 hours.
+If you witness or experience behaviour that violates this standard, report it privately to the maintainers at **hello@nanny.run**. Reports are handled confidentially. We will respond within 72 hours.
 
 ---
 

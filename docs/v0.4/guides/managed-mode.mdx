@@ -1,0 +1,63 @@
+---
+title: Connect to Nanny Cloud
+description: Turn on managed mode to send your runs to Nanny Cloud — dashboards, cost, and a durable audit trail — while enforcement stays fully local.
+---
+
+## What managed mode does
+
+By default, Nanny runs **local-only**: it enforces your limits and rules on your machine and writes an event log to stdout. Nothing leaves the box.
+
+**Managed mode** keeps enforcement exactly where it is — local, deterministic, offline-capable — and *additionally* forwards a copy of your run's event log to [Nanny Cloud](https://nanny.run). In return you get, per organization:
+
+- A dashboard of every run — steps, tokens, stop reasons, models
+- Spend and usage trends across all your agents
+- Alerts when a run starts to spiral
+- A durable, exportable audit trail (compliance tiers)
+
+Enforcement never depends on the network. If the cloud is slow or unreachable, your agent runs exactly as it would locally — forwarding is best-effort and never blocks or fails a run.
+
+<Note>
+  Managed mode is **additive**. It changes nothing about how limits and rules are
+  enforced — only whether a copy of the event log is sent to your dashboard.
+</Note>
+
+## Turn it on
+
+You need an API key from your Nanny Cloud dashboard (**Settings → API keys**).
+
+Add two things to `nanny.toml`:
+
+```toml
+[runtime]
+mode = "managed"
+
+[managed]
+endpoint = "https://api.nanny.run/v1"
+api_key  = "nanny_live_xxxxxxxxxxxx"
+```
+
+Then run as usual:
+
+```bash
+nanny run python agent.py
+```
+
+Your run appears in the dashboard within a few seconds of finishing. That's it — no code changes, no per-call instrumentation required.
+
+<Tip>
+  Keep `api_key` out of version control. Reference an environment variable or a
+  secrets manager in your deploy pipeline rather than committing the literal key.
+</Tip>
+
+## Local vs managed
+
+|                          | `mode = "local"` (default) | `mode = "managed"`                    |
+| ------------------------ | -------------------------- | ------------------------------------- |
+| Enforcement             | Local, deterministic       | Local, deterministic (unchanged)      |
+| Event log               | stdout / file              | stdout / file **+** forwarded to cloud |
+| Network required to run | No                         | No (forwarding is best-effort)         |
+| Dashboard & trends      | —                          | Yes                                    |
+
+## Turning it off
+
+Set `mode = "local"` (or remove the `[managed]` block). The runtime goes back to local-only immediately — no data is sent.

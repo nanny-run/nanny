@@ -6,7 +6,7 @@ version = "0.2.0"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/nanny-run/nanny"
-authors = ["Evans Ibok <evansibok@gmail.com>"]
+authors = ["Evans Ibok <hello@nanny.run>"]
 
 [dependencies]
 anyhow = "1"

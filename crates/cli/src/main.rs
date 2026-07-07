@@ -1,6 +1,7 @@
 // Nanny CLI — the only surface humans touch.
 mod commands;
 mod events;
+mod managed;
 mod runtime;
 //
 // Two commands exist:
@@ -422,12 +423,27 @@ fn cmd_run(config_path: &Path, limits_name: Option<&str>, extra_args: Vec<String
     // ── Open event log ────────────────────────────────────────────────────
     let mut log = events::EventWriter::from_config(&config.observability)?;
 
-    log.write(&execution_started_event(&components.limits, active_set, &command.join(" ")))?;
+    let started_event = execution_started_event(&components.limits, active_set, &command.join(" "));
+    log.write(&started_event)?;
 
     // ── Start bridge ──────────────────────────────────────────────────────
     let bridge_components = runtime::build_bridge_components(&config, components.limits.clone(), limits_name.is_some());
     let bridge = Bridge::start(bridge_components)
         .context("failed to start bridge")?;
+
+    // ── Managed-mode cloud sender (None + no-op in local mode) ─────────────
+    // Forwards a copy of the NDJSON event log to the cloud; enforcement stays
+    // fully local. Fire-and-forget — never blocks or fails the run.
+    let managed = managed::ManagedSender::maybe_start(&config, &bridge.session_token);
+    if managed.is_some() {
+        if let Some(m) = &config.managed {
+            println!("nanny: managed — forwarding events to {}", m.endpoint.trim_end_matches('/'));
+        }
+        // ExecutionStarted was already written locally; forward it too.
+        if let (Some(sender), Ok(line)) = (&managed, serde_json::to_string(&started_event)) {
+            sender.enqueue(line);
+        }
+    }
 
     // ── Spawn child process ───────────────────────────────────────────────
     let (program, args) = command.split_first()
@@ -468,6 +484,9 @@ fn cmd_run(config_path: &Path, limits_name: Option<&str>, extra_args: Vec<String
         // Drain any bridge events accumulated since the last tick.
         for line in bridge.drain_events() {
             let _ = log.write_raw(&line);
+            if let Some(sender) = &managed {
+                sender.enqueue(line);
+            }
         }
 
         // Check bridge first — it may have stopped execution (budget, rules, etc.)
@@ -516,6 +535,9 @@ fn cmd_run(config_path: &Path, limits_name: Option<&str>, extra_args: Vec<String
     // ToolDenied that caused budget exhaustion on the very last bridge call).
     for line in bridge.drain_events() {
         let _ = log.write_raw(&line);
+        if let Some(sender) = &managed {
+            sender.enqueue(line);
+        }
     }
 
     // ── ExecutionStopped event ────────────────────────────────────────────
@@ -540,12 +562,23 @@ fn cmd_run(config_path: &Path, limits_name: Option<&str>, extra_args: Vec<String
         );
     }
 
-    log.write(&execution_stopped_event(
+    let stopped_event = execution_stopped_event(
         &stop_reason,
         metrics.step_count,
         metrics.tokens_spent,
         elapsed_ms,
-    ))?;
+    );
+    log.write(&stopped_event)?;
+    if let Some(sender) = &managed {
+        if let Ok(line) = serde_json::to_string(&stopped_event) {
+            sender.enqueue(line);
+        }
+    }
+
+    // Flush the managed forwarder before exit (bounded by its request timeout).
+    if let Some(sender) = managed {
+        sender.flush_and_join();
+    }
 
     // ── Exit code ─────────────────────────────────────────────────────────
     if stop_reason != "AgentCompleted" {

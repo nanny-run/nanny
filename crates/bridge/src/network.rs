@@ -43,7 +43,7 @@ use nanny_runtime::ToolRegistry;
 use super::{
     append_event, now_ms,
     BridgeComponents, BridgeResp, BridgeState, ContentType,
-    handle_agent_enter, handle_agent_exit, handle_events, handle_health,
+    handle_agent_enter, handle_agent_exit, handle_events, handle_harness, handle_health,
     handle_llm_usage, handle_rule_evaluate, handle_status, handle_step, handle_stop,
     handle_tool_call, init_shared_state, is_stopped,
 };
@@ -202,6 +202,13 @@ async fn route_llm_usage(State(app): State<AppState>, body: Bytes) -> Response {
         return (StatusCode::from_u16(410).unwrap(), r#"{"error":"execution stopped"}"#).into_response();
     }
     to_response(handle_llm_usage(&body, &app.shared))
+}
+
+async fn route_harness(State(app): State<AppState>, body: Bytes) -> Response {
+    if is_stopped(&app.shared) {
+        return (StatusCode::from_u16(410).unwrap(), r#"{"error":"execution stopped"}"#).into_response();
+    }
+    to_response(handle_harness(&body, &app.shared))
 }
 
 // ── IP / host SSRF guard ──────────────────────────────────────────────────────
@@ -445,6 +452,7 @@ fn build_router(app: AppState) -> Router {
         .route("/agent/exit",    post(route_agent_exit))
         .route("/step",          post(route_step))
         .route("/llm/usage",     post(route_llm_usage))
+        .route("/harness",       post(route_harness))
         // Token auth — runs before every handler.
         .layer(middleware::from_fn_with_state(app.clone(), require_token))
         // Rate limiting — outermost layer, runs first.

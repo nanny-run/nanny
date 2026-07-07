@@ -108,6 +108,10 @@ pub struct Usage {
     pub model: Option<String>,
     /// Optional provider identifier (e.g. `"openai"`). Label only — no pricing.
     pub provider: Option<String>,
+    /// Optional harness attribution reported alongside this call — the "on every
+    /// request" path (parity with the Python SDK). Deduped bridge-side, so it is
+    /// safe to set on every report. Prefer [`set_harness`] for a one-shot declare.
+    pub harness: Option<Harness>,
 }
 
 /// Report measured LLM token usage to the nanny bridge.
@@ -141,7 +145,55 @@ pub struct Usage {
 /// });
 /// ```
 pub fn report_usage(usage: Usage) {
-    runtime::report_usage(usage.input, usage.output, usage.model, usage.provider);
+    let (harness_name, harness_version) = match usage.harness {
+        Some(h) => (Some(h.name), h.version),
+        None => (None, None),
+    };
+    runtime::report_usage(
+        usage.input,
+        usage.output,
+        usage.model,
+        usage.provider,
+        harness_name,
+        harness_version,
+    );
+}
+
+// ── Harness attribution ───────────────────────────────────────────────────────
+
+/// The agentic harness that ran this agent (e.g. `opencode`, `langgraph`,
+/// `crewai`), declared to the nanny bridge via [`set_harness`].
+///
+/// This is our equivalent of OpenRouter's "app" column — an attribution label
+/// only, recorded once per run. It is distinct from `#[nanny::agent(...)]`,
+/// which names a *limits scope*, not the harness. Only `name` is required:
+///
+/// ```rust,ignore
+/// nanny::set_harness(nanny::Harness { name: "opencode".into(), ..Default::default() });
+/// ```
+#[derive(Debug, Default, Clone)]
+pub struct Harness {
+    /// Harness identifier, e.g. `"opencode"`.
+    pub name: String,
+    /// Optional harness version, e.g. `"0.3.2"`.
+    pub version: Option<String>,
+}
+
+/// Declare the agentic harness running this agent to the nanny bridge.
+///
+/// Records a `HarnessIdentified` attribution event so the cloud can group and
+/// compare executions by harness. Call once at startup; the last non-empty
+/// declaration wins.
+///
+/// Rust cannot introspect the harness the way the Python SDK can (it wraps the
+/// LLM client), so in Rust the harness is declared explicitly.
+///
+/// # Passthrough mode
+///
+/// When running outside `nanny run` (no bridge active) this is a no-op — the
+/// same passthrough contract as `report_usage`. An empty `name` is ignored.
+pub fn set_harness(harness: Harness) {
+    runtime::set_harness(harness.name, harness.version);
 }
 
 // ── Private runtime — for generated code only ─────────────────────────────────
@@ -642,7 +694,14 @@ mod runtime {
     /// No-op in passthrough mode (no bridge) and for zero-token reports.
     /// Fire-and-forget: the bridge response is ignored and transport errors are
     /// swallowed, so reporting usage never interrupts the agent.
-    pub fn report_usage(input: u64, output: u64, model: Option<String>, provider: Option<String>) {
+    pub fn report_usage(
+        input: u64,
+        output: u64,
+        model: Option<String>,
+        provider: Option<String>,
+        harness_name: Option<String>,
+        harness_version: Option<String>,
+    ) {
         if !is_active() || input + output == 0 {
             return;
         }
@@ -653,7 +712,32 @@ mod runtime {
         if let Some(p) = provider {
             body["provider"] = serde_json::Value::String(p);
         }
+        if let Some(name) = harness_name {
+            let mut h = serde_json::json!({ "name": name });
+            if let Some(v) = harness_version {
+                h["version"] = serde_json::Value::String(v);
+            }
+            body["harness"] = h;
+        }
         let _ = http_post("/llm/usage", &body.to_string());
+    }
+
+    // ── Harness declaration ───────────────────────────────────────────────────
+
+    /// POST /harness — declare the agentic harness that ran this agent.
+    ///
+    /// No-op in passthrough mode (no bridge) and for an empty name.
+    /// Fire-and-forget: the bridge response is ignored and transport errors are
+    /// swallowed, so declaring the harness never interrupts the agent.
+    pub fn set_harness(name: String, version: Option<String>) {
+        if !is_active() || name.trim().is_empty() {
+            return;
+        }
+        let mut body = serde_json::json!({"name": name});
+        if let Some(v) = version {
+            body["version"] = serde_json::Value::String(v);
+        }
+        let _ = http_post("/harness", &body.to_string());
     }
 
     // ── Agent enter / exit ────────────────────────────────────────────────────
@@ -729,6 +813,25 @@ mod tests {
             output: 3,
             model: Some("gpt-4o".into()),
             provider: Some("openai".into()),
+            ..Default::default()
         });
+    }
+
+    #[test]
+    fn set_harness_noop_in_passthrough() {
+        // SAFETY: see `inactive_when_no_env_vars` — single-threaded harness.
+        unsafe {
+            std::env::remove_var("NANNY_BRIDGE_SOCKET");
+            std::env::remove_var("NANNY_BRIDGE_PORT");
+            std::env::remove_var("NANNY_BRIDGE_ADDR");
+        }
+        // No bridge active → no-op. Must not panic or attempt any connection.
+        crate::set_harness(crate::Harness { name: "opencode".into(), ..Default::default() });
+        crate::set_harness(crate::Harness {
+            name: "langgraph".into(),
+            version: Some("0.3.2".into()),
+        });
+        // Empty name is ignored even if a bridge were active.
+        crate::set_harness(crate::Harness::default());
     }
 }

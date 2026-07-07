@@ -266,10 +266,7 @@ pub struct ManagedConfig {
     /// Cloud API endpoint.
     pub endpoint: String,
 
-    /// Your organization ID.
-    pub org_id: String,
-
-    /// Your API key. Keep this out of version control — never log or print it.
+    /// Your API key. Keep this out of version control; never log or print it.
     ///
     /// Intentionally excluded from serialization so a round-trip through
     /// `serde_json` / `toml` does not accidentally re-emit the key.
@@ -282,7 +279,6 @@ impl std::fmt::Debug for ManagedConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ManagedConfig")
             .field("endpoint", &self.endpoint)
-            .field("org_id",   &self.org_id)
             .field("api_key",  &"[redacted]")
             .finish()
     }
@@ -372,9 +368,8 @@ pub fn default_toml() -> &'static str {
 mode = "local"
 
 # [managed]
-# Only read when mode = "managed".
-# endpoint = "https://api.nanny.run"
-# org_id   = "org_123"
+# Cloud mode — paste your endpoint and key from the Nanny dashboard.
+# endpoint = "https://api.nanny.run/v1"
 # api_key  = "nny_live_xxx"
 
 [start]
@@ -756,8 +751,7 @@ tokens  = 5000
 timeout = 5000
 
 [managed]
-endpoint = "https://api.nanny.run"
-org_id   = "org_123"
+endpoint = "https://api.nanny.run/v1"
 api_key  = "nny_live_xxx"
 "#,
         )
@@ -765,8 +759,7 @@ api_key  = "nny_live_xxx"
 
         assert_eq!(config.runtime.mode, Mode::Managed);
         let m = config.managed.expect("managed section must be present");
-        assert_eq!(m.endpoint, "https://api.nanny.run");
-        assert_eq!(m.org_id, "org_123");
+        assert_eq!(m.endpoint, "https://api.nanny.run/v1");
         assert_eq!(m.api_key, "nny_live_xxx");
     }
 }

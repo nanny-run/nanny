@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-07-07
+
+### Added
+
+- **Managed-mode cloud sender** — when `nanny.toml` sets `[runtime] mode = "managed"`,
+  the runtime forwards a copy of its append-only event log to the cloud endpoint you
+  configure (`[managed] endpoint` + `api_key`). Enforcement stays fully local;
+  forwarding is best-effort — batched, non-blocking, and fail-safe (a slow or
+  unreachable cloud never blocks or fails the run). No-op in local mode.
+- **`nanny::set_harness(Harness { name, version })` (Rust SDK)** — declare the
+  agentic harness that ran the agent (e.g. `opencode`, `langgraph`, `crewai`).
+  Emits a `HarnessIdentified` attribution event (bridge `POST /harness`) that the
+  managed sender forwards to the cloud — powering Fleet Intelligence's harness
+  breakdown (our equivalent of OpenRouter's "app" column). Attribution label only:
+  never content, never pricing, never touches the ledger. Distinct from
+  `#[nanny::agent(...)]`, which names a limits scope. No-op in passthrough mode.
+  (Python auto-detection via `instrument` is a follow-up; Rust declares explicitly.)
+
+### Changed
+
+- **`[managed]` config: `org_id` removed.** `ManagedConfig` is now `{ endpoint, api_key }`.
+
 ## [0.3.0] - 2026-07-05
 
 ### Added

@@ -131,7 +131,7 @@ This repository has three doc surfaces. Keep each one in scope and consistent wi
 Entry points:
 
 - **Docs site**
-  - `docs/v0.3/index.mdx` (current version)
+  - `docs/v0.4/index.mdx` (current version)
   - `docs/docs.json` (navigation, versions, redirects)
 - **Root docs**
   - `README.md` (product overview and first-run path)
