@@ -44,6 +44,9 @@
   },
   "redirects": [
     { "source": "/quickstart", "destination": "/v0.4/quickstart" },
+    { "source": "/guides/:slug*", "destination": "/v0.4/guides/:slug*" },
+    { "source": "/concepts/:slug*", "destination": "/v0.4/concepts/:slug*" },
+    { "source": "/reference/:slug*", "destination": "/v0.4/reference/:slug*" },
     { "source": "/v0.1/:slug*", "destination": "/v0.4/:slug*" },
     { "source": "/v0.2/:slug*", "destination": "/v0.4/:slug*" },
     { "source": "/v0.3/:slug*", "destination": "/v0.4/:slug*" },

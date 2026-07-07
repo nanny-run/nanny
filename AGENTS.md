@@ -104,7 +104,7 @@ cd examples/python/metrics_crew && uv sync && nanny run
 
 - **Rust**: `rustfmt`, no `unwrap()`/`expect()` outside tests, `thiserror` for errors, doc comments on public items
 - **Python**: `ruff` (line-length=100, target-version=py311), `mypy --strict`, `pytest` + `pytest-httpserver` for tests
-- **Versioning**: Docs folders are versioned at minor level only (`v0.3/`, `v1.0/`) — never patch; a patch release updates the current folder in place
+- **Versioning**: Docs folders are versioned at minor level only (`v0.4/`, `v1.0/`) — never patch; a patch release updates the current folder in place
 
 ## Branching and releases
 

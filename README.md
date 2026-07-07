@@ -22,7 +22,7 @@
 
 <p align="center">
   <a href="https://docs.nanny.run">Documentation</a> ·
-  <a href="https://docs.nanny.run/v0.2/quickstart">Quickstart</a> ·
+  <a href="https://docs.nanny.run/quickstart">Quickstart</a> ·
   <a href="CHANGELOG.md">Changelog</a> ·
   <a href="https://github.com/nanny-run/nanny/issues">Report a Bug</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
@@ -236,7 +236,7 @@ All macros are no-ops when running outside `nanny run` — no enforcement overhe
 
 ![Nanny demo — named agent scopes (planner → researcher → synthesizer) entering and exiting](https://raw.githubusercontent.com/nanny-run/nanny/main/assets/demo/webdingo-agent-scopes.gif)
 
-→ Full Rust SDK guide at [docs.nanny.run/v0.2/guides/rust-sdk](https://docs.nanny.run/v0.2/guides/rust-sdk)
+→ Full Rust SDK guide at [docs.nanny.run/guides/rust-sdk](https://docs.nanny.run/guides/rust-sdk)
 
 ---
 
@@ -304,7 +304,7 @@ use nanny::{report_usage, Usage};
 report_usage(Usage { input: resp.usage.prompt_tokens, output: resp.usage.completion_tokens, ..Default::default() });
 ```
 
-→ Full Python SDK guide at [docs.nanny.run/v0.3/guides/python-sdk](https://docs.nanny.run/v0.3/guides/python-sdk)
+→ Full Python SDK guide at [docs.nanny.run/guides/python-sdk](https://docs.nanny.run/guides/python-sdk)
 
 ---
 
