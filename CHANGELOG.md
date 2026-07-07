@@ -25,10 +25,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
-- **`[managed]` config: `org_id` removed.** The organization is derived from the
-  API key on the cloud side, so `ManagedConfig` is now `{ endpoint, api_key }`.
-  Breaking for any `[managed]` block that set `org_id`, but managed mode shipped
-  in 0.3.0 as an inert stub, so there is no functional break.
+- **`[managed]` config: `org_id` removed.** `ManagedConfig` is now `{ endpoint, api_key }`.
 
 ## [0.3.0] - 2026-07-05
 
