@@ -192,7 +192,9 @@ class FakeAsyncStreamingOpenAI:
 
 def test_extract_usage_patterns() -> None:
     # Returns (input, output, model); these fakes carry no model → None.
-    assert _extract_usage(_Resp(usage=_Usage(prompt_tokens=10, completion_tokens=5))) == (10, 5, None)
+    assert _extract_usage(
+        _Resp(usage=_Usage(prompt_tokens=10, completion_tokens=5))
+    ) == (10, 5, None)
     assert _extract_usage(_Resp(usage=_Usage(input_tokens=8, output_tokens=3))) == (8, 3, None)
     assert _extract_usage(_Resp(usage=_Usage(prompt_tokens=9, response_tokens=1))) == (9, 1, None)
     assert _extract_usage(

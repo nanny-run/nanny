@@ -49,7 +49,6 @@ from __future__ import annotations
 import inspect
 import sys
 import threading
-from collections.abc import Callable
 from typing import Any
 from weakref import WeakSet
 
