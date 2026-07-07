@@ -43,60 +43,62 @@
     ]
   },
   "redirects": [
-    { "source": "/quickstart", "destination": "/v0.3/quickstart" },
-    { "source": "/v0.1/:slug*", "destination": "/v0.3/:slug*" },
-    { "source": "/v0.2/:slug*", "destination": "/v0.3/:slug*" },
-    { "source": "/v0.1.3/:slug*", "destination": "/v0.3/:slug*" },
-    { "source": "/v0.1.4/:slug*", "destination": "/v0.3/:slug*" },
-    { "source": "/v0.1.5/:slug*", "destination": "/v0.3/:slug*" },
-    { "source": "/v0.1.7/:slug*", "destination": "/v0.3/:slug*" },
-    { "source": "/v0.1.8/:slug*", "destination": "/v0.3/:slug*" }
+    { "source": "/quickstart", "destination": "/v0.4/quickstart" },
+    { "source": "/v0.1/:slug*", "destination": "/v0.4/:slug*" },
+    { "source": "/v0.2/:slug*", "destination": "/v0.4/:slug*" },
+    { "source": "/v0.3/:slug*", "destination": "/v0.4/:slug*" },
+    { "source": "/v0.1.3/:slug*", "destination": "/v0.4/:slug*" },
+    { "source": "/v0.1.4/:slug*", "destination": "/v0.4/:slug*" },
+    { "source": "/v0.1.5/:slug*", "destination": "/v0.4/:slug*" },
+    { "source": "/v0.1.7/:slug*", "destination": "/v0.4/:slug*" },
+    { "source": "/v0.1.8/:slug*", "destination": "/v0.4/:slug*" }
   ],
   "navigation": {
     "versions": [
       {
-        "version": "v0.3.x",
+        "version": "v0.4.x",
         "tag": "Latest",
         "tabs": [
           {
             "tab": "Getting Started",
             "pages": [
-              "v0.3/index",
-              "v0.3/quickstart",
-              "v0.3/install",
+              "v0.4/index",
+              "v0.4/quickstart",
+              "v0.4/install",
               {
                 "group": "Concepts",
                 "pages": [
-                  "v0.3/concepts/how-it-works",
-                  "v0.3/concepts/limits",
-                  "v0.3/concepts/event-log"
+                  "v0.4/concepts/how-it-works",
+                  "v0.4/concepts/limits",
+                  "v0.4/concepts/event-log"
                 ]
               },
               {
                 "group": "SDKs",
-                "pages": ["v0.3/guides/rust-sdk", "v0.3/guides/python-sdk"]
+                "pages": ["v0.4/guides/rust-sdk", "v0.4/guides/python-sdk"]
               },
               {
                 "group": "Guides",
                 "pages": [
-                  "v0.3/guides/governance-server",
-                  "v0.3/guides/http-proxy-mode"
+                  "v0.4/guides/managed-mode",
+                  "v0.4/guides/governance-server",
+                  "v0.4/guides/http-proxy-mode"
                 ]
               },
               {
                 "group": "CLI",
                 "pages": [
-                  "v0.3/init",
-                  "v0.3/run",
-                  "v0.3/reference/cli-server",
-                  "v0.3/reference/cli-certs",
-                  "v0.3/reference/cli-health",
-                  "v0.3/uninstall"
+                  "v0.4/init",
+                  "v0.4/run",
+                  "v0.4/reference/cli-server",
+                  "v0.4/reference/cli-certs",
+                  "v0.4/reference/cli-health",
+                  "v0.4/uninstall"
                 ]
               },
               {
                 "group": "Reference",
-                "pages": ["v0.3/reference/nanny-toml", "v0.3/reference/events"]
+                "pages": ["v0.4/reference/nanny-toml", "v0.4/reference/events"]
               }
             ]
           }
