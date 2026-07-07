@@ -128,6 +128,11 @@ pub(crate) struct BridgeState {
 
     // Append-only event log ───────────────────────────────────────────────────
     events: Vec<String>,
+
+    // Last-recorded harness attribution `(name, version)`. Used to dedup
+    // `HarnessIdentified`: the SDK may resend the harness on every LLM call, so
+    // we only append an event when it actually changes.
+    last_harness: Option<(String, Option<String>)>,
 }
 
 // ── Bridge ────────────────────────────────────────────────────────────────────
@@ -178,6 +183,7 @@ impl Bridge {
             step_count: 0,
             start_time: std::time::Instant::now(),
             events: Vec::new(),
+            last_harness: None,
         }));
 
         let registry = Arc::new(components.registry);
@@ -701,6 +707,14 @@ pub(crate) fn handle_step(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
 /// pushes `tokens_spent >= max_tokens`. The next tool call will also fail.
 pub(crate) fn handle_llm_usage(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
     #[derive(serde::Deserialize)]
+    struct HarnessLabel {
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        version: Option<String>,
+    }
+
+    #[derive(serde::Deserialize)]
     struct LlmUsageRequest {
         #[serde(default)]
         input: u64,
@@ -711,6 +725,10 @@ pub(crate) fn handle_llm_usage(body: &[u8], shared: &Arc<Mutex<BridgeState>>) ->
         model: Option<String>,
         #[serde(default)]
         provider: Option<String>,
+        // Optional harness, auto-detected by the SDK and (re)sent on every call.
+        // Deduped by `record_harness`, so resending it is cheap.
+        #[serde(default)]
+        harness: Option<HarnessLabel>,
     }
 
     let req: LlmUsageRequest = match serde_json::from_slice(body) {
@@ -718,12 +736,18 @@ pub(crate) fn handle_llm_usage(body: &[u8], shared: &Arc<Mutex<BridgeState>>) ->
         Err(_) => return BridgeResp::json(400, r#"{"error":"invalid request body"}"#),
     };
 
+    let mut guard = shared.lock().unwrap();
+
+    // Record the harness (deduped) even for a zero-token call.
+    if let Some(h) = req.harness {
+        record_harness(&mut guard, h.name, h.version);
+    }
+
     let total = req.input + req.output;
     if total == 0 {
         return BridgeResp::json(200, r#"{"status":"ok"}"#);
     }
 
-    let mut guard = shared.lock().unwrap();
     let _ = guard.ledger.debit(total);
     guard.tokens_spent += total;
 
@@ -774,11 +798,7 @@ pub(crate) fn handle_harness(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> B
     }
 
     let mut guard = shared.lock().unwrap();
-    append_event(&mut guard, ExecutionEvent::HarnessIdentified {
-        ts: now_ms(),
-        name: req.name,
-        version: req.version,
-    });
+    record_harness(&mut guard, req.name, req.version);
 
     BridgeResp::json(200, r#"{"status":"ok"}"#)
 }
@@ -1022,6 +1042,30 @@ pub(crate) fn append_event(state: &mut BridgeState, event: ExecutionEvent) {
     state.events.push(serde_json::to_string(&event).unwrap());
 }
 
+/// Append a `HarnessIdentified` event only when the harness actually changes.
+/// The SDK may resend the harness on every LLM call (auto-detected from traffic),
+/// so dedup keeps the append-only log from filling with identical entries. Empty
+/// names are ignored.
+pub(crate) fn record_harness(state: &mut BridgeState, name: String, version: Option<String>) {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return;
+    }
+    let candidate = (name, version);
+    if state.last_harness.as_ref() == Some(&candidate) {
+        return;
+    }
+    state.last_harness = Some(candidate.clone());
+    append_event(
+        state,
+        ExecutionEvent::HarnessIdentified {
+            ts: now_ms(),
+            name: candidate.0,
+            version: candidate.1,
+        },
+    );
+}
+
 pub(crate) fn now_ms() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -1072,6 +1116,7 @@ pub(crate) fn init_shared_state(
         step_count: 0,
         start_time: std::time::Instant::now(),
         events: Vec::new(),
+            last_harness: None,
     }));
 
     let registry = Arc::new(components.registry);
@@ -1676,6 +1721,28 @@ mod tests {
         assert_eq!(s, 400);
         let (_, events) = get(&b, "/events");
         assert!(!events.contains("HarnessIdentified"));
+    }
+
+    #[test]
+    fn llm_usage_carries_harness_and_dedups() {
+        let b = started(1000);
+        // Harness rides on the usage report (the "every request" path).
+        post(&b, "/llm/usage", r#"{"input":5,"output":5,"harness":{"name":"opencode"}}"#);
+        // Same harness again — must NOT emit a second HarnessIdentified.
+        post(&b, "/llm/usage", r#"{"input":5,"output":5,"harness":{"name":"opencode"}}"#);
+        let (_, events) = get(&b, "/events");
+        let harness_events = events
+            .lines()
+            .map(json_val)
+            .filter(|e| e["event"] == "HarnessIdentified")
+            .count();
+        assert_eq!(harness_events, 1, "identical harness must be deduped");
+        let identified = events
+            .lines()
+            .map(json_val)
+            .find(|e| e["event"] == "HarnessIdentified")
+            .expect("one HarnessIdentified");
+        assert_eq!(identified["name"], "opencode");
     }
 
     #[test]

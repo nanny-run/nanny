@@ -191,13 +191,14 @@ class FakeAsyncStreamingOpenAI:
 
 
 def test_extract_usage_patterns() -> None:
-    assert _extract_usage(_Resp(usage=_Usage(prompt_tokens=10, completion_tokens=5))) == (10, 5)
-    assert _extract_usage(_Resp(usage=_Usage(input_tokens=8, output_tokens=3))) == (8, 3)
-    assert _extract_usage(_Resp(usage=_Usage(prompt_tokens=9, response_tokens=1))) == (9, 1)
+    # Returns (input, output, model); these fakes carry no model → None.
+    assert _extract_usage(_Resp(usage=_Usage(prompt_tokens=10, completion_tokens=5))) == (10, 5, None)
+    assert _extract_usage(_Resp(usage=_Usage(input_tokens=8, output_tokens=3))) == (8, 3, None)
+    assert _extract_usage(_Resp(usage=_Usage(prompt_tokens=9, response_tokens=1))) == (9, 1, None)
     assert _extract_usage(
         _Resp(usage_metadata=_Usage(prompt_token_count=6, candidates_token_count=4))
-    ) == (6, 4)
-    assert _extract_usage(object()) == (0, 0)
+    ) == (6, 4, None)
+    assert _extract_usage(object()) == (0, 0, None)
 
 
 # ── Passthrough — no bridge means no wrapping ─────────────────────────────────
@@ -219,35 +220,83 @@ def test_openai_reports_usage(mock_bridge: HTTPServer) -> None:
     _expect_usage(mock_bridge)
     client = instrument(FakeOpenAI())
     client.chat.completions.create(messages=[])
-    assert _usage_posts(mock_bridge) == [{"input": 10, "output": 5}]
+    assert _usage_posts(mock_bridge) == [{"input": 10, "output": 5, "provider": "openai"}]
 
 
 def test_anthropic_reports_usage(mock_bridge: HTTPServer) -> None:
     _expect_usage(mock_bridge)
     client = instrument(FakeAnthropic())
     client.messages.create(messages=[])
-    assert _usage_posts(mock_bridge) == [{"input": 8, "output": 3}]
+    assert _usage_posts(mock_bridge) == [{"input": 8, "output": 3, "provider": "anthropic"}]
 
 
 def test_mistral_reports_usage(mock_bridge: HTTPServer) -> None:
     _expect_usage(mock_bridge)
     client = instrument(FakeMistral())
     client.chat.complete(messages=[])
-    assert _usage_posts(mock_bridge) == [{"input": 7, "output": 2}]
+    assert _usage_posts(mock_bridge) == [{"input": 7, "output": 2, "provider": "mistral"}]
 
 
 def test_gemini_reports_usage(mock_bridge: HTTPServer) -> None:
     _expect_usage(mock_bridge)
     client = instrument(FakeGemini())
     client.models.generate_content(contents="hi")
-    assert _usage_posts(mock_bridge) == [{"input": 6, "output": 4}]
+    assert _usage_posts(mock_bridge) == [{"input": 6, "output": 4, "provider": "gemini"}]
 
 
 def test_cohere_reports_usage(mock_bridge: HTTPServer) -> None:
     _expect_usage(mock_bridge)
     client = instrument(FakeCohere())
     client.chat(messages=[])
-    assert _usage_posts(mock_bridge) == [{"input": 9, "output": 1}]
+    assert _usage_posts(mock_bridge) == [{"input": 9, "output": 1, "provider": "cohere"}]
+
+
+# ── Model + provider + harness attribution ───────────────────────────────────
+
+
+def test_reports_model_provider_and_harness(
+    mock_bridge: HTTPServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _expect_usage(mock_bridge)
+    import sys
+
+    # `nanny_sdk.instrument` the attribute is the re-exported function; the module
+    # object lives in sys.modules under the same dotted name.
+    m = sys.modules["nanny_sdk.instrument"]
+
+    # Force a known harness (detection is heuristic; pin it for a deterministic body).
+    monkeypatch.setattr(m, "_detect_harness", lambda: "opencode")
+
+    class _ModelResp:
+        model = "gpt-4o"
+        usage = _Usage(prompt_tokens=10, completion_tokens=5)
+
+    class _Completions:
+        def create(self, **kwargs: Any) -> Any:
+            return _ModelResp()
+
+    class _Chat:
+        def __init__(self) -> None:
+            self.completions = _Completions()
+
+    class _GroqClient:
+        # base_url refines the OpenAI-compatible provider to "groq".
+        base_url = "https://api.groq.com/openai/v1"
+
+        def __init__(self) -> None:
+            self.chat = _Chat()
+
+    client = instrument(_GroqClient())
+    client.chat.completions.create(messages=[])
+    assert _usage_posts(mock_bridge) == [
+        {
+            "input": 10,
+            "output": 5,
+            "model": "gpt-4o",
+            "provider": "groq",
+            "harness": {"name": "opencode"},
+        }
+    ]
 
 
 # ── Streaming ─────────────────────────────────────────────────────────────────
@@ -260,14 +309,14 @@ def test_sync_stream_defers_then_reports_once(mock_bridge: HTTPServer) -> None:
     assert _usage_posts(mock_bridge) == []  # nothing submitted until consumed
     chunks = list(stream)
     assert len(chunks) == 2
-    assert _usage_posts(mock_bridge) == [{"input": 10, "output": 5}]
+    assert _usage_posts(mock_bridge) == [{"input": 10, "output": 5, "provider": "openai"}]
 
 
 async def test_async_reports_usage(mock_bridge: HTTPServer) -> None:
     _expect_usage(mock_bridge)
     client = instrument(FakeAsyncOpenAI())
     await client.chat.completions.create(messages=[])
-    assert _usage_posts(mock_bridge) == [{"input": 12, "output": 6}]
+    assert _usage_posts(mock_bridge) == [{"input": 12, "output": 6, "provider": "openai"}]
 
 
 async def test_async_stream_reports_once(mock_bridge: HTTPServer) -> None:
@@ -276,7 +325,7 @@ async def test_async_stream_reports_once(mock_bridge: HTTPServer) -> None:
     stream = await client.chat.completions.create(stream=True)
     chunks = [chunk async for chunk in stream]
     assert len(chunks) == 2
-    assert _usage_posts(mock_bridge) == [{"input": 11, "output": 4}]
+    assert _usage_posts(mock_bridge) == [{"input": 11, "output": 4, "provider": "openai"}]
 
 
 # ── Idempotency + zero-usage ──────────────────────────────────────────────────
@@ -288,7 +337,7 @@ def test_double_instrument_reports_once(mock_bridge: HTTPServer) -> None:
     instrument(client)
     instrument(client)  # second call must be a no-op (no double-wrap)
     client.chat.completions.create(messages=[])
-    assert _usage_posts(mock_bridge) == [{"input": 10, "output": 5}]
+    assert _usage_posts(mock_bridge) == [{"input": 10, "output": 5, "provider": "openai"}]
 
 
 def test_zero_usage_not_submitted(mock_bridge: HTTPServer) -> None:

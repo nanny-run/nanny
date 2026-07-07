@@ -108,6 +108,10 @@ pub struct Usage {
     pub model: Option<String>,
     /// Optional provider identifier (e.g. `"openai"`). Label only — no pricing.
     pub provider: Option<String>,
+    /// Optional harness attribution reported alongside this call — the "on every
+    /// request" path (parity with the Python SDK). Deduped bridge-side, so it is
+    /// safe to set on every report. Prefer [`set_harness`] for a one-shot declare.
+    pub harness: Option<Harness>,
 }
 
 /// Report measured LLM token usage to the nanny bridge.
@@ -141,7 +145,18 @@ pub struct Usage {
 /// });
 /// ```
 pub fn report_usage(usage: Usage) {
-    runtime::report_usage(usage.input, usage.output, usage.model, usage.provider);
+    let (harness_name, harness_version) = match usage.harness {
+        Some(h) => (Some(h.name), h.version),
+        None => (None, None),
+    };
+    runtime::report_usage(
+        usage.input,
+        usage.output,
+        usage.model,
+        usage.provider,
+        harness_name,
+        harness_version,
+    );
 }
 
 // ── Harness attribution ───────────────────────────────────────────────────────
@@ -679,7 +694,14 @@ mod runtime {
     /// No-op in passthrough mode (no bridge) and for zero-token reports.
     /// Fire-and-forget: the bridge response is ignored and transport errors are
     /// swallowed, so reporting usage never interrupts the agent.
-    pub fn report_usage(input: u64, output: u64, model: Option<String>, provider: Option<String>) {
+    pub fn report_usage(
+        input: u64,
+        output: u64,
+        model: Option<String>,
+        provider: Option<String>,
+        harness_name: Option<String>,
+        harness_version: Option<String>,
+    ) {
         if !is_active() || input + output == 0 {
             return;
         }
@@ -689,6 +711,13 @@ mod runtime {
         }
         if let Some(p) = provider {
             body["provider"] = serde_json::Value::String(p);
+        }
+        if let Some(name) = harness_name {
+            let mut h = serde_json::json!({ "name": name });
+            if let Some(v) = harness_version {
+                h["version"] = serde_json::Value::String(v);
+            }
+            body["harness"] = h;
         }
         let _ = http_post("/llm/usage", &body.to_string());
     }
@@ -784,6 +813,7 @@ mod tests {
             output: 3,
             model: Some("gpt-4o".into()),
             provider: Some("openai".into()),
+            ..Default::default()
         });
     }
 

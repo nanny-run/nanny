@@ -1,8 +1,9 @@
-"""nanny_sdk.instrument — LLM token measurement via client wrapping.
+"""nanny_sdk.instrument — LLM token + attribution measurement via client wrapping.
 
-Call once at agent startup to automatically submit LLM token usage to the
-bridge. The bridge debits those tokens from the shared ledger — the same
-ledger that ``@tool(tokens=N)`` charges against.
+Call once at agent startup to automatically submit LLM token usage — plus the
+model, provider, and (auto-detected) harness — to the bridge on every call. The
+bridge debits tokens from the shared ledger and records the attribution the cloud
+uses for Fleet Intelligence (cost, model/provider/harness breakdowns).
 
 Usage::
 
@@ -12,41 +13,41 @@ Usage::
     client = openai.OpenAI()
     nanny_sdk.instrument(client)   # one line — done
 
-    # From here on, every response's token usage is reported to the bridge.
-
 Supported clients (detected by duck-typing — no provider package is imported):
 
-- **OpenAI** ``openai.OpenAI`` / ``openai.AsyncOpenAI``
-- **Groq** ``groq.Groq`` / ``groq.AsyncGroq``
-- **Together AI** ``together.Together``
-- **Azure OpenAI** (uses the OpenAI SDK)
-- **LiteLLM** (normalises all providers to the OpenAI format)
+- **OpenAI** ``openai.OpenAI`` / ``openai.AsyncOpenAI`` (+ Groq / Together / Azure
+  / LiteLLM / OpenRouter / DeepSeek via the OpenAI-compatible interface)
 - **Anthropic** ``anthropic.Anthropic`` / ``anthropic.AsyncAnthropic``
-- **Mistral** ``mistralai.Mistral`` (uses ``chat.complete``, not ``chat.completions.create``)
+- **Mistral** ``mistralai.Mistral``
 - **Google Gemini** (``google-genai`` SDK, ``genai.Client``)
 - **Cohere v2** ``cohere.ClientV2``
 
-Any client whose ``chat.completions.create`` method returns a response with a
-``.usage.prompt_tokens`` / ``.usage.completion_tokens`` attribute pair is also
-covered automatically (OpenAI-compatible interface).
+**Attribution captured on every call:**
 
-**Passthrough mode:** when the bridge is not present (i.e. ``NANNY_BRIDGE_SOCKET``,
-``NANNY_BRIDGE_PORT``, and ``NANNY_BRIDGE_ADDR`` are all absent), ``instrument``
-returns the client unchanged. No wrapping, no overhead.
+- **model** — read off the response (``response.model``).
+- **provider** — the client family; for the OpenAI-compatible bucket, refined from
+  the client's ``base_url`` host (groq/together/openrouter/…), else ``openai``.
+- **harness** — auto-detected from the call stack / imported frameworks
+  (langgraph, crewai, opencode, …), cached after first detection and re-sent on
+  every call (the bridge dedups). ``None`` when no known harness is present.
 
-**Non-intrusive:** ``instrument`` monkey-patches the client's completion method.
-It does not inspect message content — only the numeric token counts from
-the response usage object. No manifesto violation.
+**Passthrough mode:** when the bridge is not present (``NANNY_BRIDGE_SOCKET``,
+``NANNY_BRIDGE_PORT``, ``NANNY_BRIDGE_ADDR`` all absent), ``instrument`` returns
+the client unchanged. No wrapping, no overhead.
+
+**Non-intrusive:** it monkey-patches the completion method only. It never
+inspects message content — only numeric token counts and the model/provider
+identifiers from the response. No manifesto violation.
 
 **Streaming:** streamed responses are wrapped so usage is submitted once the
-stream is fully consumed. The provider must emit token usage in the stream
-(e.g. OpenAI ``stream_options={"include_usage": True}``); without it, a streamed
-call reports 0 tokens.
+stream is fully consumed (the provider must emit usage in the stream, e.g. OpenAI
+``stream_options={"include_usage": True}``).
 """
 
 from __future__ import annotations
 
 import inspect
+import sys
 import threading
 from collections.abc import Callable
 from typing import Any
@@ -54,22 +55,19 @@ from weakref import WeakSet
 
 import nanny_sdk._client as _bridge
 
+# A usage record extracted from a response: (input_tokens, output_tokens, model).
+UsageRecord = tuple[int, int, "str | None"]
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
 
 def instrument(client: Any) -> Any:
-    """Wrap *client* so that token usage is automatically reported to the bridge.
+    """Wrap *client* so token usage + attribution is reported to the bridge.
 
-    Returns the same client object (mutated in-place for easy one-liner use).
-    When the bridge is not active, returns *client* unchanged.
-
-    Supported providers are detected by duck-typing — no provider package is
-    imported inside this function.
-
-    :param client: Any supported LLM client instance.
-    :returns: The same *client* object.
+    Returns the same client object (mutated in-place). No-op when the bridge is
+    not active. Providers detected by duck-typing — no provider package imported.
     """
     if _bridge.is_passthrough():
         return client
@@ -79,13 +77,96 @@ def instrument(client: Any) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# Provider resolution
+# ---------------------------------------------------------------------------
+
+# base_url host fragment → provider label, for the OpenAI-compatible bucket.
+_OPENAI_HOSTS: dict[str, str] = {
+    "api.openai.com": "openai",
+    "openai.azure.com": "azure",
+    "groq.com": "groq",
+    "together.": "together_ai",
+    "openrouter.ai": "openrouter",
+    "mistral.ai": "mistral",
+    "deepseek.com": "deepseek",
+    "fireworks.ai": "fireworks_ai",
+}
+
+
+def _openai_provider(client: Any) -> str:
+    """Refine the OpenAI-compatible provider from the client's base_url host."""
+    try:
+        host = str(getattr(client, "base_url", "") or "").lower()
+    except Exception:  # noqa: BLE001
+        host = ""
+    for fragment, provider in _OPENAI_HOSTS.items():
+        if fragment in host:
+            return provider
+    return "openai"
+
+
+# ---------------------------------------------------------------------------
+# Harness auto-detection (SDK-layer convenience — never in the engine)
+# ---------------------------------------------------------------------------
+
+# Known agentic harnesses / frameworks, by their top-level import name.
+_HARNESS_ROOTS: dict[str, str] = {
+    "opencode": "opencode",
+    "cline": "cline",
+    "langgraph": "langgraph",
+    "langchain": "langchain",
+    "crewai": "crewai",
+    "llama_index": "llama-index",
+    "autogen": "autogen",
+    "haystack": "haystack",
+    "dspy": "dspy",
+    "smolagents": "smolagents",
+    "pydantic_ai": "pydantic-ai",
+    "agno": "agno",
+}
+
+_harness_lock = threading.Lock()
+_harness_detected = False
+_harness_value: str | None = None
+
+
+def _detect_harness() -> str | None:
+    """Best-effort harness name, cached after first detection.
+
+    Prefers the call stack (which framework actually drove this call), then falls
+    back to imported-module presence. Returns None when no known harness is found.
+    Heuristic — that's why it lives in the SDK, not the engine.
+    """
+    global _harness_detected, _harness_value
+    if _harness_detected:
+        return _harness_value
+    with _harness_lock:
+        if _harness_detected:
+            return _harness_value
+        value: str | None = None
+        try:
+            for info in inspect.stack():
+                root = (info.frame.f_globals.get("__name__", "") or "").split(".", 1)[0]
+                if root in _HARNESS_ROOTS:
+                    value = _HARNESS_ROOTS[root]
+                    break
+        except Exception:  # noqa: BLE001
+            value = None
+        if value is None:
+            for root, name in _HARNESS_ROOTS.items():
+                if root in sys.modules:
+                    value = name
+                    break
+        _harness_value = value
+        _harness_detected = True
+        return _harness_value
+
+
+# ---------------------------------------------------------------------------
 # Internal patching logic
 # ---------------------------------------------------------------------------
 
-# Guard against double-patching the same client. Keyed on the client OBJECT via
-# a WeakSet — not id(), which Python recycles after GC (a recycled id would
-# wrongly cause a brand-new client to be treated as already patched, so its
-# usage would never be reported).
+# Guard against double-patching the same client (WeakSet keyed on the object).
 _patched_clients: WeakSet[Any] = WeakSet()
 _patched_lock = threading.Lock()
 
@@ -98,14 +179,13 @@ def _patch_client(client: Any) -> None:
                 return
             _patched_clients.add(client)
         except TypeError:
-            # Client isn't hashable / weak-referenceable — instrument it anyway
-            # rather than fail to, forgoing only the dedup guard.
+            # Not hashable / weak-referenceable — instrument anyway, no dedup.
             pass
 
     # Detection order matters — see module docstring for rationale.
     _try_patch_openai(client)      # client.chat.completions.create
     _try_patch_anthropic(client)   # client.messages.create
-    _try_patch_mistral(client)     # client.chat.complete (no .completions attr)
+    _try_patch_mistral(client)     # client.chat.complete (no .completions)
     _try_patch_gemini(client)      # client.models.generate_content
     _try_patch_cohere(client)      # callable(client.chat) — fallback, runs last
 
@@ -114,14 +194,14 @@ def _patch_client(client: Any) -> None:
 # Provider-specific patchers
 # ---------------------------------------------------------------------------
 
+
 def _try_patch_openai(client: Any) -> None:
     """Patch ``client.chat.completions.create`` — OpenAI / Groq / Together / LiteLLM."""
     try:
         completions = client.chat.completions
     except AttributeError:
         return
-
-    _wrap_method(completions, "create", _extract_usage)
+    _wrap_method(completions, "create", _openai_provider(client))
 
 
 def _try_patch_anthropic(client: Any) -> None:
@@ -130,26 +210,18 @@ def _try_patch_anthropic(client: Any) -> None:
         messages = client.messages
     except AttributeError:
         return
-
-    _wrap_method(messages, "create", _extract_usage)
+    _wrap_method(messages, "create", "anthropic")
 
 
 def _try_patch_mistral(client: Any) -> None:
-    """Patch ``client.chat.complete`` — Mistral AI.
-
-    Guard: ``client.chat`` must have ``.complete`` but NOT ``.completions``.
-    The absence of ``.completions`` distinguishes Mistral from OpenAI-style clients
-    that also happen to expose ``.complete``.
-    """
+    """Patch ``client.chat.complete`` — Mistral AI (has ``.complete``, no ``.completions``)."""
     try:
         chat = client.chat
     except AttributeError:
         return
-
     if not hasattr(chat, "complete") or hasattr(chat, "completions"):
         return
-
-    _wrap_method(chat, "complete", _extract_usage)
+    _wrap_method(chat, "complete", "mistral")
 
 
 def _try_patch_gemini(client: Any) -> None:
@@ -158,35 +230,28 @@ def _try_patch_gemini(client: Any) -> None:
         models = client.models
     except AttributeError:
         return
-
     if not hasattr(models, "generate_content"):
         return
-
-    _wrap_method(models, "generate_content", _extract_usage)
+    _wrap_method(models, "generate_content", "gemini")
 
 
 def _try_patch_cohere(client: Any) -> None:
-    """Patch ``client.chat`` — Cohere v2 (``ClientV2``).
-
-    Guard: ``client.chat`` must be *callable* directly. OpenAI's ``client.chat``
-    is a namespace object (not callable), so this guard never fires for OpenAI,
-    Groq, or any other OpenAI-compatible client. Runs last to act as a fallback.
-    """
+    """Patch ``client.chat`` — Cohere v2 (``client.chat`` is directly callable)."""
     chat = getattr(client, "chat", None)
     if chat is None or not callable(chat):
         return
-
-    # For Cohere, client.chat IS the callable — we patch it on the client directly.
     original = chat
 
     if inspect.iscoroutinefunction(original):
+
         async def _async_chat(*args: Any, **kwargs: Any) -> Any:
-            return _capture(await original(*args, **kwargs), _extract_usage)
+            return _capture(await original(*args, **kwargs), "cohere")
 
         client.chat = _async_chat
     else:
+
         def _sync_chat(*args: Any, **kwargs: Any) -> Any:
-            return _capture(original(*args, **kwargs), _extract_usage)
+            return _capture(original(*args, **kwargs), "cohere")
 
         client.chat = _sync_chat
 
@@ -195,20 +260,23 @@ def _try_patch_cohere(client: Any) -> None:
 # Generic method wrapper
 # ---------------------------------------------------------------------------
 
-def _wrap_method(obj: Any, method_name: str, extractor: Any) -> None:
+
+def _wrap_method(obj: Any, method_name: str, provider: str) -> None:
     """Replace *obj.method_name* with a wrapper that submits usage after the call."""
     original = getattr(obj, method_name, None)
     if original is None:
         return
 
     if inspect.iscoroutinefunction(original):
+
         async def _async_wrapper(*args: Any, **kwargs: Any) -> Any:
-            return _capture(await original(*args, **kwargs), extractor)
+            return _capture(await original(*args, **kwargs), provider)
 
         setattr(obj, method_name, _async_wrapper)
     else:
+
         def _sync_wrapper(*args: Any, **kwargs: Any) -> Any:
-            return _capture(original(*args, **kwargs), extractor)
+            return _capture(original(*args, **kwargs), provider)
 
         setattr(obj, method_name, _sync_wrapper)
 
@@ -217,34 +285,24 @@ def _wrap_method(obj: Any, method_name: str, extractor: Any) -> None:
 # Stream-aware usage capture
 # ---------------------------------------------------------------------------
 
-def _capture(response: Any, extractor: Callable[[Any], tuple[int, int]]) -> Any:
-    """Submit usage for *response*, transparently handling streaming.
 
-    A non-stream response carries ``.usage`` immediately — extract and submit.
-    A streaming response is an iterator (``__next__`` / ``__anext__``) whose
-    usage only appears in the final chunk, so wrap it and submit once the stream
-    is fully consumed. (Requires the provider to emit usage in the stream — e.g.
-    OpenAI ``stream_options={"include_usage": True}``; otherwise 0 is reported.)
-    """
+def _capture(response: Any, provider: str) -> Any:
+    """Submit usage for *response*, transparently handling streaming."""
     if hasattr(response, "__anext__"):
-        return _AsyncUsageStream(response, extractor)
+        return _AsyncUsageStream(response, provider)
     if hasattr(response, "__next__"):
-        return _SyncUsageStream(response, extractor)
-    _submit(extractor(response))
+        return _SyncUsageStream(response, provider)
+    _submit(_extract_usage(response), provider)
     return response
 
 
 class _SyncUsageStream:
-    """Wraps a sync streaming response; submits usage once, at end of stream.
+    """Wraps a sync streaming response; submits usage once, at end of stream."""
 
-    Delegates all other attribute access + the context-manager protocol to the
-    underlying stream, so callers using ``with`` / ``.close()`` still work.
-    """
-
-    def __init__(self, stream: Any, extractor: Callable[[Any], tuple[int, int]]) -> None:
+    def __init__(self, stream: Any, provider: str) -> None:
         self._stream = stream
-        self._extractor = extractor
-        self._counts: tuple[int, int] = (0, 0)
+        self._provider = provider
+        self._record: UsageRecord = (0, 0, None)
         self._flushed = False
 
     def __iter__(self) -> _SyncUsageStream:
@@ -256,15 +314,15 @@ class _SyncUsageStream:
         except StopIteration:
             self._flush()
             raise
-        counts = self._extractor(chunk)
-        if counts[0] or counts[1]:
-            self._counts = counts
+        rec = _extract_usage(chunk)
+        if rec[0] or rec[1] or rec[2]:
+            self._record = rec
         return chunk
 
     def _flush(self) -> None:
         if not self._flushed:
             self._flushed = True
-            _submit(self._counts)
+            _submit(self._record, self._provider)
 
     def __enter__(self) -> _SyncUsageStream:
         enter = getattr(self._stream, "__enter__", None)
@@ -284,10 +342,10 @@ class _SyncUsageStream:
 class _AsyncUsageStream:
     """Wraps an async streaming response; submits usage once, at end of stream."""
 
-    def __init__(self, stream: Any, extractor: Callable[[Any], tuple[int, int]]) -> None:
+    def __init__(self, stream: Any, provider: str) -> None:
         self._stream = stream
-        self._extractor = extractor
-        self._counts: tuple[int, int] = (0, 0)
+        self._provider = provider
+        self._record: UsageRecord = (0, 0, None)
         self._flushed = False
 
     def __aiter__(self) -> _AsyncUsageStream:
@@ -299,15 +357,15 @@ class _AsyncUsageStream:
         except StopAsyncIteration:
             self._flush()
             raise
-        counts = self._extractor(chunk)
-        if counts[0] or counts[1]:
-            self._counts = counts
+        rec = _extract_usage(chunk)
+        if rec[0] or rec[1] or rec[2]:
+            self._record = rec
         return chunk
 
     def _flush(self) -> None:
         if not self._flushed:
             self._flushed = True
-            _submit(self._counts)
+            _submit(self._record, self._provider)
 
     async def __aenter__(self) -> _AsyncUsageStream:
         aenter = getattr(self._stream, "__aenter__", None)
@@ -327,77 +385,80 @@ class _AsyncUsageStream:
 
 
 # ---------------------------------------------------------------------------
-# Usage extraction — tries all known field patterns
+# Usage + model extraction
 # ---------------------------------------------------------------------------
 
-def _extract_usage(response: Any) -> tuple[int, int]:
-    """Return ``(input_tokens, output_tokens)`` from any supported response object.
 
-    Tries all known usage field patterns in order. Returns ``(0, 0)`` if none
-    match or if anything raises — this function must never crash the agent.
+def _extract_model(response: Any) -> str | None:
+    """Best-effort model id from a response (``model`` or Gemini ``model_version``)."""
+    for attr in ("model", "model_version"):
+        value = getattr(response, attr, None)
+        if isinstance(value, str) and value:
+            return value
+    return None
 
-    Patterns tried:
-    1. ``response.usage.prompt_tokens`` + ``completion_tokens``
-       — OpenAI, Groq, Together AI, Azure OpenAI, Mistral, LiteLLM
-    2. ``response.usage.input_tokens`` + ``output_tokens``
-       — Anthropic
-    3. ``response.usage.prompt_tokens`` + ``response_tokens``
-       — Cohere v2 (``response.usage`` path)
-    4. ``response.usage_metadata.prompt_token_count`` + ``candidates_token_count``
-       — Google Gemini (``google-genai`` SDK)
+
+def _extract_usage(response: Any) -> UsageRecord:
+    """Return ``(input_tokens, output_tokens, model)`` from any supported response.
+
+    Tries all known usage field patterns; returns ``(0, 0, model)`` if none match
+    or anything raises — this must never crash the agent.
     """
+    model = _extract_model(response)
     try:
         usage = getattr(response, "usage", None)
         if usage is not None:
-            # Pattern 1 — OpenAI / Groq / Together / Mistral / LiteLLM
+            # OpenAI / Groq / Together / Mistral / LiteLLM
             pt = getattr(usage, "prompt_tokens", None)
             ct = getattr(usage, "completion_tokens", None)
             if pt is not None and ct is not None:
-                return (int(pt) or 0, int(ct) or 0)
+                return (int(pt) or 0, int(ct) or 0, model)
 
-            # Pattern 2 — Anthropic
+            # Anthropic
             it = getattr(usage, "input_tokens", None)
             ot = getattr(usage, "output_tokens", None)
             if it is not None and ot is not None:
-                return (int(it) or 0, int(ot) or 0)
+                return (int(it) or 0, int(ot) or 0, model)
 
-            # Pattern 3 — Cohere v2 (response_tokens instead of completion_tokens)
+            # Cohere v2 (response_tokens instead of completion_tokens)
             rt = getattr(usage, "response_tokens", None)
             if pt is not None and rt is not None:
-                return (int(pt) or 0, int(rt) or 0)
+                return (int(pt) or 0, int(rt) or 0, model)
 
-        # Pattern 4 — Google Gemini (usage_metadata, different field names)
+        # Google Gemini (usage_metadata, different field names)
         usage_meta = getattr(response, "usage_metadata", None)
         if usage_meta is not None:
             ptc = getattr(usage_meta, "prompt_token_count", None)
             ctc = getattr(usage_meta, "candidates_token_count", None)
             if ptc is not None or ctc is not None:
-                return (int(ptc or 0), int(ctc or 0))
+                return (int(ptc or 0), int(ctc or 0), model)
 
     except Exception:  # noqa: BLE001 — never crash the agent for telemetry
         pass
 
-    return (0, 0)
+    return (0, 0, model)
 
 
 # ---------------------------------------------------------------------------
 # Bridge submission
 # ---------------------------------------------------------------------------
 
-def _submit(counts: tuple[int, int]) -> None:
-    """POST /llm/usage to the bridge. Silently drops errors (never crash agent)."""
-    input_tokens, output_tokens = counts
+
+def _submit(record: UsageRecord, provider: str | None) -> None:
+    """POST /llm/usage with tokens + model + provider + harness. Errors dropped."""
+    input_tokens, output_tokens, model = record
     if not input_tokens and not output_tokens:
         return
+    body: dict[str, Any] = {"input": input_tokens, "output": output_tokens}
+    if model:
+        body["model"] = model
+    if provider:
+        body["provider"] = provider
+    harness = _detect_harness()
+    if harness:
+        body["harness"] = {"name": harness}
     try:
         with _bridge._make_client(timeout=5.0) as http:
-            http.post(
-                "/llm/usage",
-                json={"input": input_tokens, "output": output_tokens},
-                headers=_bridge._headers(),
-            )
-            # We don't raise on BudgetExhausted here — the agent may be mid-LLM
-            # call. The bridge marks execution stopped; the next @tool call will
-            # raise BudgetExhausted through the normal path.
+            http.post("/llm/usage", json=body, headers=_bridge._headers())
     except Exception:  # noqa: BLE001
         pass
