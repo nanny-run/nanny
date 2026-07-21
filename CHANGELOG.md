@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] — 2026-07-21
+
+### Added
+
+- **`NANNY_API_KEY` environment variable** — the managed-mode API key is now read
+  from the environment, so `nanny.toml` no longer has to hold a live credential.
+  Resolution order is `NANNY_API_KEY` → `[managed] api_key`; a blank or
+  whitespace-only env value counts as unset (an unset CI secret usually surfaces
+  as `""`) and falls through rather than authenticating with an empty string.
+  Matches the injection pattern already used by `NANNY_BRIDGE_CERT` /
+  `NANNY_BRIDGE_KEY` / `NANNY_SESSION_TOKEN`, so one secrets manager can populate
+  all of them.
+
+### Changed
+
+- **`[managed] api_key` is now optional** (`Option<String>`). Existing
+  `nanny.toml` files are unaffected — a key already in the file keeps working.
+  It remains supported as a local-experimentation fallback, but is overridden by
+  `NANNY_API_KEY`.
+  <br>**API note:** `ManagedConfig.api_key` changed from `String` to
+  `Option<String>`. Code constructing or reading that field directly needs
+  `Some(..)` / `.as_deref()`. Shipped in a patch release deliberately: there are
+  no production consumers yet, and `nanny-config` is a published dependency of
+  `nannyd` rather than a crate meant for direct use.
+  This resolves a contradiction: the manifesto makes `nanny.toml` the source of
+  truth — versionable and reviewable — while that same file was required to carry
+  a secret that must never be committed. Managed mode is now two non-secret lines.
+- When managed mode is enabled but no API key can be resolved, the runtime prints
+  a warning and **continues enforcing locally** instead of silently forwarding
+  nothing. Enforcement never depends on the cloud.
+
 ## [0.4.0] — 2026-07-07
 
 ### Added
