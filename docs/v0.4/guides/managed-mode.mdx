@@ -33,21 +33,35 @@ mode = "managed"
 
 [managed]
 endpoint = "https://api.nanny.run/v1"
-api_key  = "nanny_live_xxxxxxxxxxxx"
 ```
 
-Then run as usual:
+Supply your API key through the environment, then run as usual:
 
 ```bash
+export NANNY_API_KEY="nny_..."
 nanny run python agent.py
 ```
 
 Your run appears in the dashboard within a few seconds of finishing. That's it — no code changes, no per-call instrumentation required.
 
-<Tip>
-  Keep `api_key` out of version control. Reference an environment variable or a
-  secrets manager in your deploy pipeline rather than committing the literal key.
-</Tip>
+<Note>
+  There are only two lines of config, and **neither is a secret** — so
+  `nanny.toml` stays committable, reviewable in a pull request, and consistent
+  with the rest of your enforcement config.
+
+  `NANNY_API_KEY` follows the same injection pattern as the bridge's
+  `NANNY_BRIDGE_CERT` / `NANNY_BRIDGE_KEY`, so a secrets manager (Vault Agent,
+  CI secret store) can populate all of them the same way. An `api_key` field in
+  `[managed]` still works as a local-experimentation fallback, but the
+  environment variable overrides it.
+</Note>
+
+<Warning>
+  If no key is found, Nanny prints a warning and keeps enforcing **locally** — it
+  just won't forward events to the cloud. A blank `NANNY_API_KEY` (a common shape
+  for an unset CI secret) is treated as unset rather than used as an empty
+  credential.
+</Warning>
 
 ## Local vs managed
 

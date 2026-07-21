@@ -330,7 +330,7 @@ mod tests {
             observability: ObservabilityConfig::default(),
             managed: Some(ManagedConfig {
                 endpoint: "https://api.nanny.run/v1".to_string(),
-                api_key: "nny_test_key".to_string(),
+                api_key: Some("nny_test_key".to_string()),
             }),
             proxy: None,
         };
