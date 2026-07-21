@@ -54,7 +54,8 @@ allowed_hosts = ["api.openai.com", "*.anthropic.com"]   # required when proxy mo
 
 [managed]
 endpoint = "https://api.nanny.run/v1"
-api_key  = "nanny_live_xxxxxxxxxxxx"
+# The key comes from the NANNY_API_KEY environment variable:
+#   export NANNY_API_KEY="nny_..."
 ```
 
 ---
@@ -165,6 +166,33 @@ Only read when `[runtime] mode = "managed"`. Cloud connection config.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `endpoint` | string | — | Nanny Cloud API endpoint. |
-| `org_id` | string | — | Your organization ID. |
-| `api_key` | string | — | API key for authentication. Use an environment variable in production — never commit this value. |
+| `api_key` | string | — | **Optional, and not recommended.** A local-experimentation escape hatch. Prefer `NANNY_API_KEY` (below), which overrides this field. |
+
+### Supplying the API key
+
+The key is read from the **`NANNY_API_KEY`** environment variable, so `nanny.toml`
+stays safe to commit:
+
+```bash
+export NANNY_API_KEY="nny_..."
+nanny run
+```
+
+Resolution order:
+
+1. `NANNY_API_KEY` — wins whenever it is set to a non-empty value.
+2. `[managed] api_key` in `nanny.toml` — fallback.
+
+A blank or whitespace-only `NANNY_API_KEY` counts as **unset** (an unset CI secret
+usually surfaces as `""`), so it falls through to the config file rather than
+authenticating with an empty string.
+
+If no key is found, Nanny prints a warning and **keeps enforcing locally** — it
+simply does not forward events to the cloud. Enforcement never depends on the
+network.
+
+<Note>
+  Your organization is derived from the API key on the cloud side, so there is no
+  `org_id` field to configure.
+</Note>
 

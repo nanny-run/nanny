@@ -20,7 +20,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use nanny_config::{Mode, NannyConfig};
+use nanny_config::{Mode, NannyConfig, API_KEY_ENV};
 
 // Match the cloud ingest caps so a batch is never rejected wholesale.
 const MAX_LINES: usize = 1000; // NDJSON lines per request
@@ -44,7 +44,19 @@ impl ManagedSender {
         // The version lives in the configured endpoint (e.g. ".../v1"); the runtime
         // only appends the resource, so it stays version-agnostic.
         let endpoint = format!("{}/ingest", managed.endpoint.trim_end_matches('/'));
-        let api_key = managed.api_key.clone();
+
+        // NANNY_API_KEY first, then [managed] api_key. Missing is not fatal:
+        // cloud forwarding is fire-and-forget telemetry, and local enforcement
+        // is unaffected — but say so loudly, because the user asked for managed
+        // mode and silently getting none of it is worse than a warning.
+        let Some(api_key) = managed.resolve_api_key() else {
+            eprintln!(
+                "nanny: managed mode is on but no API key was found — set {} \
+                 (or [managed] api_key). Enforcing locally; not forwarding to the cloud.",
+                API_KEY_ENV
+            );
+            return None;
+        };
         let session = session_token.to_string();
 
         let client = reqwest::blocking::Client::builder()
@@ -145,6 +157,27 @@ mod tests {
         ))
     }
 
+    /// `NANNY_API_KEY` is process-global state, and cargo runs tests in parallel
+    /// threads within one process — so every test whose result depends on that
+    /// variable must hold this lock, not just the ones that write to it.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Take the env lock, ignoring poisoning (a panic in another env test must
+    /// not cascade into unrelated failures here).
+    fn env_guard() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Managed config with no `api_key` — the shape we now recommend, where the
+    /// key arrives via `NANNY_API_KEY`.
+    fn managed_config_keyless(base: &str) -> NannyConfig {
+        parse_config(&format!(
+            "[runtime]\nmode = \"managed\"\n\n[start]\ncmd = \"true\"\n\n\
+             [limits]\nsteps = 10\ntokens = 100\ntimeout = 1000\n\n[tools]\nallowed = []\n\n\
+             [managed]\nendpoint = \"{base}/v1\"\n",
+        ))
+    }
+
     /// One-shot HTTP server: captures the first request (headers + body), returns
     /// 200, and sends the raw request back over a channel.
     fn mock_ingest_server() -> (u16, mpsc::Receiver<String>) {
@@ -195,6 +228,11 @@ mod tests {
 
     #[test]
     fn forwards_batched_ndjson_with_headers() {
+        // Depends on the file's api_key being used, so pin the env state.
+        let _guard = env_guard();
+        // SAFETY: guarded by ENV_LOCK.
+        unsafe { std::env::remove_var(API_KEY_ENV) };
+
         let (port, rx) = mock_ingest_server();
         let config = managed_config(&format!("http://127.0.0.1:{port}"));
         let sender = ManagedSender::maybe_start(&config, "session-abc").expect("managed → sender");
@@ -210,6 +248,51 @@ mod tests {
         // Both events arrive in one NDJSON batch.
         assert!(req.contains(r#"{"event":"ExecutionStarted"}"#));
         assert!(req.contains(r#"{"event":"ExecutionStopped"}"#));
+    }
+
+    /// End-to-end proof that `NANNY_API_KEY` actually reaches the wire: a config
+    /// with no `api_key` still authenticates, and the env value wins over a file
+    /// value when both exist. Env mutation is process-global, so both cases live
+    /// in one test rather than racing across threads.
+    #[test]
+    fn api_key_comes_from_the_environment() {
+        let _guard = env_guard();
+        // SAFETY: guarded by ENV_LOCK.
+        unsafe { std::env::set_var(API_KEY_ENV, "nny_from_env") };
+
+        // 1. No api_key in the file at all — the env supplies it.
+        let (port, rx) = mock_ingest_server();
+        let config = managed_config_keyless(&format!("http://127.0.0.1:{port}"));
+        let sender =
+            ManagedSender::maybe_start(&config, "sess").expect("env key → sender starts");
+        sender.enqueue(r#"{"event":"ExecutionStarted"}"#.to_string());
+        sender.flush_and_join();
+
+        let req = rx.recv_timeout(Duration::from_secs(5)).expect("server received a request");
+        assert!(
+            req.to_ascii_lowercase().contains("x-nanny-key: nny_from_env"),
+            "NANNY_API_KEY must be sent when the config has no api_key:\n{req}"
+        );
+
+        // 2. Both set — the environment overrides the file's "nny_test".
+        let (port, rx) = mock_ingest_server();
+        let config = managed_config(&format!("http://127.0.0.1:{port}"));
+        let sender = ManagedSender::maybe_start(&config, "sess").expect("sender starts");
+        sender.enqueue(r#"{"event":"ExecutionStarted"}"#.to_string());
+        sender.flush_and_join();
+
+        let req = rx.recv_timeout(Duration::from_secs(5)).expect("server received a request");
+        let lower = req.to_ascii_lowercase();
+        assert!(lower.contains("x-nanny-key: nny_from_env"), "env must win:\n{req}");
+        assert!(!lower.contains("nny_test"), "file key must not be used:\n{req}");
+
+        // 3. Neither set — no sender, and the run continues locally.
+        unsafe { std::env::remove_var(API_KEY_ENV) };
+        let config = managed_config_keyless("http://127.0.0.1:1");
+        assert!(
+            ManagedSender::maybe_start(&config, "sess").is_none(),
+            "no key anywhere → no sender, enforcement continues locally"
+        );
     }
 
     #[test]
