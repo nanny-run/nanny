@@ -31,6 +31,7 @@ normal state when running ``python agent.py`` directly instead of
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import ssl
 import tempfile
@@ -190,6 +191,30 @@ def is_passthrough() -> bool:
     return _socket_path() is None and _port() is None and _bridge_addr() is None
 
 
+def _split_host(addr: str) -> str:
+    """Return the host portion of a ``host:port`` address (handles IPv6 ``[::1]:port``)."""
+    if addr.startswith("["):
+        return addr[1 : addr.index("]")]
+    return addr.rsplit(":", 1)[0]
+
+
+def _is_loopback_host(host: str) -> bool:
+    """True if ``host`` is loopback.
+
+    Mirrors the governance server, which serves plain HTTP on loopback
+    (127.0.0.0/8, ::1) and mTLS only on non-loopback addresses
+    (see ``crates/bridge/src/network.rs``). The client must match: plain HTTP for
+    loopback, mTLS otherwise. Using HTTPS against the plain-HTTP loopback server
+    raises ``SSL: WRONG_VERSION_NUMBER``.
+    """
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Client factory
 # ---------------------------------------------------------------------------
@@ -201,7 +226,9 @@ def _make_client(**kwargs: Any) -> httpx.Client:
     Transport selection:
     1. Unix socket present  → ``HTTPTransport(uds=...)`` with ``base_url=http://localhost``
     2. TCP port present     → plain TCP with ``base_url=http://127.0.0.1:<port>``
-    3. NANNY_BRIDGE_ADDR set → HTTPS with mTLS, ``base_url=https://<addr>``
+    3. NANNY_BRIDGE_ADDR set → loopback: plain HTTP (``base_url=http://<addr>``);
+       non-loopback: HTTPS with mTLS (``base_url=https://<addr>``). This mirrors the
+       server, which serves plain HTTP on loopback and mTLS off-loopback.
 
     Raises ``RuntimeError`` if called in passthrough mode (should never happen
     because decorators check ``is_passthrough()`` first).
@@ -217,6 +244,11 @@ def _make_client(**kwargs: Any) -> httpx.Client:
 
     addr = _bridge_addr()
     if addr is not None:
+        # Mirror the server's transport (crates/bridge/src/network.rs): loopback is
+        # served as plain HTTP, non-loopback as mTLS. Connecting with HTTPS to the
+        # plain-HTTP loopback server raises SSL: WRONG_VERSION_NUMBER.
+        if _is_loopback_host(_split_host(addr)):
+            return httpx.Client(base_url=f"http://{addr}", **kwargs)
         # mTLS: build ssl.SSLContext from env vars or ~/.nanny/certs/ defaults.
         # Both file paths and inline PEM (NANNY_BRIDGE_CERT="-----BEGIN …") work.
         certs_dir = _default_certs_dir()

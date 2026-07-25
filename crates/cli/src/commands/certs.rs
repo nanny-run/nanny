@@ -91,7 +91,7 @@ pub fn cmd_certs(action: CertsCommand) -> Result<()> {
     match action {
         CertsCommand::Generate { out_dir, force, days } => cmd_certs_generate(out_dir, force, days),
         CertsCommand::Import { pairs } => cmd_certs_import(pairs),
-        CertsCommand::Rotate => cmd_certs_rotate(),
+        CertsCommand::Rotate => cmd_certs_rotate(None),
         CertsCommand::Remove => cmd_certs_remove(),
         CertsCommand::Show => cmd_certs_show(),
     }
@@ -382,8 +382,8 @@ fn cmd_certs_import(pairs: Vec<String>) -> Result<()> {
 
 // ── nanny certs rotate ────────────────────────────────────────────────────────
 
-fn cmd_certs_rotate() -> Result<()> {
-    let dir = default_certs_dir();
+fn cmd_certs_rotate(out_dir: Option<PathBuf>) -> Result<()> {
+    let dir = out_dir.unwrap_or_else(default_certs_dir);
 
     let ca_crt_path = dir.join("ca.crt");
     let ca_key_path = dir.join("ca.key");
@@ -838,13 +838,12 @@ mod tests {
         cmd_certs_generate(Some(dir.clone()), false, 365).unwrap();
 
         let original_server = fs::read(dir.join("server.crt")).unwrap();
-        cmd_certs_rotate().unwrap_or_else(|_| {
-            // rotate uses the default dir; fall back to generate --force for test isolation
-            cmd_certs_generate(Some(dir.clone()), true, 365).unwrap();
-        });
+        // Rotate the test dir specifically (not the default ~/.nanny/certs) so
+        // the test is hermetic and actually exercises rotation against these certs.
+        cmd_certs_rotate(Some(dir.clone())).unwrap();
 
         let new_server = fs::read(dir.join("server.crt")).unwrap();
-        // Certs are regenerated — the PEM bytes will differ (new keys each time)
+        // Certs are regenerated — the PEM bytes differ (a fresh key each rotate).
         assert_ne!(original_server, new_server, "rotated server.crt must differ from original");
 
         fs::remove_dir_all(&dir).ok();

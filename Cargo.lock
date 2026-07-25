@@ -1271,6 +1271,7 @@ dependencies = [
  "shlex",
  "time",
  "toml",
+ "uuid",
  "x509-parser",
 ]
 

@@ -382,8 +382,9 @@ fn dispatch(
     }
 
     // All other action endpoints return 410 Gone once execution has stopped.
-    if is_stopped(shared) {
-        return BridgeResp::json(410, r#"{"error":"execution stopped"}"#);
+    // The 410 carries the typed stop reason so the client reports the true cause.
+    if let Some(reason) = stopped_reason(shared) {
+        return stopped_response(&reason);
     }
 
     match (method, path) {
@@ -1074,53 +1075,94 @@ pub(crate) fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-pub(crate) fn is_stopped(shared: &Arc<Mutex<BridgeState>>) -> bool {
-    matches!(shared.lock().unwrap().execution, ExecutionState::Stopped { .. })
+/// Return the typed stop reason if this run has stopped, else `None`.
+///
+/// Used to build the 410 Gone body so a stopped run tells the client *why* it
+/// stopped (BudgetExhausted, MaxStepsReached, …) instead of a generic message.
+pub(crate) fn stopped_reason(shared: &Arc<Mutex<BridgeState>>) -> Option<String> {
+    match &shared.lock().unwrap().execution {
+        ExecutionState::Stopped { reason } => Some(reason.clone()),
+        ExecutionState::Running => None,
+    }
+}
+
+/// Build the 410 Gone body for a stopped run.
+///
+/// `error` stays `"execution stopped"` for backward compatibility; `reason`
+/// carries the specific stop-reason name so clients surface the true cause.
+/// `reason` is always one of the closed set of stop-reason identifiers, so it
+/// needs no JSON escaping.
+pub(crate) fn stopped_response(reason: &str) -> BridgeResp {
+    BridgeResp::json(410, format!(r#"{{"error":"execution stopped","reason":"{reason}"}}"#))
 }
 
 // ── Network server factory ────────────────────────────────────────────────────
 
-/// Initialise the shared state and registry for the network server.
+/// Template for building fresh per-run enforcement state in the network server.
 ///
-/// Returns the same Arc pair that the local bridge's transport loop uses
-/// so all nine route handlers can be reused unchanged by axum.
-pub(crate) fn init_shared_state(
+/// The governance server keeps one [`BridgeState`] per run id (see G3 —
+/// "Nanny stops the run, not the host"). All runs share one immutable
+/// [`ToolRegistry`]; everything else — ledger, counters, stop state, limits
+/// stacks — is cloned per run from this template so each run is independently
+/// budgeted and independently stoppable.
+pub(crate) struct RunTemplate {
+    session_token: String,
+    limits: Limits,
+    named_limits: HashMap<String, Limits>,
+    allowed_tools: Vec<String>,
+    per_tool_max_calls: HashMap<String, u32>,
+}
+
+impl RunTemplate {
+    /// Build a fresh, running [`BridgeState`] for a new run.
+    ///
+    /// Each call produces a distinct execution with a zeroed ledger and
+    /// counters, so a stop on one run never touches another.
+    pub(crate) fn build_state(&self) -> Arc<Mutex<BridgeState>> {
+        let limits_policy =
+            LimitsPolicy::new(self.limits.clone(), self.allowed_tools.clone());
+        let rule_evaluator = RuleEvaluator::new(self.per_tool_max_calls.clone());
+        let max_tokens = self.limits.max_tokens;
+
+        Arc::new(Mutex::new(BridgeState {
+            session_token: self.session_token.clone(),
+            execution: ExecutionState::Running,
+            limits_policy,
+            rule_evaluator,
+            ledger: FakeLedger::new(max_tokens),
+            default_limits: self.limits.clone(),
+            current_limits: self.limits.clone(),
+            named_limits: self.named_limits.clone(),
+            limits_stack: Vec::new(),
+            agent_name_stack: Vec::new(),
+            allowed_tools: self.allowed_tools.clone(),
+            tokens_spent: 0,
+            tool_call_counts: HashMap::new(),
+            tool_call_history: Vec::new(),
+            step_count: 0,
+            start_time: std::time::Instant::now(),
+            events: Vec::new(),
+            last_harness: None,
+        }))
+    }
+}
+
+/// Build the per-run state template and the shared registry for the network
+/// server. The registry is immutable and shared across all runs; the template
+/// mints a fresh [`BridgeState`] per run id.
+pub(crate) fn init_run_template(
     components: BridgeComponents,
     token: String,
-) -> (Arc<Mutex<BridgeState>>, Arc<ToolRegistry>) {
-    use nanny_runtime::{FakeLedger, LimitsPolicy, RuleEvaluator};
-    use std::collections::HashMap;
-
-    let limits_policy = LimitsPolicy::new(
-        components.limits.clone(),
-        components.allowed_tools.clone(),
-    );
-    let rule_evaluator = RuleEvaluator::new(components.per_tool_max_calls);
-    let max_tokens = components.limits.max_tokens;
-
-    let shared = Arc::new(Mutex::new(BridgeState {
+) -> (RunTemplate, Arc<ToolRegistry>) {
+    let template = RunTemplate {
         session_token: token,
-        execution: ExecutionState::Running,
-        limits_policy,
-        rule_evaluator,
-        ledger: FakeLedger::new(max_tokens),
-        default_limits: components.limits.clone(),
-        current_limits: components.limits,
+        limits: components.limits,
         named_limits: components.named_limits,
-        limits_stack: Vec::new(),
-        agent_name_stack: Vec::new(),
         allowed_tools: components.allowed_tools,
-        tokens_spent: 0,
-        tool_call_counts: HashMap::new(),
-        tool_call_history: Vec::new(),
-        step_count: 0,
-        start_time: std::time::Instant::now(),
-        events: Vec::new(),
-            last_harness: None,
-    }));
-
+        per_tool_max_calls: components.per_tool_max_calls,
+    };
     let registry = Arc::new(components.registry);
-    (shared, registry)
+    (template, registry)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -1431,6 +1473,20 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(10));
         let (s, _) = post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);
         assert_eq!(s, 410);
+    }
+
+    /// G7: the 410 body carries the typed stop reason so the client reports the
+    /// true cause (here TimeoutExpired) rather than a generic "execution stopped".
+    #[test]
+    fn stopped_410_body_carries_typed_reason() {
+        let b = started(1000);
+        b.stop("TimeoutExpired");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let (s, body) = post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);
+        assert_eq!(s, 410);
+        let v = json_val(&body);
+        assert_eq!(v["reason"], "TimeoutExpired");
+        assert_eq!(v["error"], "execution stopped");
     }
 
     #[test]

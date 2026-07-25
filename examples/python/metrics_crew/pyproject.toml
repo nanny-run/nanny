@@ -12,7 +12,7 @@ dependencies = [
     "typer>=0.12",
     "rich>=13",
     "python-dotenv>=1.0",
-    "nanny-sdk>=0.2.1",
+    "nanny-sdk==0.4.1",
 ]
 
 # ── Local development override ────────────────────────────────────────────────
@@ -21,8 +21,8 @@ dependencies = [
 # (from the workspace root) so both SDK and bridge are in sync.
 # To switch back: re-comment and run `uv sync`.
 #
-# [tool.uv.sources]
-# nanny-sdk = { path = "../../../sdks/python" }
+[tool.uv.sources]
+nanny-sdk = { path = "../../../sdks/python" }
 
 [project.scripts]
 metrics-crew = "metrics_crew.cli.main:app"
