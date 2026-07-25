@@ -60,3 +60,20 @@ class BridgeUnavailable(NannyStop):
     stop signals use BaseException. Silently swallowing a bridge failure would
     let the agent continue ungoverned, violating the manifesto guarantee.
     """
+
+
+class ExecutionStopped(NannyStop):
+    """The run this call belongs to has already stopped (G3/G7).
+
+    Raised when an action endpoint answers 410 Gone: the run hit a limit, or was
+    stopped, on an earlier call — possibly by another process sharing the same
+    ``NANNY_RUN_ID``. The governance server keys enforcement state by run id, so
+    the stop is final for this run only, not the whole server. ``reason`` carries
+    the stop reason the bridge reported. Known limit reasons (BudgetExhausted,
+    MaxStepsReached, TimeoutExpired, AgentCompleted) are raised as their own
+    class; everything else surfaces as this generic stop.
+    """
+
+    def __init__(self, reason: str = "execution stopped") -> None:
+        self.reason = reason
+        super().__init__(reason)

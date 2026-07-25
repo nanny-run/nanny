@@ -47,6 +47,7 @@ from nanny_sdk.exceptions import (
     AgentCompleted,
     AgentNotFound,
     BudgetExhausted,
+    ExecutionStopped,
     MaxStepsReached,
     RuleDenied,
     TimeoutExpired,
@@ -80,6 +81,20 @@ def _bridge_addr() -> str | None:
 
 def _token() -> str:
     return os.environ.get("NANNY_SESSION_TOKEN", "")
+
+
+def _run_id() -> str | None:
+    """Run id for this process on the governance server (G3).
+
+    Set from ``NANNY_RUN_ID`` — ``nanny run`` injects a fresh id per invocation,
+    or several processes set the same id to share one budget and stop together.
+    Absent → the server's default run (shared-budget behaviour). The local bridge
+    ignores it (one process is always one run). Mirrors the Rust client
+    (``crates/cli/src/lib.rs``): run id = which budget you spend, distinct from
+    ``NANNY_SESSION_TOKEN`` (who you are).
+    """
+    val = os.environ.get("NANNY_RUN_ID")
+    return val if val else None
 
 
 # ---------------------------------------------------------------------------
@@ -266,7 +281,11 @@ def _make_client(**kwargs: Any) -> httpx.Client:
 
 
 def _headers() -> dict[str, str]:
-    return {"X-Nanny-Session-Token": _token()}
+    h = {"X-Nanny-Session-Token": _token()}
+    run_id = _run_id()
+    if run_id:
+        h["X-Nanny-Run-Id"] = run_id
+    return h
 
 
 # ---------------------------------------------------------------------------
@@ -297,6 +316,36 @@ def _raise_for_stop(reason: str, tool_name: str = "", rule_name: str = "") -> No
             raise RuleDenied(rule_name)
         case _:
             raise RuntimeError(f"nanny: unknown stop reason: {reason!r}")
+
+
+def _raise_stop_from_410(resp: httpx.Response) -> None:
+    """Map a 410 Gone (this run already stopped) to a typed ``NannyStop``.
+
+    Mirrors the Rust client: a stopped run answers action endpoints with 410
+    carrying the stop reason (``{"error":"execution stopped","reason":"…"}``).
+    We surface it as a typed stop instead of letting httpx raise a raw
+    ``HTTPStatusError``, so agents and frameworks catch it cleanly (G7). The run
+    stopped on an earlier call — possibly on another process sharing the same
+    ``NANNY_RUN_ID`` — so the precise tool/rule detail is not on this response;
+    known limit reasons map to their class, everything else to
+    ``ExecutionStopped`` carrying the reason.
+    """
+    reason = ""
+    try:
+        reason = str(resp.json().get("reason", ""))
+    except Exception:  # noqa: BLE001 — a malformed body still means the run stopped
+        pass
+    match reason:
+        case "MaxStepsReached":
+            raise MaxStepsReached()
+        case "BudgetExhausted":
+            raise BudgetExhausted()
+        case "TimeoutExpired":
+            raise TimeoutExpired()
+        case "AgentCompleted":
+            raise AgentCompleted()
+        case _:
+            raise ExecutionStopped(reason or "execution stopped")
 
 
 # ---------------------------------------------------------------------------
@@ -334,6 +383,9 @@ def call_tool(tool_name: str, tokens: int, args: dict[str, Any]) -> None:
     payload = {"tool": tool_name, "tokens": tokens, "args": args}
     with _make_client(timeout=10.0) as c:
         resp = c.post("/tool/call", json=payload, headers=_headers())
+    # 410 Gone → this run already stopped; raise a typed stop, not a raw HTTP error.
+    if resp.status_code == 410:
+        _raise_stop_from_410(resp)
     resp.raise_for_status()
     data: dict[str, Any] = resp.json()
     if data.get("status") == "denied":
@@ -354,6 +406,9 @@ def agent_enter(name: str) -> None:
         resp = c.post("/agent/enter", json={"name": name}, headers=_headers())
     if resp.status_code == 404:
         raise AgentNotFound()
+    # 410 Gone → this run already stopped; raise a typed stop, not a raw HTTP error.
+    if resp.status_code == 410:
+        _raise_stop_from_410(resp)
     resp.raise_for_status()
 
 
