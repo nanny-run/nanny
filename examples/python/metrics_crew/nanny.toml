@@ -5,7 +5,7 @@
 mode = "local"
 
 [start]
-cmd = "uvicorn metrics_crew.api:app --host 0.0.0.0 --port 8080"
+cmd = "uv run uvicorn metrics_crew.api:app --host 0.0.0.0 --port 8080"
 
 # ── Global ceiling ────────────────────────────────────────────────────────────
 # Process-lifetime limits for the long-running server process.

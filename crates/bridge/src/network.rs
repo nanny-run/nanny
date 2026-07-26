@@ -20,6 +20,7 @@
 //     NANNY_BRIDGE_KEY=~/.nanny/certs/client.key
 //     NANNY_BRIDGE_CA=~/.nanny/certs/ca.crt
 
+use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -29,7 +30,7 @@ use anyhow::{Context, Result};
 use axum::{
     body::Bytes,
     extract::{ConnectInfo, Request, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -45,8 +46,15 @@ use super::{
     BridgeComponents, BridgeResp, BridgeState, ContentType,
     handle_agent_enter, handle_agent_exit, handle_events, handle_harness, handle_health,
     handle_llm_usage, handle_rule_evaluate, handle_status, handle_step, handle_stop,
-    handle_tool_call, init_shared_state, is_stopped,
+    handle_tool_call, init_run_template, stopped_reason, RunTemplate,
 };
+
+/// Run id used when a request carries no `X-Nanny-Run-Id` header.
+///
+/// All headerless clients share this one run — preserving the single-execution,
+/// shared-budget behaviour (one team, one task). Distinct run ids get isolated
+/// budgets and stop independently (G3 — "Nanny stops the run, not the host").
+const DEFAULT_RUN_ID: &str = "default";
 
 // ── Per-IP rate limiter ───────────────────────────────────────────────────────
 
@@ -86,7 +94,13 @@ impl RateLimiter {
 
 #[derive(Clone)]
 struct AppState {
-    shared: Arc<Mutex<BridgeState>>,
+    /// Per-run enforcement state, keyed by run id (from `X-Nanny-Run-Id`, or
+    /// [`DEFAULT_RUN_ID`] when absent). Each run has its own budget, counters,
+    /// and stop state: a stop ends that run, not the server. Runs are created
+    /// lazily on first reference from [`AppState::template`].
+    runs: Arc<Mutex<HashMap<String, Arc<Mutex<BridgeState>>>>>,
+    /// Template for minting a fresh run on first reference.
+    template: Arc<RunTemplate>,
     registry: Arc<ToolRegistry>,
     /// Session token stored separately for fast auth check without locking.
     session_token: String,
@@ -95,6 +109,29 @@ struct AppState {
     proxy_allowed_hosts: Option<Vec<String>>,
     /// Per-IP rate limiter — DoS protection.
     rate_limiter: RateLimiter,
+}
+
+impl AppState {
+    /// Resolve the enforcement state for the run named in `X-Nanny-Run-Id`,
+    /// creating it on first reference. A missing or empty header maps to
+    /// [`DEFAULT_RUN_ID`], so headerless clients keep the shared-budget
+    /// behaviour and every request for the same id shares one run.
+    fn run_state(&self, headers: &HeaderMap) -> Arc<Mutex<BridgeState>> {
+        let run_id = headers
+            .get("x-nanny-run-id")
+            .and_then(|v| v.to_str().ok())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(DEFAULT_RUN_ID)
+            .to_string();
+
+        self.runs
+            .lock()
+            .unwrap()
+            .entry(run_id)
+            .or_insert_with(|| self.template.build_state())
+            .clone()
+    }
 }
 
 // ── Token auth middleware ─────────────────────────────────────────────────────
@@ -146,69 +183,86 @@ fn to_response(resp: BridgeResp) -> Response {
     (status, [(axum::http::header::CONTENT_TYPE, ct)], resp.body).into_response()
 }
 
+/// 410 Gone response for a stopped run, carrying the typed stop reason so the
+/// client reports the true cause instead of a generic "execution stopped".
+fn stopped_gone(reason: &str) -> Response {
+    (
+        StatusCode::GONE,
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        format!(r#"{{"error":"execution stopped","reason":"{reason}"}}"#),
+    )
+        .into_response()
+}
+
 // ── Route handlers ────────────────────────────────────────────────────────────
 
-async fn route_health(State(app): State<AppState>) -> Response {
-    to_response(handle_health(&app.shared))
+async fn route_health(State(app): State<AppState>, headers: HeaderMap) -> Response {
+    to_response(handle_health(&app.run_state(&headers)))
 }
 
-async fn route_status(State(app): State<AppState>) -> Response {
-    to_response(handle_status(&app.shared))
+async fn route_status(State(app): State<AppState>, headers: HeaderMap) -> Response {
+    to_response(handle_status(&app.run_state(&headers)))
 }
 
-async fn route_events(State(app): State<AppState>) -> Response {
-    to_response(handle_events(&app.shared))
+async fn route_events(State(app): State<AppState>, headers: HeaderMap) -> Response {
+    to_response(handle_events(&app.run_state(&headers)))
 }
 
-async fn route_stop(State(app): State<AppState>, body: Bytes) -> Response {
-    to_response(handle_stop(&body, &app.shared))
+async fn route_stop(State(app): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+    to_response(handle_stop(&body, &app.run_state(&headers)))
 }
 
-async fn route_tool_call(State(app): State<AppState>, body: Bytes) -> Response {
-    // Action endpoints return 410 after execution stops.
-    if is_stopped(&app.shared) {
-        return (StatusCode::from_u16(410).unwrap(), r#"{"error":"execution stopped"}"#).into_response();
+async fn route_tool_call(State(app): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+    let shared = app.run_state(&headers);
+    // Action endpoints return 410 after this run stops — other runs are unaffected.
+    if let Some(reason) = stopped_reason(&shared) {
+        return stopped_gone(&reason);
     }
-    to_response(handle_tool_call(&body, &app.shared, &app.registry))
+    to_response(handle_tool_call(&body, &shared, &app.registry))
 }
 
-async fn route_rule_evaluate(State(app): State<AppState>, body: Bytes) -> Response {
-    if is_stopped(&app.shared) {
-        return (StatusCode::from_u16(410).unwrap(), r#"{"error":"execution stopped"}"#).into_response();
+async fn route_rule_evaluate(State(app): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+    let shared = app.run_state(&headers);
+    if let Some(reason) = stopped_reason(&shared) {
+        return stopped_gone(&reason);
     }
-    to_response(handle_rule_evaluate(&body, &app.shared))
+    to_response(handle_rule_evaluate(&body, &shared))
 }
 
-async fn route_agent_enter(State(app): State<AppState>, body: Bytes) -> Response {
-    if is_stopped(&app.shared) {
-        return (StatusCode::from_u16(410).unwrap(), r#"{"error":"execution stopped"}"#).into_response();
+async fn route_agent_enter(State(app): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+    let shared = app.run_state(&headers);
+    if let Some(reason) = stopped_reason(&shared) {
+        return stopped_gone(&reason);
     }
-    to_response(handle_agent_enter(&body, &app.shared))
+    to_response(handle_agent_enter(&body, &shared))
 }
 
-async fn route_agent_exit(State(app): State<AppState>) -> Response {
-    to_response(handle_agent_exit(&app.shared))
+async fn route_agent_exit(State(app): State<AppState>, headers: HeaderMap) -> Response {
+    to_response(handle_agent_exit(&app.run_state(&headers)))
 }
 
-async fn route_step(State(app): State<AppState>) -> Response {
-    if is_stopped(&app.shared) {
-        return (StatusCode::from_u16(410).unwrap(), r#"{"error":"execution stopped"}"#).into_response();
+async fn route_step(State(app): State<AppState>, headers: HeaderMap) -> Response {
+    let shared = app.run_state(&headers);
+    if let Some(reason) = stopped_reason(&shared) {
+        return stopped_gone(&reason);
     }
-    to_response(handle_step(&app.shared))
+    to_response(handle_step(&shared))
 }
 
-async fn route_llm_usage(State(app): State<AppState>, body: Bytes) -> Response {
-    if is_stopped(&app.shared) {
-        return (StatusCode::from_u16(410).unwrap(), r#"{"error":"execution stopped"}"#).into_response();
+async fn route_llm_usage(State(app): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+    let shared = app.run_state(&headers);
+    if let Some(reason) = stopped_reason(&shared) {
+        return stopped_gone(&reason);
     }
-    to_response(handle_llm_usage(&body, &app.shared))
+    to_response(handle_llm_usage(&body, &shared))
 }
 
-async fn route_harness(State(app): State<AppState>, body: Bytes) -> Response {
-    if is_stopped(&app.shared) {
-        return (StatusCode::from_u16(410).unwrap(), r#"{"error":"execution stopped"}"#).into_response();
+async fn route_harness(State(app): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+    let shared = app.run_state(&headers);
+    if let Some(reason) = stopped_reason(&shared) {
+        return stopped_gone(&reason);
     }
-    to_response(handle_harness(&body, &app.shared))
+    to_response(handle_harness(&body, &shared))
 }
 
 // ── IP / host SSRF guard ──────────────────────────────────────────────────────
@@ -317,6 +371,10 @@ async fn route_proxy(State(app): State<AppState>, req: Request) -> Response {
         return (StatusCode::NOT_FOUND, r#"{"error":"Not Found"}"#).into_response();
     }
 
+    // Proxy traffic belongs to the connecting agent's run — resolve it so the
+    // ToolAllowed/ToolDenied events land on the right run's event log.
+    let shared = app.run_state(req.headers());
+
     let Some(allowed) = app.proxy_allowed_hosts.as_deref() else {
         return (
             StatusCode::NOT_FOUND,
@@ -357,7 +415,7 @@ async fn route_proxy(State(app): State<AppState>, req: Request) -> Response {
     // of what is in allowed_hosts. No config escape hatch.
     if is_blocked_host(&host) {
         {
-            let mut guard = app.shared.lock().unwrap();
+            let mut guard = shared.lock().unwrap();
             append_event(&mut guard, ExecutionEvent::ToolDenied {
                 ts:   now_ms(),
                 tool: format!("http_proxy:{host}"),
@@ -374,7 +432,7 @@ async fn route_proxy(State(app): State<AppState>, req: Request) -> Response {
     // ── Allowlist check ───────────────────────────────────────────────────────
     if !host_is_allowed(&host, allowed) {
         {
-            let mut guard = app.shared.lock().unwrap();
+            let mut guard = shared.lock().unwrap();
             append_event(&mut guard, ExecutionEvent::ToolDenied {
                 ts:   now_ms(),
                 tool: format!("http_proxy:{host}"),
@@ -390,7 +448,7 @@ async fn route_proxy(State(app): State<AppState>, req: Request) -> Response {
 
     // ── Allowed — emit ToolAllowed before tunneling ───────────────────────────
     {
-        let mut guard = app.shared.lock().unwrap();
+        let mut guard = shared.lock().unwrap();
         append_event(&mut guard, ExecutionEvent::ToolAllowed {
             ts:   now_ms(),
             tool: format!("http_proxy:{host}"),
@@ -562,10 +620,20 @@ impl NetworkServer {
         }
 
         let token = session_token.unwrap_or_else(|| Uuid::new_v4().to_string());
-        let (shared, registry) = init_shared_state(components, token.clone());
+        let (template, registry) = init_run_template(components, token.clone());
+        let template = Arc::new(template);
+
+        // Pre-create the default run so /health and /status answer before any
+        // action endpoint is hit. Distinct run ids are minted lazily on demand.
+        let runs: Arc<Mutex<HashMap<String, Arc<Mutex<BridgeState>>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        runs.lock()
+            .unwrap()
+            .insert(DEFAULT_RUN_ID.to_string(), template.build_state());
 
         let app = AppState {
-            shared,
+            runs,
+            template,
             registry,
             session_token: token.clone(),
             proxy_allowed_hosts,
@@ -1693,9 +1761,16 @@ mod tests {
         std::thread::spawn(move || {
             let _ = rustls::crypto::ring::default_provider().install_default();
             let tls_config = build_tls_config(&cert, &key, &ca).unwrap();
-            let (shared, registry) = init_shared_state(components, tok.clone());
+            let (template, registry) = init_run_template(components, tok.clone());
+            let template = Arc::new(template);
+            let runs: Arc<Mutex<HashMap<String, Arc<Mutex<BridgeState>>>>> =
+                Arc::new(Mutex::new(HashMap::new()));
+            runs.lock()
+                .unwrap()
+                .insert(DEFAULT_RUN_ID.to_string(), template.build_state());
             let app = AppState {
-                shared,
+                runs,
+                template,
                 registry,
                 session_token: tok,
                 proxy_allowed_hosts: None,
@@ -1853,6 +1928,66 @@ mod tests {
                 "{path} must return 410 after execution stopped"
             );
         }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// G3 — "Nanny stops the run, not the host". Stopping one run must return
+    /// 410 for that run only; other runs (and the server) keep working.
+    #[test]
+    fn stopping_one_run_does_not_affect_other_runs() {
+        let dir = test_certs_dir();
+        gen_certs_for_test(&dir);
+        let port  = next_port();
+        let token = format!("runs-{port}");
+
+        let _h = start_server_with_handle(test_components(), port, token.clone(), &dir, 100);
+
+        let client = make_mtls_client(&dir, port);
+        let base   = format!("https://127.0.0.1:{port}");
+
+        // Stop run "alpha" specifically.
+        let stop = client
+            .post(format!("{base}/stop"))
+            .header("X-Nanny-Session-Token", &token)
+            .header("X-Nanny-Run-Id", "alpha")
+            .body(r#"{"reason":"ManualStop"}"#)
+            .send()
+            .expect("stop must reach server");
+        assert_eq!(stop.status(), 200);
+
+        // Run "alpha" is stopped → 410 carrying the typed reason (G7 + G3).
+        let a = client
+            .post(format!("{base}/tool/call"))
+            .header("X-Nanny-Session-Token", &token)
+            .header("X-Nanny-Run-Id", "alpha")
+            .body(r#"{"tool":"echo","args":{"message":"hi"}}"#)
+            .send()
+            .expect("alpha tool call must complete");
+        assert_eq!(a.status(), 410, "the stopped run must return 410");
+        let a_body: serde_json::Value = a.json().unwrap();
+        assert_eq!(a_body["reason"], "ManualStop", "410 must carry the typed reason");
+
+        // Run "beta" is a different run → unaffected, tool call still allowed.
+        let b = client
+            .post(format!("{base}/tool/call"))
+            .header("X-Nanny-Session-Token", &token)
+            .header("X-Nanny-Run-Id", "beta")
+            .body(r#"{"tool":"echo","args":{"message":"hi"}}"#)
+            .send()
+            .expect("beta tool call must complete");
+        assert_eq!(b.status(), 200, "a different run must keep working after another stops");
+        let b_body: serde_json::Value = b.json().unwrap();
+        assert_eq!(b_body["status"], "allowed");
+
+        // The default run (no run-id header) is also its own run → unaffected.
+        let d = client
+            .post(format!("{base}/tool/call"))
+            .header("X-Nanny-Session-Token", &token)
+            .body(r#"{"tool":"echo","args":{"message":"hi"}}"#)
+            .send()
+            .expect("default tool call must complete");
+        assert_eq!(d.status(), 200, "the default run must be unaffected by another run's stop");
 
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -281,8 +281,35 @@ mod runtime {
         std::env::var("NANNY_BRIDGE_ADDR").ok().filter(|s| !s.is_empty())
     }
 
+    /// True if `addr` (host:port) is a loopback address. The server serves plain
+    /// HTTP on loopback and mTLS off-loopback (see `crates/bridge/src/network.rs`);
+    /// the client must mirror that or the loopback handshake fails with a TLS error.
+    fn addr_is_loopback(addr: &str) -> bool {
+        if let Ok(sa) = addr.parse::<std::net::SocketAddr>() {
+            return sa.ip().is_loopback();
+        }
+        addr.rsplit_once(':').map(|(h, _)| h == "localhost").unwrap_or(false)
+    }
+
     fn session_token() -> String {
         std::env::var("NANNY_SESSION_TOKEN").unwrap_or_default()
+    }
+
+    /// `NANNY_RUN_ID` — which run this process belongs to on the governance
+    /// server. Runs are independently budgeted and stop independently, so a
+    /// stop ends this run, not the server (G3). Absent → the server's default
+    /// run (shared-budget behaviour). The local bridge ignores it (one process
+    /// is always one run).
+    fn run_id() -> Option<String> {
+        std::env::var("NANNY_RUN_ID").ok().filter(|s| !s.is_empty())
+    }
+
+    /// Header line for the run id, or empty when unset. Ends with CRLF so it
+    /// slots directly into a raw HTTP request without extra separators.
+    fn run_id_header_line() -> String {
+        run_id()
+            .map(|id| format!("X-Nanny-Run-Id: {id}\r\n"))
+            .unwrap_or_default()
     }
 
     // ── mTLS cert resolution ───────────────────────────────────────────────────
@@ -331,10 +358,12 @@ mod runtime {
 
     fn http_get(path: &str) -> Option<BridgeResponse> {
         let token = session_token();
+        let run_hdr = run_id_header_line();
         let req = format!(
             "GET {path} HTTP/1.1\r\n\
              Host: localhost\r\n\
              X-Nanny-Session-Token: {token}\r\n\
+             {run_hdr}\
              Connection: close\r\n\
              \r\n"
         );
@@ -360,8 +389,18 @@ mod runtime {
             return parse_http_response(&raw);
         }
 
-        // Transport 3: NANNY_BRIDGE_ADDR — mTLS over TCP.
+        // Transport 3: NANNY_BRIDGE_ADDR — loopback is plain HTTP (mirrors the
+        // server), non-loopback is mTLS.
         if let Some(addr) = bridge_addr() {
+            if addr_is_loopback(&addr) {
+                use std::io::{Read, Write};
+                use std::net::TcpStream;
+                let mut stream = TcpStream::connect(&addr).ok()?;
+                stream.write_all(req.as_bytes()).ok()?;
+                let mut raw = String::new();
+                stream.read_to_string(&mut raw).ok()?;
+                return parse_http_response(&raw);
+            }
             return http_get_tls(&addr, path);
         }
 
@@ -370,10 +409,12 @@ mod runtime {
 
     fn http_post(path: &str, body: &str) -> Option<BridgeResponse> {
         let token = session_token();
+        let run_hdr = run_id_header_line();
         let req = format!(
             "POST {path} HTTP/1.1\r\n\
              Host: localhost\r\n\
              X-Nanny-Session-Token: {token}\r\n\
+             {run_hdr}\
              Content-Type: application/json\r\n\
              Content-Length: {len}\r\n\
              Connection: close\r\n\
@@ -403,8 +444,18 @@ mod runtime {
             return parse_http_response(&raw);
         }
 
-        // Transport 3: NANNY_BRIDGE_ADDR — mTLS over TCP.
+        // Transport 3: NANNY_BRIDGE_ADDR — loopback is plain HTTP (mirrors the
+        // server), non-loopback is mTLS.
         if let Some(addr) = bridge_addr() {
+            if addr_is_loopback(&addr) {
+                use std::io::{Read, Write};
+                use std::net::TcpStream;
+                let mut stream = TcpStream::connect(&addr).ok()?;
+                stream.write_all(req.as_bytes()).ok()?;
+                let mut raw = String::new();
+                stream.read_to_string(&mut raw).ok()?;
+                return parse_http_response(&raw);
+            }
             return http_post_tls(&addr, path, body);
         }
 
@@ -445,11 +496,13 @@ mod runtime {
     fn http_get_tls(addr: &str, path: &str) -> Option<BridgeResponse> {
         let client = build_tls_client()?;
         let url = format!("https://{addr}{path}");
-        let resp = client
+        let mut builder = client
             .get(&url)
-            .header("X-Nanny-Session-Token", session_token())
-            .send()
-            .ok()?;
+            .header("X-Nanny-Session-Token", session_token());
+        if let Some(id) = run_id() {
+            builder = builder.header("X-Nanny-Run-Id", id);
+        }
+        let resp = builder.send().ok()?;
         let status = resp.status().as_u16();
         let body = resp.text().ok()?;
         Some(BridgeResponse { status, body })
@@ -458,13 +511,15 @@ mod runtime {
     fn http_post_tls(addr: &str, path: &str, body: &str) -> Option<BridgeResponse> {
         let client = build_tls_client()?;
         let url = format!("https://{addr}{path}");
-        let resp = client
+        let mut builder = client
             .post(&url)
             .header("X-Nanny-Session-Token", session_token())
             .header("Content-Type", "application/json")
-            .body(body.to_string())
-            .send()
-            .ok()?;
+            .body(body.to_string());
+        if let Some(id) = run_id() {
+            builder = builder.header("X-Nanny-Run-Id", id);
+        }
+        let resp = builder.send().ok()?;
         let status = resp.status().as_u16();
         let resp_body = resp.text().ok()?;
         Some(BridgeResponse { status, body: resp_body })

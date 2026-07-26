@@ -4,6 +4,7 @@ import pytest
 from pytest_httpserver import HTTPServer
 
 import nanny_sdk._client as client
+from nanny_sdk.exceptions import BudgetExhausted, ExecutionStopped
 
 
 def test_passthrough_when_no_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -80,3 +81,67 @@ def test_report_stop_rule_ignores_bridge_errors(monkeypatch: pytest.MonkeyPatch)
 
     # Must not raise even though no bridge is running
     client.report_stop_rule("read_file", "no_sensitive_files")
+
+
+# ---------------------------------------------------------------------------
+# G7 — a 410 (this run already stopped) becomes a typed stop, not a raw HTTP error
+# ---------------------------------------------------------------------------
+
+
+def test_call_tool_410_raises_typed_stop(mock_bridge: HTTPServer) -> None:
+    """A 410 whose reason is a known limit raises that specific stop class."""
+    mock_bridge.expect_request("/tool/call", method="POST").respond_with_json(
+        {"error": "execution stopped", "reason": "BudgetExhausted"}, status=410
+    )
+    with pytest.raises(BudgetExhausted):
+        client.call_tool("search", 10, {})
+
+
+def test_call_tool_410_generic_reason_raises_execution_stopped(mock_bridge: HTTPServer) -> None:
+    """A 410 with a non-limit reason raises ExecutionStopped carrying the reason."""
+    mock_bridge.expect_request("/tool/call", method="POST").respond_with_json(
+        {"error": "execution stopped", "reason": "ManualStop"}, status=410
+    )
+    with pytest.raises(ExecutionStopped) as excinfo:
+        client.call_tool("search", 10, {})
+    assert excinfo.value.reason == "ManualStop"
+
+
+def test_agent_enter_410_raises_typed_stop(mock_bridge: HTTPServer) -> None:
+    """agent_enter on a stopped run raises a typed stop, not an HTTPStatusError."""
+    mock_bridge.expect_request("/agent/enter", method="POST").respond_with_json(
+        {"error": "execution stopped", "reason": "BudgetExhausted"}, status=410
+    )
+    with pytest.raises(BudgetExhausted):
+        client.agent_enter("researcher")
+
+
+# ---------------------------------------------------------------------------
+# G3 — the run id (NANNY_RUN_ID) travels on every request as X-Nanny-Run-Id
+# ---------------------------------------------------------------------------
+
+
+def test_headers_include_run_id_when_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NANNY_SESSION_TOKEN", "tok")
+    monkeypatch.setenv("NANNY_RUN_ID", "team-alpha")
+    h = client._headers()
+    assert h["X-Nanny-Session-Token"] == "tok"
+    assert h["X-Nanny-Run-Id"] == "team-alpha"
+
+
+def test_headers_omit_run_id_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NANNY_SESSION_TOKEN", "tok")
+    monkeypatch.delenv("NANNY_RUN_ID", raising=False)
+    assert "X-Nanny-Run-Id" not in client._headers()
+
+
+def test_run_id_header_sent_on_tool_call(
+    mock_bridge: HTTPServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end: NANNY_RUN_ID is sent as X-Nanny-Run-Id on a real request."""
+    monkeypatch.setenv("NANNY_RUN_ID", "team-alpha")
+    mock_bridge.expect_oneshot_request(
+        "/tool/call", method="POST", headers={"X-Nanny-Run-Id": "team-alpha"}
+    ).respond_with_json({"status": "allowed", "result": ""})
+    client.call_tool("search", 10, {})
+    mock_bridge.check_assertions()

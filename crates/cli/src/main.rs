@@ -317,10 +317,20 @@ fn cmd_run_via_network_server(command: Vec<String>, server: NetworkServerInfo) -
         .join(".nanny")
         .join("certs");
 
+    // Each `nanny run` is its own run on the server: a stop ends this run, not
+    // the server, so the host survives many sequential runs (G3). Set
+    // NANNY_RUN_ID yourself to make several processes share one budget and stop
+    // together (e.g. a fleet demo); otherwise each invocation gets a fresh id.
+    let run_id = std::env::var("NANNY_RUN_ID")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
     let mut cmd = std::process::Command::new(program);
     cmd.args(args);
     cmd.env("NANNY_BRIDGE_ADDR",    &server.addr);
     cmd.env("NANNY_SESSION_TOKEN",  &server.token);
+    cmd.env("NANNY_RUN_ID",         &run_id);
 
     // Only inject cert paths that actually exist — agents on remote machines
     // may have already set these env vars themselves via their deployment config.

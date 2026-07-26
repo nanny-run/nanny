@@ -35,6 +35,7 @@ notify       = { workspace = true }
 dirs         = { workspace = true }
 x509-parser  = { workspace = true }
 time         = { workspace = true }
+uuid         = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 self-replace = "1"

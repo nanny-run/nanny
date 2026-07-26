@@ -13,6 +13,7 @@ from nanny_sdk.exceptions import (
     AgentNotFound,
     BridgeUnavailable,
     BudgetExhausted,
+    ExecutionStopped,
     MaxStepsReached,
     NannyStop,
     RuleDenied,
@@ -38,4 +39,5 @@ __all__ = [
     "ToolDenied",
     "RuleDenied",
     "BridgeUnavailable",
+    "ExecutionStopped",
 ]
