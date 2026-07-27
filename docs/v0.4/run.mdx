@@ -25,10 +25,12 @@ nanny run --limits=researcher
 
 ## Options
 
-| Flag              | Type   | Default        | Description                                                             |
-| ----------------- | ------ | -------------- | ----------------------------------------------------------------------- |
-| `--limits=<name>` | string | —              | Activate a named limit set from `nanny.toml`. Inherits from `[limits]`. |
-| `--config=<path>` | path   | `./nanny.toml` | Path to config file.                                                    |
+| Flag              | Type   | Default        | Description                                                                                                              |
+| ----------------- | ------ | -------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `--limits=<name>` | string | —              | Activate a named limit set from `nanny.toml`. Inherits from `[limits]`.                                                 |
+| `--serve`         | flag   | —              | Run as the governance server that other processes and machines join, instead of launching a command. See [Governance server](/v0.4/reference/cli-server). |
+| `--no-sync`       | flag   | —              | Do not forward events to Nanny Cloud for this run, even in managed mode. Enforcement is unaffected. See [Connect to Nanny Cloud](/v0.4/guides/managed-mode). |
+| `--config=<path>` | path   | `./nanny.toml` | Path to config file.                                                                                                   |
 
 ---
 

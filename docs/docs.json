@@ -27,7 +27,8 @@
   "footer": {
     "socials": {
       "github": "https://github.com/nanny-run/nanny",
-      "x": "https://x.com/nannyrun_"
+      "x": "https://x.com/nannyrun_",
+      "discord": "https://discord.gg/YctsexDhYw"
     }
   },
   "navbar": {
@@ -93,6 +94,7 @@
                 "pages": [
                   "v0.4/init",
                   "v0.4/run",
+                  "v0.4/reference/cli-auth",
                   "v0.4/reference/cli-server",
                   "v0.4/reference/cli-certs",
                   "v0.4/reference/cli-health",
