@@ -102,12 +102,6 @@ enum Command {
     /// Remove the nanny binary from its current install location.
     Uninstall,
 
-    /// Deprecated: use `nanny run --serve`, `nanny status`, and `nanny stop`.
-    ///
-    /// Kept as an alias for the governance server commands during the transition.
-    #[command(subcommand)]
-    Server(commands::server::ServerCommand),
-
     /// Manage TLS certificates for the network server.
     ///
     /// Certificates live in ~/.nanny/certs/ by default.
@@ -163,15 +157,8 @@ fn main() {
             }
         }
         Command::Uninstall => cmd_uninstall(),
-        Command::Server(action) => {
-            eprintln!(
-                "nanny: `nanny server` is deprecated — use `nanny run --serve` to start, \
-                 `nanny status`, and `nanny stop`."
-            );
-            commands::server::cmd_server(action)
-        }
-        Command::Status => commands::server::cmd_server(commands::server::ServerCommand::Status),
-        Command::Stop => commands::server::cmd_server(commands::server::ServerCommand::Stop),
+        Command::Status => commands::server::cmd_server_status(),
+        Command::Stop => commands::server::cmd_server_stop(),
         Command::Certs(action) => commands::certs::cmd_certs(action),
         Command::Health => commands::health::cmd_health(),
         Command::Auth(action) => commands::auth::cmd_auth(action),

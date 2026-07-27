@@ -155,15 +155,9 @@ See [HTTP proxy mode](/v0.4/guides/http-proxy-mode) for full details.
 
 ---
 
-## Cloud sync (no `[managed]` section)
+## Cloud sync
 
 Cloud sync has no config block. It turns on when **both** are true: `[runtime] mode = "managed"` above, and this machine is logged in via `nanny auth login`. The ingest key and endpoint are provisioned by login and stored in `~/.nanny/credentials.toml`, never in `nanny.toml` — so no secret and no URL ever lives in your committed config. Your organization is derived from the key on the cloud side, so there is no `org_id` to configure.
 
 See [Connect to Nanny Cloud](/v0.4/guides/managed-mode) for the full flow, including the `--token` path for CI and headless machines.
-
-<Note>
-  The old `[managed]` block (with `endpoint` / `api_key`) is **retired**. If an
-  old `nanny.toml` still has it, Nanny ignores it and prints a one-time
-  deprecation notice pointing you at `nanny auth login`.
-</Note>
 

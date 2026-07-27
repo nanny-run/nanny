@@ -9,7 +9,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
-- **Unified `nanny run` and `nanny server` into one runtime.** The governance server is now `nanny run --serve`; manage it with `nanny status` and `nanny stop`. `nanny server start` / `status` / `stop` still work but are deprecated and print a notice. mTLS, certs, shared budget, and the network path are unchanged.
+- **The governance server is now `nanny run --serve`.** Manage it with `nanny status` and `nanny stop`. mTLS, certs, shared budget, and the network path are unchanged.
 
 ### Added
 
@@ -18,7 +18,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Removed
 
-- **`[managed]` endpoint/api_key config retired.** Cloud connection is now `mode = "managed"` plus `nanny auth login`; a stale `[managed]` block is ignored with a one-time deprecation notice.
+- **`nanny server`** — use `nanny run --serve` to start the governance server, and `nanny status` / `nanny stop` to manage it.
+- **`[managed]` endpoint/api_key config** — cloud connection is now `mode = "managed"` plus `nanny auth login`. A stale `[managed]` block is ignored with a one-time notice pointing at `nanny auth login`.
 
 ## [0.4.1] — 2026-07-21
 

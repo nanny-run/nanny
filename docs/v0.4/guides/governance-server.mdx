@@ -7,13 +7,6 @@ description: Run Nanny enforcement across multiple processes and machines using 
 
 For most projects, `nanny run` is all you need. It starts a local enforcement bridge inside the same process group as your agent, governs it, and exits when the agent exits. No server. No cert setup. No network.
 
-<Note>
-  The governance server is now a mode of `nanny run`: start it with
-  **`nanny run --serve`**, and manage it with **`nanny status`** and
-  **`nanny stop`**. The old `nanny server start` / `status` / `stop` still work
-  but are deprecated and print a notice.
-</Note>
-
 Use the governance server when agents run in **separate processes or on separate machines** and you need a shared enforcement boundary across all of them. Common scenarios:
 
 - **Microservices:** three containers, each running an agent, all sharing a single token budget
