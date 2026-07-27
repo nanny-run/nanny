@@ -46,8 +46,9 @@ use super::{
     BridgeComponents, BridgeResp, BridgeState, ContentType,
     handle_agent_enter, handle_agent_exit, handle_events, handle_harness, handle_health,
     handle_llm_usage, handle_rule_evaluate, handle_status, handle_step, handle_stop,
-    handle_tool_call, init_run_template, stopped_reason, RunTemplate,
+    handle_tool_call, init_run_template, stopped_reason, take_run_events, RunTemplate,
 };
+use std::sync::mpsc::Sender;
 
 /// Run id used when a request carries no `X-Nanny-Run-Id` header.
 ///
@@ -600,6 +601,9 @@ impl NetworkServer {
     /// `session_token`: if `Some`, use that token; if `None`, generate a fresh UUID.
     /// The token is printed to stdout and written to `~/.nanny/server.token` so
     /// `nanny run` can auto-inject it into child environments.
+    /// Start the server with no cloud forwarding — the common case and every
+    /// existing entry point. See [`Self::start_blocking_synced`] to attach a
+    /// per-run event sink for cloud sync.
     #[allow(clippy::too_many_arguments)]
     pub fn start_blocking(
         addr: SocketAddr,
@@ -609,7 +613,29 @@ impl NetworkServer {
         components: BridgeComponents,
         proxy_allowed_hosts: Option<Vec<String>>,
         session_token: Option<String>,
+        rate_limit_rps: u32,
+    ) -> Result<()> {
+        Self::start_blocking_synced(
+            addr, cert_path, key_path, ca_path, components, proxy_allowed_hosts, session_token,
+            rate_limit_rps, None,
+        )
+    }
+
+    /// Same as [`Self::start_blocking`], plus an optional `event_sink`: when
+    /// `Some`, a background thread drains each run's events and sends
+    /// `(run_id, lines)` to it. This is the ONLY hook cloud sync uses; the engine
+    /// stays auth free — it never talks to the cloud, it just hands off strings.
+    #[allow(clippy::too_many_arguments)]
+    pub fn start_blocking_synced(
+        addr: SocketAddr,
+        cert_path: PathBuf,
+        key_path: PathBuf,
+        ca_path: PathBuf,
+        components: BridgeComponents,
+        proxy_allowed_hosts: Option<Vec<String>>,
+        session_token: Option<String>,
         rate_limit_rps: u32,  // max req/s per client IP — DoS protection, default 100
+        event_sink: Option<Sender<(String, Vec<String>)>>,
     ) -> Result<()> {
         // Install ring crypto provider — safe to call multiple times.
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -630,6 +656,29 @@ impl NetworkServer {
         runs.lock()
             .unwrap()
             .insert(DEFAULT_RUN_ID.to_string(), template.build_state());
+
+        // Cloud forwarding hook (auth-free): when a sink is attached, a
+        // background thread drains each run's events and hands `(run_id, lines)`
+        // to the cli-layer forwarder. No cloud code lives here.
+        if let Some(sink) = event_sink {
+            let drain_runs = Arc::clone(&runs);
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_millis(250));
+                let ids: Vec<String> = {
+                    let guard = drain_runs.lock().unwrap();
+                    guard.keys().cloned().collect()
+                };
+                for id in ids {
+                    let state = drain_runs.lock().unwrap().get(&id).cloned();
+                    if let Some(state) = state {
+                        let lines = take_run_events(&state);
+                        if !lines.is_empty() && sink.send((id, lines)).is_err() {
+                            return; // forwarder gone → stop draining
+                        }
+                    }
+                }
+            });
+        }
 
         let app = AppState {
             runs,

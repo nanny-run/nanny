@@ -38,7 +38,7 @@ The enforcement bridge runs in two configurations depending on how agents are de
 
 The bridge runs as a thread inside the `nanny` process. It communicates with the agent through a Unix domain socket on macOS and Linux, or a TCP loopback port on Windows. Both are OS-enforced — no process outside the same user session can connect. The bridge starts when `nanny run` spawns the child process and exits when the child exits.
 
-**Governance server (`nanny server start`):**
+**Governance server (`nanny run --serve`):**
 
 The bridge runs as a long-lived standalone daemon. Agents connect to it over TCP, with mutual TLS enforced on non-loopback addresses. Multiple agents, on multiple machines, can connect to the same server simultaneously. All of their tool calls are counted against the same shared budget and step limit.
 
@@ -57,7 +57,7 @@ Local mode:
 
 Network mode:
   agent A ──(TCP + mTLS)──►
-  agent B ──(TCP + mTLS)──► nanny server (bridge as daemon)
+  agent B ──(TCP + mTLS)──► nanny run --serve (bridge as daemon)
   agent C ──(TCP + mTLS)──►
 ```
 

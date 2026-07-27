@@ -23,55 +23,72 @@ Enforcement never depends on the network. If the cloud is slow or unreachable, y
 
 ## Turn it on
 
-You need an API key from your Nanny Cloud dashboard (**Settings → API keys**).
+Two steps, and neither puts a secret in your config.
 
-Add two things to `nanny.toml`:
+**1. Say this project wants the cloud** — set the mode in `nanny.toml`:
 
 ```toml
 [runtime]
 mode = "managed"
-
-[managed]
-endpoint = "https://api.nanny.run/v1"
 ```
 
-Supply your API key through the environment, then run as usual:
+**2. Connect this machine** — log in once (opens your browser to approve, and picks your org there):
 
 ```bash
-export NANNY_API_KEY="nny_..."
+nanny auth login
+```
+
+That stores an ingest-only key in `~/.nanny/credentials.toml` — this machine only, never your repo. Now run as usual:
+
+```bash
 nanny run python agent.py
 ```
 
-Your run appears in the dashboard within a few seconds of finishing. That's it — no code changes, no per-call instrumentation required.
+Your run appears in the dashboard within a few seconds of finishing. No code changes, no per-call instrumentation, and **no endpoint or key in `nanny.toml`**.
 
 <Note>
-  There are only two lines of config, and **neither is a secret** — so
-  `nanny.toml` stays committable, reviewable in a pull request, and consistent
-  with the rest of your enforcement config.
-
-  `NANNY_API_KEY` follows the same injection pattern as the bridge's
-  `NANNY_BRIDGE_CERT` / `NANNY_BRIDGE_KEY`, so a secrets manager (Vault Agent,
-  CI secret store) can populate all of them the same way. An `api_key` field in
-  `[managed]` still works as a local-experimentation fallback, but the
-  environment variable overrides it.
+  Sync needs **both** halves, and they live in different places on purpose: the
+  intent (`mode = "managed"`) is committable config, and the credential
+  (`nanny auth login`) is stored outside your repo. So a local-mode project never
+  syncs even while you are logged in, and a machine that never logged in never
+  syncs even in managed mode.
 </Note>
 
-<Warning>
-  If no key is found, Nanny prints a warning and keeps enforcing **locally** — it
-  just won't forward events to the cloud. A blank `NANNY_API_KEY` (a common shape
-  for an unset CI secret) is treated as unset rather than used as an empty
-  credential.
-</Warning>
+## CI and headless machines
+
+A browser flow needs a person. For CI or a headless box, log in with a pre-minted ingest key instead of the browser — the key comes from `NANNY_API_KEY` (a CI secret) or stdin, never a command argument:
+
+```bash
+NANNY_API_KEY="nny_..." nanny auth login --token --env prod
+# or:  echo "$NANNY_API_KEY" | nanny auth login --token --env staging
+```
+
+This writes the same `~/.nanny/credentials.toml` without opening a browser. `--env` is required so the machine targets the right cloud (log in once on a laptop to mint the key, then drop it in your CI secrets).
+
+## Skip a single run
+
+Forward nothing for one run, without logging out:
+
+```bash
+nanny run --no-sync python agent.py
+```
 
 ## Local vs managed
 
-|                          | `mode = "local"` (default) | `mode = "managed"`                    |
-| ------------------------ | -------------------------- | ------------------------------------- |
-| Enforcement             | Local, deterministic       | Local, deterministic (unchanged)      |
+|                          | `mode = "local"` (default) | `mode = "managed"` + logged in         |
+| ------------------------ | -------------------------- | -------------------------------------- |
+| Enforcement             | Local, deterministic       | Local, deterministic (unchanged)       |
 | Event log               | stdout / file              | stdout / file **+** forwarded to cloud |
 | Network required to run | No                         | No (forwarding is best-effort)         |
 | Dashboard & trends      | —                          | Yes                                    |
 
+<Warning>
+  In managed mode with no login, Nanny prints a one-time nudge and keeps enforcing
+  **locally** — it just won't forward. Run `nanny auth login` to connect.
+</Warning>
+
 ## Turning it off
 
-Set `mode = "local"` (or remove the `[managed]` block). The runtime goes back to local-only immediately — no data is sent.
+- **One run:** `nanny run --no-sync`.
+- **This machine, for good:** `nanny auth logout` (deletes the local credential; the key still exists in the cloud until you revoke it from the dashboard).
+- **This project:** set `mode = "local"` in `nanny.toml`.

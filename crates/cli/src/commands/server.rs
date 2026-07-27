@@ -9,7 +9,6 @@
 //   status — TCP-connect to address in ~/.nanny/server.addr and call /health
 
 use anyhow::{Context, Result};
-use clap::Subcommand;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -21,65 +20,9 @@ use crate::runtime::build_bridge_components;
 
 use super::certs::default_certs_dir;
 
-// ── Command shape ─────────────────────────────────────────────────────────────
-
-#[derive(Subcommand)]
-pub enum ServerCommand {
-    /// Start the governance server daemon.
-    ///
-    /// For single-process agents, use `nanny run` instead. This command starts
-    /// a standalone governance server for cross-process or cross-machine enforcement.
-    ///
-    /// The bind address determines the security posture:
-    ///   - Loopback (127.x.x.x, ::1): plain HTTP — OS-enforced, no certs needed.
-    ///   - Non-loopback (0.0.0.0, external IP): mTLS — mandatory, certs required.
-    ///
-    /// Governance API and HTTP CONNECT proxy (when [proxy] is configured in nanny.toml) share one port.
-    /// Default port 62669 spells NANNY on a phone keypad.
-    Start {
-        /// Listen address. Governance API and proxy share this port.
-        /// Default is loopback — plain HTTP, no cert setup required.
-        /// Use 0.0.0.0:62669 for cross-machine (mTLS mandatory, run `nanny certs generate` first).
-        #[arg(long, default_value = "127.0.0.1:62669")]
-        addr: SocketAddr,
-
-        /// Path to the server certificate PEM.
-        /// Defaults to ~/.nanny/certs/server.crt.
-        /// Generate with: nanny certs generate
-        #[arg(long)]
-        cert: Option<PathBuf>,
-
-        /// Path to the server private key PEM.
-        /// Defaults to ~/.nanny/certs/server.key.
-        #[arg(long)]
-        key: Option<PathBuf>,
-
-        /// Path to the CA certificate PEM used to validate client certs.
-        /// Defaults to ~/.nanny/certs/ca.crt.
-        #[arg(long)]
-        ca: Option<PathBuf>,
-
-    },
-
-    /// Stop the running governance server.
-    Stop,
-
-    /// Show the live status of the running server.
-    ///
-    /// Prints: listen address, number of connected agents, current budget state.
-    Status,
-}
-
-// ── Entry point ───────────────────────────────────────────────────────────────
-
-pub fn cmd_server(action: ServerCommand) -> Result<()> {
-    match action {
-        ServerCommand::Start { addr, cert, key, ca } =>
-            cmd_server_start(addr, cert, key, ca),
-        ServerCommand::Stop => cmd_server_stop(),
-        ServerCommand::Status => cmd_server_status(),
-    }
-}
+// The governance server is `nanny run --serve`; `nanny status` and `nanny stop`
+// manage it. This module holds those three entry points (`cmd_server_start`,
+// `cmd_server_status`, `cmd_server_stop`) called directly from `main.rs`.
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -100,11 +43,12 @@ fn nanny_state_dir() -> Result<PathBuf> {
 /// use-case Nanny needs to support.
 const RATE_LIMIT_RPS: u32 = 100;
 
-fn cmd_server_start(
+pub fn cmd_server_start(
     addr: SocketAddr,
     cert: Option<PathBuf>,
     key: Option<PathBuf>,
     ca: Option<PathBuf>,
+    no_sync: bool,
 ) -> Result<()> {
     // Load nanny.toml from CWD.
     let toml_path = std::env::current_dir()
@@ -165,16 +109,36 @@ fn cmd_server_start(
     std::fs::write(state_dir.join("server.addr"), addr.to_string())
         .context("failed to write ~/.nanny/server.addr")?;
 
+    // Cloud forwarding (auth-free, cli-side): the same gate as `nanny run` —
+    // mode = "managed" AND logged in, and not --no-sync. The engine only exposes
+    // events; the forwarder that talks to the cloud lives here. `resolve_sync`
+    // prints the "managed but not logged in" nudge itself.
+    let session_token = uuid::Uuid::new_v4().to_string();
+    let credentials = crate::credentials::Credentials::load().ok().flatten();
+    let event_sink = match crate::sync::resolve_sync(&config, credentials.as_ref(), no_sync) {
+        Some(target) => {
+            println!(
+                "nanny: syncing fleet events to {} (enforcement stays local)",
+                target.endpoint
+            );
+            let (tx, rx) = std::sync::mpsc::channel();
+            crate::sync::ServerForwarder::spawn(rx, target.endpoint, target.api_key, session_token.clone());
+            Some(tx)
+        }
+        None => None,
+    };
+
     // Blocking — returns only when the server shuts down (CTRL-C / SIGTERM).
-    NetworkServer::start_blocking(
+    NetworkServer::start_blocking_synced(
         addr,
         cert_path,
         key_path,
         ca_path,
         components,
         proxy_allowed_hosts,
-        None,
+        Some(session_token),
         RATE_LIMIT_RPS,
+        event_sink,
     )?;
 
     Ok(())
@@ -182,7 +146,7 @@ fn cmd_server_start(
 
 // ── nanny server stop ─────────────────────────────────────────────────────────
 
-fn cmd_server_stop() -> Result<()> {
+pub fn cmd_server_stop() -> Result<()> {
     let state_dir = nanny_state_dir()?;
     let pid_file = state_dir.join("server.pid");
 
@@ -233,7 +197,7 @@ fn cmd_server_stop() -> Result<()> {
 
 // ── nanny server status ───────────────────────────────────────────────────────
 
-fn cmd_server_status() -> Result<()> {
+pub fn cmd_server_status() -> Result<()> {
     let state_dir = nanny_state_dir()?;
     let addr_file = state_dir.join("server.addr");
 

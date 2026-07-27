@@ -103,6 +103,53 @@ impl CloudSync {
     }
 }
 
+/// Forwards a governance server's per-run events to the cloud, one ingest batch
+/// per run. Each batch's `X-Nanny-Session` is `{server_secret}:{run_id}` — a
+/// per-run value that folds in the server's secret token, so the cloud groups
+/// events per run with an unguessable, cross-org-collision-proof session (the API
+/// key is still the real auth). Fire and forget, like `CloudSync`.
+pub struct ServerForwarder;
+
+impl ServerForwarder {
+    /// Spawn a background forwarder draining `(run_id, lines)` from the engine.
+    pub fn spawn(
+        rx: Receiver<(String, Vec<String>)>,
+        endpoint: String,
+        api_key: String,
+        server_secret: String,
+    ) {
+        std::thread::spawn(move || {
+            let Ok(client) = reqwest::blocking::Client::builder()
+                .connect_timeout(Duration::from_secs(3))
+                .timeout(Duration::from_secs(10))
+                .build()
+            else {
+                return;
+            };
+            let mut warned = false;
+            while let Ok((run_id, lines)) = rx.recv() {
+                if lines.is_empty() {
+                    continue;
+                }
+                let session = format!("{server_secret}:{run_id}");
+                let result = client
+                    .post(&endpoint)
+                    .header("X-Nanny-Key", &api_key)
+                    .header("X-Nanny-Session", &session)
+                    .header("Content-Type", "application/x-ndjson")
+                    .body(lines.join("\n"))
+                    .send();
+                if result.is_err() && !warned {
+                    eprintln!(
+                        "nanny: sync — failed to forward fleet events to the cloud (continuing locally)"
+                    );
+                    warned = true;
+                }
+            }
+        });
+    }
+}
+
 /// Background loop: batch lines and POST them; flush on cap, on idle tick, and
 /// once more when the channel closes.
 fn worker(
@@ -277,5 +324,28 @@ mod tests {
             .expect("sender starts");
         sender.enqueue(r#"{"event":"StepCompleted"}"#.to_string());
         sender.flush_and_join(); // returns (bounded by connect timeout), swallows the error
+    }
+
+    #[test]
+    fn server_forwarder_posts_per_run_with_derived_session() {
+        let (port, rx_srv) = mock_ingest_server();
+        let (tx, rx) = std::sync::mpsc::channel();
+        ServerForwarder::spawn(
+            rx,
+            format!("http://127.0.0.1:{port}/v1/ingest"),
+            "nny_k".to_string(),
+            "srvsecret".to_string(),
+        );
+        tx.send(("run_abc".to_string(), vec![r#"{"e":"X"}"#.to_string()])).unwrap();
+        drop(tx);
+
+        let req = rx_srv.recv_timeout(Duration::from_secs(5)).expect("server received a request");
+        let lower = req.to_ascii_lowercase();
+        assert!(lower.contains("post /v1/ingest"), "wrong path:\n{req}");
+        assert!(lower.contains("x-nanny-key: nny_k"), "missing X-Nanny-Key:\n{req}");
+        assert!(
+            lower.contains("x-nanny-session: srvsecret:run_abc"),
+            "the per-run session must fold in the server secret:\n{req}"
+        );
     }
 }
