@@ -20,6 +20,7 @@ use nanny_core::agent::limits::Limits;
 use nanny_core::events::event::{ExecutionEvent, LimitsSnapshot, now_ms};
 use nanny_core::ledger::Ledger;
 use std::io::Write;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -51,10 +52,13 @@ enum Command {
 
     /// Run the project under nanny enforcement.
     ///
-    /// Reads [start].cmd from nanny.toml and runs it.
+    /// Reads [start].cmd from nanny.toml and runs it. With --serve, instead runs
+    /// a headless governance server (no child of its own) that other processes
+    /// and machines join, sharing one budget — the former `nanny server start`.
     ///
     /// Example: nanny run
     /// Example: nanny run --limits=researcher
+    /// Example: nanny run --serve --addr 0.0.0.0:62669
     Run {
         /// Named limits set to activate from nanny.toml [limits.<name>].
         /// Inherits from [limits] defaults and overrides only declared fields.
@@ -67,6 +71,29 @@ enum Command {
         #[arg(long)]
         no_sync: bool,
 
+        /// Run as a headless governance server that other processes and machines
+        /// join, sharing one budget. Same enforcement as `nanny run`, exposed
+        /// over the network. Replaces `nanny server start`.
+        #[arg(long)]
+        serve: bool,
+
+        /// (with --serve) Listen address; governance API and proxy share this port.
+        /// Loopback is plain HTTP; a non-loopback address makes mTLS mandatory.
+        #[arg(long, default_value = "127.0.0.1:62669")]
+        addr: SocketAddr,
+
+        /// (with --serve) Server certificate PEM. Defaults to ~/.nanny/certs/server.crt.
+        #[arg(long)]
+        cert: Option<PathBuf>,
+
+        /// (with --serve) Server private key PEM. Defaults to ~/.nanny/certs/server.key.
+        #[arg(long)]
+        key: Option<PathBuf>,
+
+        /// (with --serve) CA certificate PEM to validate client certs. Defaults to ~/.nanny/certs/ca.crt.
+        #[arg(long)]
+        ca: Option<PathBuf>,
+
         /// Extra arguments appended to [start].cmd.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         extra_args: Vec<String>,
@@ -75,13 +102,9 @@ enum Command {
     /// Remove the nanny binary from its current install location.
     Uninstall,
 
-    /// Start, stop, or check the Nanny governance server.
+    /// Deprecated: use `nanny run --serve`, `nanny status`, and `nanny stop`.
     ///
-    /// For single-process agents, use `nanny run` instead. This command starts
-    /// a standalone governance server for cross-process or cross-machine
-    /// enforcement.
-    ///
-    /// Requires certificates — run `nanny certs generate` first.
+    /// Kept as an alias for the governance server commands during the transition.
     #[command(subcommand)]
     Server(commands::server::ServerCommand),
 
@@ -91,6 +114,14 @@ enum Command {
     /// Generate once with `nanny certs generate`, then start the server.
     #[command(subcommand)]
     Certs(commands::certs::CertsCommand),
+
+    /// Show the live status of the running governance server.
+    ///
+    /// Prints its listen address, connected agents, and current budget.
+    Status,
+
+    /// Stop the running governance server (SIGTERM, 10-second graceful drain).
+    Stop,
 
     /// Show the health of all active Nanny components.
     ///
@@ -114,11 +145,33 @@ fn main() {
 
     let result = match cli.command {
         Command::Init => cmd_init(),
-        Command::Run { limits, no_sync, extra_args } => {
-            cmd_run(&cli.config, limits.as_deref(), no_sync, extra_args)
+        Command::Run { limits, no_sync, serve, addr, cert, key, ca, extra_args } => {
+            if serve {
+                if !extra_args.is_empty() || limits.is_some() {
+                    Err(anyhow::anyhow!(
+                        "`--serve` runs a headless governor and takes no command or --limits — \
+                         use `nanny run --serve [--addr ...]`"
+                    ))
+                } else {
+                    // The headless governor is the same path as the former
+                    // `nanny server start` (mTLS, certs, etc.), plus cloud sync
+                    // gated on mode=managed + login, honoring --no-sync.
+                    commands::server::cmd_server_start(addr, cert, key, ca, no_sync)
+                }
+            } else {
+                cmd_run(&cli.config, limits.as_deref(), no_sync, extra_args)
+            }
         }
         Command::Uninstall => cmd_uninstall(),
-        Command::Server(action) => commands::server::cmd_server(action),
+        Command::Server(action) => {
+            eprintln!(
+                "nanny: `nanny server` is deprecated — use `nanny run --serve` to start, \
+                 `nanny status`, and `nanny stop`."
+            );
+            commands::server::cmd_server(action)
+        }
+        Command::Status => commands::server::cmd_server(commands::server::ServerCommand::Status),
+        Command::Stop => commands::server::cmd_server(commands::server::ServerCommand::Stop),
         Command::Certs(action) => commands::certs::cmd_certs(action),
         Command::Health => commands::health::cmd_health(),
         Command::Auth(action) => commands::auth::cmd_auth(action),

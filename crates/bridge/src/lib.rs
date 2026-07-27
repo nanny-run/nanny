@@ -435,6 +435,14 @@ pub(crate) fn handle_events(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
     BridgeResp::ndjson(guard.events.join("\n"))
 }
 
+/// Take and clear a run's buffered events, for cloud forwarding by the
+/// governance server. Auth-free: the engine only hands the strings off; who (if
+/// anyone) forwards them is decided above the engine, in `crates/cli`.
+pub(crate) fn take_run_events(shared: &Arc<Mutex<BridgeState>>) -> Vec<String> {
+    let mut guard = shared.lock().unwrap();
+    std::mem::take(&mut guard.events)
+}
+
 pub(crate) fn handle_tool_call(
     body: &[u8],
     shared: &Arc<Mutex<BridgeState>>,

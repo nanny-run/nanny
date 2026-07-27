@@ -75,7 +75,7 @@ pub enum ServerCommand {
 pub fn cmd_server(action: ServerCommand) -> Result<()> {
     match action {
         ServerCommand::Start { addr, cert, key, ca } =>
-            cmd_server_start(addr, cert, key, ca),
+            cmd_server_start(addr, cert, key, ca, false),
         ServerCommand::Stop => cmd_server_stop(),
         ServerCommand::Status => cmd_server_status(),
     }
@@ -100,11 +100,12 @@ fn nanny_state_dir() -> Result<PathBuf> {
 /// use-case Nanny needs to support.
 const RATE_LIMIT_RPS: u32 = 100;
 
-fn cmd_server_start(
+pub fn cmd_server_start(
     addr: SocketAddr,
     cert: Option<PathBuf>,
     key: Option<PathBuf>,
     ca: Option<PathBuf>,
+    no_sync: bool,
 ) -> Result<()> {
     // Load nanny.toml from CWD.
     let toml_path = std::env::current_dir()
@@ -165,16 +166,36 @@ fn cmd_server_start(
     std::fs::write(state_dir.join("server.addr"), addr.to_string())
         .context("failed to write ~/.nanny/server.addr")?;
 
+    // Cloud forwarding (auth-free, cli-side): the same gate as `nanny run` —
+    // mode = "managed" AND logged in, and not --no-sync. The engine only exposes
+    // events; the forwarder that talks to the cloud lives here. `resolve_sync`
+    // prints the "managed but not logged in" nudge itself.
+    let session_token = uuid::Uuid::new_v4().to_string();
+    let credentials = crate::credentials::Credentials::load().ok().flatten();
+    let event_sink = match crate::sync::resolve_sync(&config, credentials.as_ref(), no_sync) {
+        Some(target) => {
+            println!(
+                "nanny: syncing fleet events to {} (enforcement stays local)",
+                target.endpoint
+            );
+            let (tx, rx) = std::sync::mpsc::channel();
+            crate::sync::ServerForwarder::spawn(rx, target.endpoint, target.api_key, session_token.clone());
+            Some(tx)
+        }
+        None => None,
+    };
+
     // Blocking — returns only when the server shuts down (CTRL-C / SIGTERM).
-    NetworkServer::start_blocking(
+    NetworkServer::start_blocking_synced(
         addr,
         cert_path,
         key_path,
         ca_path,
         components,
         proxy_allowed_hosts,
-        None,
+        Some(session_token),
         RATE_LIMIT_RPS,
+        event_sink,
     )?;
 
     Ok(())
