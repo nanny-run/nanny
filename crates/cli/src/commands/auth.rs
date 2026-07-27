@@ -1,4 +1,4 @@
-//! `nanny auth` — connect this machine to Nanny Cloud (`login`) or disconnect it
+//! `nanny auth` — connect your machine to Nanny Cloud (`login`) or disconnect it
 //! (`logout`).
 //!
 //! This is the ONLY thing that authenticates, and it authenticates to the
@@ -29,10 +29,10 @@ const CLIENT_ID: &str = "nanny-cli";
 
 #[derive(Subcommand)]
 pub enum AuthCommand {
-    /// Connect this machine to Nanny Cloud so `nanny run` can sync events.
+    /// Connect your machine to Nanny Cloud so `nanny run` can sync events.
     ///
-    /// Opens the browser to approve, then stores an ingest-only key locally.
-    /// Enforcement is unaffected and stays fully local.
+    /// Opens the browser to approve. Enforcement is unaffected and stays
+    /// fully local.
     Login {
         /// Which Nanny Cloud to talk to. Defaults to prod for the browser flow;
         /// required with `--token`. dev/staging are for Nanny's own testing.
@@ -46,10 +46,10 @@ pub enum AuthCommand {
         token: bool,
     },
 
-    /// Disconnect this machine by deleting local credentials.
+    /// Disconnect your machine from Nanny Cloud.
     ///
-    /// Enforcement is unaffected. This is local only — the key still exists in
-    /// the cloud until revoked from the dashboard.
+    /// Enforcement is unaffected. The key still exists in the cloud until you
+    /// revoke it from the dashboard.
     Logout,
 }
 
@@ -82,7 +82,7 @@ fn login(env: Option<CloudEnv>, token: bool) -> Result<()> {
     println!();
     println!("Logged in (plan {}).", minted.plan);
     println!("With `mode = \"managed\"`, `nanny run` will sync events to {}.", env.ingest_url());
-    println!("Credentials saved to ~/.nanny/credentials.toml (this machine only).");
+    println!("Your machine is connected. The credential is stored outside your repo.");
     Ok(())
 }
 
@@ -146,7 +146,7 @@ fn device_login(
         .as_deref()
         .unwrap_or(&code.verification_uri);
     println!();
-    println!("To connect this machine to Nanny Cloud, open:");
+    println!("To connect your machine to Nanny Cloud, open:");
     println!("    {}", code.verification_uri);
     println!("and enter the code:  {}", code.user_code);
     println!();
@@ -218,13 +218,12 @@ fn parse_org_scope(scope: &str) -> Option<String> {
 
 fn logout() -> Result<()> {
     if Credentials::delete()? {
-        println!("Logged out on this machine.");
+        println!("Logged out. Your machine no longer syncs to Nanny Cloud.");
     } else {
-        println!("Not logged in on this machine.");
+        println!("Your machine isn't logged in.");
         return Ok(());
     }
-    println!("This only clears local credentials — the key still exists in the cloud.");
-    println!("To revoke it across all machines, use the dashboard.");
+    println!("The key still exists in the cloud — revoke it from the dashboard.");
     Ok(())
 }
 

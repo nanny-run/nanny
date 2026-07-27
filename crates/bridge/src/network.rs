@@ -1,6 +1,6 @@
 // network.rs — TCP + mTLS governance server for cross-process enforcement.
 //
-// Started by `nanny server start`. Multiple agents on the same or different
+// Started by `nanny run --serve`. Multiple agents on the same or different
 // machines connect to it. All connections share one execution context —
 // shared ledger, shared step count, shared tool call history. This is
 // cross-process budget enforcement without cloud dependency.
@@ -11,7 +11,7 @@
 //            defense-in-depth and per-execution identity.
 //
 // Usage from CLI:
-//     nanny server start [--addr 0.0.0.0:62669] [--cert ...] [--key ...] [--ca ...]
+//     nanny run --serve [--addr 0.0.0.0:62669] [--cert ...] [--key ...] [--ca ...]
 //
 // Agents point to the server via:
 //     NANNY_BRIDGE_ADDR=host:port
@@ -61,7 +61,7 @@ const DEFAULT_RUN_ID: &str = "default";
 
 /// Sliding-window per-IP rate limiter.  DoS protection only — never a
 /// business-tier gate and never in nanny.toml.  Hardcoded safe default;
-/// power users override with `--rate-limit` on `nanny server start`.
+/// power users override with `--rate-limit` on `nanny run --serve`.
 #[derive(Clone)]
 struct RateLimiter {
     inner: Arc<Mutex<std::collections::HashMap<IpAddr, (u32, Instant)>>>,
@@ -592,7 +592,7 @@ async fn graceful_shutdown_signal() {
 /// A running network governance server.
 ///
 /// Call `start_blocking` to start the server. It blocks until CTRL-C or
-/// `nanny server stop` sends SIGTERM.
+/// `nanny stop` sends SIGTERM.
 pub struct NetworkServer;
 
 impl NetworkServer {
@@ -708,24 +708,24 @@ impl NetworkServer {
             let _ = std::fs::set_permissions(&token_file, std::fs::Permissions::from_mode(0o600));
         }
 
-        // PID file so `nanny server stop` can send SIGTERM.
+        // PID file so `nanny stop` can send SIGTERM.
         let pid_file = nanny_dir.join("server.pid");
         std::fs::write(&pid_file, std::process::id().to_string())
             .context("failed to write ~/.nanny/server.pid")?;
 
         if addr.ip().is_loopback() {
-            println!("nanny server: started  (plain HTTP — loopback)");
+            println!("nanny: governance server started  (plain HTTP — loopback)");
             println!("  address      : {addr}");
             println!("  session token: {token}");
             println!();
-            println!("Agents on this machine: run `nanny run` — server is detected automatically.");
+            println!("Any `nanny run` on your machine detects this server automatically.");
         } else {
-            println!("nanny server: started  (mTLS)");
+            println!("nanny: governance server started  (mTLS)");
             println!("  address      : {addr}");
             println!("  session token: {token}");
             println!("  token file   : {}", token_file.display());
             println!();
-            println!("Agents on this machine: run `nanny run` — server is detected automatically.");
+            println!("Any `nanny run` on your machine detects this server automatically.");
             println!();
             println!("Cross-machine agents — set these in your deployment config:");
             println!("  NANNY_BRIDGE_ADDR={addr}");
@@ -742,7 +742,7 @@ impl NetworkServer {
 
         let result = rt.block_on(async {
             // ── Graceful SIGTERM drain ────────────────────────────────────────
-            // `nanny server stop` sends SIGTERM (Unix) / taskkill (Windows).
+            // `nanny stop` sends SIGTERM (Unix) / taskkill (Windows).
             // We give in-flight requests 10 s to complete before forcing exit.
             let server_handle = axum_server::Handle::new();
             {
@@ -750,7 +750,7 @@ impl NetworkServer {
                 tokio::spawn(async move {
                     graceful_shutdown_signal().await;
                     eprintln!(
-                        "nanny server: shutdown signal received — \
+                        "nanny: governance server shutdown signal received — \
                          draining connections (10 s grace)…"
                     );
                     drain.graceful_shutdown(Some(std::time::Duration::from_secs(10)));
@@ -814,11 +814,11 @@ impl NetworkServer {
                                         match build_tls_config(&cp, &kp, &cap) {
                                             Ok(new_cfg) => {
                                                 rc.reload_from_config(Arc::new(new_cfg));
-                                                eprintln!("nanny server: certs hot-reloaded");
+                                                eprintln!("nanny: governance server certs hot-reloaded");
                                             }
                                             Err(e) => {
                                                 eprintln!(
-                                                    "nanny server: cert reload failed — \
+                                                    "nanny: governance server cert reload failed — \
                                                      keeping current certs: {e:#}"
                                                 );
                                             }
@@ -829,7 +829,7 @@ impl NetworkServer {
                         }
                         Err(e) => {
                             eprintln!(
-                                "nanny server: cert watcher failed to start \
+                                "nanny: governance server cert watcher failed to start \
                                  (hot-reload disabled): {e}"
                             );
                         }

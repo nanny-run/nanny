@@ -48,7 +48,7 @@ impl Credentials {
         self.save_to(&nanny_dir()?)
     }
 
-    /// Delete the credential (log out this machine). Returns whether it existed;
+    /// Delete the credential (log out your machine). Returns whether it existed;
     /// a missing file is not an error.
     pub fn delete() -> Result<bool> {
         Self::delete_from(&nanny_dir()?)

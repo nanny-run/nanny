@@ -54,7 +54,7 @@ enum Command {
     ///
     /// Reads [start].cmd from nanny.toml and runs it. With --serve, instead runs
     /// a headless governance server (no child of its own) that other processes
-    /// and machines join, sharing one budget — the former `nanny server start`.
+    /// and machines join, sharing one budget.
     ///
     /// Example: nanny run
     /// Example: nanny run --limits=researcher
@@ -73,7 +73,7 @@ enum Command {
 
         /// Run as a headless governance server that other processes and machines
         /// join, sharing one budget. Same enforcement as `nanny run`, exposed
-        /// over the network. Replaces `nanny server start`.
+        /// over the network.
         #[arg(long)]
         serve: bool,
 
@@ -123,11 +123,11 @@ enum Command {
     /// Exits 0 if healthy, 1 if any active component is unhealthy.
     Health,
 
-    /// Connect this machine to Nanny Cloud (`login` / `logout`).
+    /// Connect your machine to Nanny Cloud (`login` / `logout`).
     ///
     /// Optional. Enforcement is always local and never depends on this — login
     /// only turns on cloud event sync. `nanny auth login` opens the browser to
-    /// approve, then stores an ingest-only key in ~/.nanny/credentials.toml.
+    /// approve, then remembers your machine so `nanny run` can sync.
     #[command(subcommand)]
     Auth(commands::auth::AuthCommand),
 }
@@ -147,9 +147,9 @@ fn main() {
                          use `nanny run --serve [--addr ...]`"
                     ))
                 } else {
-                    // The headless governor is the same path as the former
-                    // `nanny server start` (mTLS, certs, etc.), plus cloud sync
-                    // gated on mode=managed + login, honoring --no-sync.
+                    // The headless governor runs the full network server
+                    // (mTLS, certs, etc.), plus cloud sync gated on
+                    // mode=managed + login, honoring --no-sync.
                     commands::server::cmd_server_start(addr, cert, key, ca, no_sync)
                 }
             } else {
@@ -316,7 +316,7 @@ fn cmd_uninstall_impl(exe: &Path) -> Result<()> {
 
 // ── Network server auto-detection ─────────────────────────────────────────────
 
-/// State written to ~/.nanny/ by `nanny server start`, read here by `nanny run`.
+/// State written to ~/.nanny/ by `nanny run --serve`, read here by `nanny run`.
 struct NetworkServerInfo {
     /// Address to inject as NANNY_BRIDGE_ADDR (0.0.0.0 → 127.0.0.1 for local use).
     addr: String,
@@ -324,7 +324,7 @@ struct NetworkServerInfo {
     token: String,
 }
 
-/// Check if a governance server started by `nanny server start` is running on
+/// Check if a governance server started by `nanny run --serve` is running on
 /// this machine. Returns Some if both state files exist and the server is
 /// actually reachable via TCP. Cleans up stale files if unreachable.
 fn try_detect_network_server() -> Option<NetworkServerInfo> {
@@ -464,7 +464,7 @@ fn cmd_run(config_path: &Path, limits_name: Option<&str>, no_sync: bool, extra_a
     command.extend(extra_args);
 
     // ── Network server detection ──────────────────────────────────────────────
-    // If `nanny server start` is running on this machine, use it instead of
+    // If `nanny run --serve` is running on this machine, use it instead of
     // starting a local bridge. The server handles enforcement; we just inject
     // env vars and wait for the child.
     if let Some(server) = try_detect_network_server() {
