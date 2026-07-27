@@ -28,7 +28,7 @@ nanny run --limits=researcher
 | Flag              | Type   | Default        | Description                                                                                                              |
 | ----------------- | ------ | -------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | `--limits=<name>` | string | —              | Activate a named limit set from `nanny.toml`. Inherits from `[limits]`.                                                 |
-| `--serve`         | flag   | —              | Run as the governance server that other processes and machines join, instead of launching a command. See [Governance server](/v0.4/reference/cli-server). |
+| `--serve`         | flag   | —              | Run as the governance server that other processes and machines join, instead of launching a command. See [Governance server](#governance-server) below. |
 | `--no-sync`       | flag   | —              | Do not forward events to Nanny Cloud for this run, even in managed mode. Enforcement is unaffected. See [Connect to Nanny Cloud](/v0.4/guides/managed-mode). |
 | `--config=<path>` | path   | `./nanny.toml` | Path to config file.                                                                                                   |
 
@@ -75,6 +75,38 @@ Pipe to a file to keep your agent's own output separate:
 ```bash
 nanny run > nanny.log
 ```
+
+---
+
+## Governance server
+
+`nanny run --serve` starts a long-lived **governance server** instead of launching a command. Other processes and machines connect to it over TCP, and every tool call from every connected agent counts against one shared budget and step limit. For a single-process agent you don't need this — plain `nanny run` is enough.
+
+```bash
+nanny run --serve [--addr <addr>] [--cert <path>] [--key <path>] [--ca <path>]
+```
+
+It reads `nanny.toml` from the current directory and blocks until stopped (`nanny stop` or `CTRL-C`).
+
+### Serve flags
+
+| Flag     | Type           | Default                     | Description                                                                                                    |
+| -------- | -------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `--addr` | socket address | `127.0.0.1:62669`           | Listen address. The governance API and HTTP proxy share this port. Loopback = plain HTTP; non-loopback = mTLS. |
+| `--cert` | path           | `~/.nanny/certs/server.crt` | Server TLS certificate PEM. Required only for non-loopback addresses.                                          |
+| `--key`  | path           | `~/.nanny/certs/server.key` | Server TLS private key PEM. Required only for non-loopback addresses.                                          |
+| `--ca`   | path           | `~/.nanny/certs/ca.crt`     | CA certificate PEM used to validate agent client certs. Required only for non-loopback addresses.             |
+
+The bind address sets the security posture: **loopback** (`127.0.0.1`) is plain HTTP for same-machine agents; a **non-loopback** address (`0.0.0.0`) makes mTLS mandatory, and the server refuses to start without certs. For cross-machine setup, certificates, and connecting agents, see the [Governance server guide](/v0.4/guides/governance-server).
+
+### Manage a running server
+
+```bash
+nanny status   # listen address, PID, and reachability
+nanny stop     # SIGTERM, then a 10-second graceful drain
+```
+
+`nanny status` reads `~/.nanny/server.addr` and probes the server (exit `0` if reachable, `1` otherwise). `nanny stop` reads the PID from `~/.nanny/server.pid` and sends `SIGTERM` (on Windows, `taskkill /F`).
 
 ---
 

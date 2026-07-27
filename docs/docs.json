@@ -44,6 +44,7 @@
     ]
   },
   "redirects": [
+    { "source": "/v0.4/reference/cli-server", "destination": "/v0.4/run" },
     { "source": "/quickstart", "destination": "/v0.4/quickstart" },
     { "source": "/guides/:slug*", "destination": "/v0.4/guides/:slug*" },
     { "source": "/concepts/:slug*", "destination": "/v0.4/concepts/:slug*" },
@@ -95,7 +96,6 @@
                   "v0.4/init",
                   "v0.4/run",
                   "v0.4/reference/cli-auth",
-                  "v0.4/reference/cli-server",
                   "v0.4/reference/cli-certs",
                   "v0.4/reference/cli-health",
                   "v0.4/uninstall"
