@@ -354,7 +354,7 @@ log = "stdout"
     );
 }
 
-// ── T6: nanny server start — non-loopback without certs fails fast ────────────
+// ── T6: nanny run --serve — non-loopback without certs fails fast ────────────
 //
 // `server.rs` bails before starting the server when the bind address is
 // non-loopback and cert files don't exist. Tests the error message content
@@ -389,16 +389,16 @@ log = "stdout"
     let output = Command::new(nanny_bin())
         .current_dir(&dir)
         .env("HOME", &home)
-        .args(["server", "start", "--addr", "0.0.0.0:62998"])
+        .args(["run", "--serve", "--addr", "0.0.0.0:62998"])
         .output()
-        .expect("nanny server start must run");
+        .expect("nanny run --serve must run");
 
     let _ = fs::remove_dir_all(&dir);
     let _ = fs::remove_dir_all(&home);
 
     assert!(
         !output.status.success(),
-        "nanny server start must exit non-zero when certs are missing for non-loopback"
+        "nanny run --serve must exit non-zero when certs are missing for non-loopback"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -407,7 +407,7 @@ log = "stdout"
     );
 }
 
-// ── T7: nanny server start — loopback does NOT require cert files ─────────────
+// ── T7: nanny run --serve — loopback does NOT require cert files ─────────────
 //
 // Default addr is 127.0.0.1 (loopback) → no cert check → server binds
 // successfully even when ~/.nanny/certs/ doesn't exist.
@@ -415,7 +415,7 @@ log = "stdout"
 // server would fail to start and this test would catch it.
 //
 // Skipped on Windows: `dirs::home_dir()` ignores the `HOME` env override, so
-// `nanny server start` writes `server.addr` and `server.token` to the REAL
+// `nanny run --serve` writes `server.addr` and `server.token` to the REAL
 // `~/.nanny/`. When the server is killed with TerminateProcess the cleanup
 // hook does not run, leaving stale files. Those stale files cause concurrent
 // tests (e.g. timeout_kills_process_and_exits_nonzero) to mistakenly route
@@ -455,9 +455,9 @@ log = "stdout"
     let mut child = Command::new(nanny_bin())
         .current_dir(&dir)
         .env("HOME", &home)
-        .args(["server", "start", "--addr", &format!("127.0.0.1:{port}")])
+        .args(["run", "--serve", "--addr", &format!("127.0.0.1:{port}")])
         .spawn()
-        .expect("nanny server start must spawn");
+        .expect("nanny run --serve must spawn");
 
     // Poll until the port accepts connections (up to 5s).
     let mut ready = false;
@@ -477,7 +477,7 @@ log = "stdout"
 
     assert!(
         ready,
-        "nanny server start on loopback must bind successfully without cert files"
+        "nanny run --serve on loopback must bind successfully without cert files"
     );
 }
 
@@ -521,7 +521,7 @@ log = "stdout"
     .unwrap();
 
     // Start a plain-HTTP governance server on a loopback port.
-    // We do this by running `nanny server start` in a background process
+    // We do this by running `nanny run --serve` in a background process
     // with HOME=home so it writes its state files there.
     let server_port = 15901u16;
     let server_toml_dir = temp_dir();
@@ -547,7 +547,7 @@ log = "stdout"
     let mut server = Command::new(nanny_bin())
         .current_dir(&server_toml_dir)
         .env("HOME", &home)
-        .args(["server", "start", "--addr", &format!("127.0.0.1:{server_port}")])
+        .args(["run", "--serve", "--addr", &format!("127.0.0.1:{server_port}")])
         .spawn()
         .expect("governance server must spawn");
 
