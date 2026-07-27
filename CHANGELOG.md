@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Unified `nanny run` and `nanny server` into one runtime.** The governance server is now `nanny run --serve`; manage it with `nanny status` and `nanny stop`. `nanny server start` / `status` / `stop` still work but are deprecated and print a notice. mTLS, certs, shared budget, and the network path are unchanged.
+
+### Added
+
+- **`nanny auth login` / `logout`** — connect a machine to Nanny Cloud via a browser device flow, or `--token` for CI/headless (reading `NANNY_API_KEY` or stdin). Stores an ingest-only key in `~/.nanny/credentials.toml`.
+- **Cloud sync from `mode = "managed"` + login.** Both `nanny run` and the governance server forward the event log to the cloud when the project sets `mode = "managed"` and the machine is logged in; `--no-sync` skips a run. Enforcement stays fully local.
+
+### Removed
+
+- **`[managed]` endpoint/api_key config retired.** Cloud connection is now `mode = "managed"` plus `nanny auth login`; a stale `[managed]` block is ignored with a one-time deprecation notice.
+
 ## [0.4.1] — 2026-07-21
 
 ### Added

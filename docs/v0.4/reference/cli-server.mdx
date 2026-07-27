@@ -1,15 +1,17 @@
 ---
-title: nanny server
-description: Start, stop, and inspect the Nanny governance server for cross-process and cross-machine enforcement.
+title: Governance server (nanny run --serve)
+description: Run the Nanny governance server for cross-process and cross-machine enforcement, and manage it with nanny status and nanny stop.
 ---
 
-The governance server is a long-lived daemon that enforces Nanny's limits across multiple processes and machines. Agents connect to it over TCP. All tool calls from all connected agents are counted against the same shared budget and step limit.
+The governance server is a long-lived process that enforces Nanny's limits across multiple processes and machines. Agents connect to it over TCP. All tool calls from all connected agents are counted against the same shared budget and step limit.
 
-For single-process agents, use `nanny run` instead — no server needed.
+For single-process agents, use `nanny run` with no `--serve` — no server needed.
 
-```bash
-nanny server <COMMAND>
-```
+<Note>
+  These commands were formerly `nanny server start` / `status` / `stop`. Those
+  aliases still work but are deprecated and print a notice — use
+  **`nanny run --serve`**, **`nanny status`**, and **`nanny stop`**.
+</Note>
 
 ---
 
@@ -20,10 +22,10 @@ nanny server <COMMAND>
 Start the governance server.
 
 ```bash
-nanny server start [--addr <addr>] [--cert <path>] [--key <path>] [--ca <path>]
+nanny run --serve [--addr <addr>] [--cert <path>] [--key <path>] [--ca <path>]
 ```
 
-Reads `nanny.toml` from the current directory. Blocks until the server is stopped with `nanny server stop` or `CTRL-C`.
+Reads `nanny.toml` from the current directory. Blocks until the server is stopped with `nanny stop` or `CTRL-C`.
 
 #### Flags
 
@@ -50,20 +52,20 @@ The bind address determines whether TLS is required:
 
 ```bash
 # Default is loopback — plain HTTP, no certs needed
-nanny server start
+nanny run --serve
 ```
 
 **Cross-machine — Docker or Kubernetes:**
 
 ```bash
 # Generate certs first: nanny certs generate
-nanny server start --addr 0.0.0.0:62669
+nanny run --serve --addr 0.0.0.0:62669
 ```
 
 **Custom cert paths:**
 
 ```bash
-nanny server start \
+nanny run --serve \
   --addr 0.0.0.0:62669 \
   --cert /etc/nanny/server.crt \
   --key  /etc/nanny/server.key \
@@ -74,8 +76,8 @@ nanny server start \
 
 When the server starts, it writes two files:
 
-- `~/.nanny/server.addr` — the bound listen address (used by `nanny server status` and `nanny health`)
-- `~/.nanny/server.pid` — the server process ID (used by `nanny server stop`)
+- `~/.nanny/server.addr` — the bound listen address (used by `nanny status` and `nanny health`)
+- `~/.nanny/server.pid` — the server process ID (used by `nanny stop`)
 
 #### HTTP proxy mode
 
@@ -88,7 +90,7 @@ If `nanny.toml` includes a `[proxy]` section with a non-empty `allowed_hosts` li
 Show the live status of the running server.
 
 ```bash
-nanny server status
+nanny status
 ```
 
 Reads `~/.nanny/server.addr`, attempts a TCP connection, and reports whether the server is reachable.
@@ -105,7 +107,7 @@ nanny server: running
 
 ```
 nanny server: not reachable at 0.0.0.0:62669
-  Start with: nanny server start
+  Start with: nanny run --serve
 ```
 
 Exits `0` if the server is running and reachable, `1` otherwise.
@@ -117,7 +119,7 @@ Exits `0` if the server is running and reachable, `1` otherwise.
 Stop the running server.
 
 ```bash
-nanny server stop
+nanny stop
 ```
 
 Reads the PID from `~/.nanny/server.pid` and sends `SIGTERM`. The server begins a graceful shutdown:
@@ -132,7 +134,7 @@ On Windows, uses `taskkill /F` instead of SIGTERM.
 
 ```
 no running server found (PID file not present at ~/.nanny/server.pid)
-Start the server with: nanny server start
+Start the server with: nanny run --serve
 ```
 
 ---

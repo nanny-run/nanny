@@ -7,6 +7,13 @@ description: Run Nanny enforcement across multiple processes and machines using 
 
 For most projects, `nanny run` is all you need. It starts a local enforcement bridge inside the same process group as your agent, governs it, and exits when the agent exits. No server. No cert setup. No network.
 
+<Note>
+  The governance server is now a mode of `nanny run`: start it with
+  **`nanny run --serve`**, and manage it with **`nanny status`** and
+  **`nanny stop`**. The old `nanny server start` / `status` / `stop` still work
+  but are deprecated and print a notice.
+</Note>
+
 Use the governance server when agents run in **separate processes or on separate machines** and you need a shared enforcement boundary across all of them. Common scenarios:
 
 - **Microservices:** three containers, each running an agent, all sharing a single token budget
@@ -22,8 +29,8 @@ If your agents all run inside a single `nanny run` — even a complex CrewAI or 
 | Mode | Command | Transport | When to use |
 |------|---------|-----------|-------------|
 | Local inline | `nanny run` | Unix socket / TCP loopback (OS-enforced) | Single process, single machine — the default |
-| Local governance server | `nanny server start` | Plain HTTP on loopback — no certs needed | Multiple processes on one machine |
-| Cross-machine governance server | `nanny server start --addr 0.0.0.0:62669` | mTLS — mandatory, certs required | Docker, Kubernetes, remote agents |
+| Local governance server | `nanny run --serve` | Plain HTTP on loopback — no certs needed | Multiple processes on one machine |
+| Cross-machine governance server | `nanny run --serve --addr 0.0.0.0:62669` | mTLS — mandatory, certs required | Docker, Kubernetes, remote agents |
 
 The bind address determines the security posture. The default (`127.0.0.1:62669`) is loopback — plain HTTP, no cert setup required. Binding to a non-loopback address enables network access and makes mTLS mandatory; the server refuses to start without cert files.
 
@@ -36,7 +43,7 @@ This covers the common case where all your agents run on the same machine but in
 **1. Start the server:**
 
 ```bash
-nanny server start
+nanny run --serve
 ```
 
 The server starts on `127.0.0.1:62669` (loopback) by default, generates a session token, and writes both the address and token to `~/.nanny/` so `nanny run` can detect them. The token is printed at startup for reference. No certs needed.
@@ -73,7 +80,7 @@ This creates five files in `~/.nanny/certs/`:
 ```
 ca.crt      — CA certificate (the trust anchor — share with all agents)
 ca.key      — CA private key (keep this on the server machine only)
-server.crt  — server certificate (used by nanny server start)
+server.crt  — server certificate (used by nanny run --serve)
 server.key  — server private key (keep this on the server machine only)
 client.crt  — client certificate (copy to each agent machine)
 client.key  — client private key (copy to each agent machine)
@@ -88,13 +95,13 @@ nanny certs show
 ### Step 2: Start the server
 
 ```bash
-nanny server start --addr 0.0.0.0:62669
+nanny run --serve --addr 0.0.0.0:62669
 ```
 
 The server automatically reads `server.crt`, `server.key`, and `ca.crt` from `~/.nanny/certs/`. Pass explicit paths if your certs are elsewhere:
 
 ```bash
-nanny server start --addr 0.0.0.0:62669 \
+nanny run --serve --addr 0.0.0.0:62669 \
   --cert /path/to/server.crt \
   --key  /path/to/server.key \
   --ca   /path/to/ca.crt
@@ -150,16 +157,16 @@ The governance server is a **shared enforcement layer** for a team of agents wor
 
 ```bash
 # Show address, PID, and reachability
-nanny server status
+nanny status
 
 # Stop the server (sends SIGTERM, 10-second graceful drain)
-nanny server stop
+nanny stop
 
 # Check all active Nanny components at once
 nanny health
 ```
 
-`nanny server stop` sends `SIGTERM` to the server process. In-flight requests complete within a 10-second grace window before the server exits. This means a running agent can finish its current tool call before the server shuts down.
+`nanny stop` sends `SIGTERM` to the server process. In-flight requests complete within a 10-second grace window before the server exits. This means a running agent can finish its current tool call before the server shuts down.
 
 ---
 
