@@ -58,10 +58,6 @@ pub struct NannyConfig {
     #[serde(default)]
     pub observability: ObservabilityConfig,
 
-    /// Cloud orchestrator connection. Only read when runtime.mode = "managed".
-    #[serde(default)]
-    pub managed: Option<ManagedConfig>,
-
     /// HTTP CONNECT proxy settings for the network server.
     /// Only active when `nanny server start --proxy` is passed.
     #[serde(default)]
@@ -226,8 +222,6 @@ pub enum LogTarget {
     File,
 }
 
-// ── ManagedConfig ─────────────────────────────────────────────────────────────
-
 // ── ProxyConfig ───────────────────────────────────────────────────────────────
 
 /// HTTP CONNECT proxy configuration for the network server.
@@ -255,77 +249,24 @@ pub struct ProxyConfig {
     pub allowed_hosts: Vec<String>,
 }
 
-// ── ManagedConfig ─────────────────────────────────────────────────────────────
+// ── Cloud sync ─────────────────────────────────────────────────────────────────
 
-/// Environment variable holding the cloud API key.
-///
-/// Takes precedence over `[managed] api_key` in nanny.toml. This is the
-/// recommended way to supply the key: nanny.toml is meant to be committed
-/// (the manifesto makes configuration the source of truth — versionable and
-/// reviewable), and a live credential must never be committed with it.
-///
-/// Matches the injection pattern already used for the bridge
-/// (`NANNY_BRIDGE_CERT`, `NANNY_BRIDGE_KEY`, `NANNY_SESSION_TOKEN`), so a
-/// Vault Agent / CI secret store can populate all of them the same way.
+/// Environment variable holding the cloud API key, read by the machine login
+/// path (`nanny auth login --token`) for CI and headless boxes that cannot run
+/// the browser device flow. A secret must never live in the committable
+/// nanny.toml, so it is injected through the environment — matching the bridge's
+/// pattern (`NANNY_BRIDGE_CERT`, `NANNY_BRIDGE_KEY`, `NANNY_SESSION_TOKEN`).
 pub const API_KEY_ENV: &str = "NANNY_API_KEY";
 
-/// Cloud orchestrator connection settings.
-///
-/// Only active when [runtime] mode = "managed".
-/// This section is config, not a switch — the switch is runtime.mode.
-#[derive(Clone, Serialize, Deserialize)]
-pub struct ManagedConfig {
-    /// Cloud API endpoint.
-    pub endpoint: String,
-
-    /// Your API key, as an escape hatch for local experimentation only.
-    ///
-    /// Prefer the `NANNY_API_KEY` environment variable, which overrides this
-    /// field — see [`ManagedConfig::resolve_api_key`]. A key written here lands
-    /// in a file that is designed to be committed; treat that as a leak.
-    ///
-    /// Absent from nanny.toml is the normal case — managed mode needs no key
-    /// in the file at all.
-    ///
-    /// Intentionally excluded from serialization so a round-trip through
-    /// `serde_json` / `toml` does not accidentally re-emit the key.
-    #[serde(default, skip_serializing)]
-    pub api_key: Option<String>,
-}
-
-impl ManagedConfig {
-    /// Resolve the API key: `NANNY_API_KEY` first, then the config file.
-    ///
-    /// An env var that is set but empty counts as absent — an unset secret in
-    /// CI usually surfaces as `""`, and silently authenticating with an empty
-    /// string would be worse than reporting it missing.
-    ///
-    /// Returns `None` when no key is available from either source; the caller
-    /// decides what that means (the runtime keeps enforcing locally and skips
-    /// cloud forwarding, since telemetry is never allowed to block execution).
-    pub fn resolve_api_key(&self) -> Option<String> {
-        if let Ok(key) = std::env::var(API_KEY_ENV) {
-            let key = key.trim();
-            if !key.is_empty() {
-                return Some(key.to_string());
-            }
-        }
-        self.api_key
-            .as_deref()
-            .map(str::trim)
-            .filter(|k| !k.is_empty())
-            .map(str::to_string)
-    }
-}
-
-/// Redacts `api_key` so it never appears in logs, panic messages, or test output.
-impl std::fmt::Debug for ManagedConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ManagedConfig")
-            .field("endpoint", &self.endpoint)
-            .field("api_key",  &if self.api_key.is_some() { "[redacted]" } else { "[unset]" })
-            .finish()
-    }
+/// Whether a nanny.toml still carries a `[managed]` section. That block
+/// (endpoint / api_key) was retired in favor of `nanny auth login`; it is now
+/// ignored, so the CLI warns rather than silently doing nothing. A plain line
+/// scan is enough — the section is a top-level `[managed]` or `[managed.*]` table.
+pub fn has_managed_section(contents: &str) -> bool {
+    contents.lines().any(|line| {
+        let t = line.trim_start();
+        t.starts_with("[managed]") || t.starts_with("[managed.")
+    })
 }
 
 // ── Load ──────────────────────────────────────────────────────────────────────
@@ -407,17 +348,13 @@ pub fn default_toml() -> &'static str {
 # Full reference: https://docs.nanny.run/v0.2/reference/nanny-toml
 
 [runtime]
-# Execution mode: "local" (default) or "managed" (requires [managed] config).
-# In local mode, all enforcement happens on this machine with no network calls.
+# Execution mode: "local" (default) or "managed".
+#   local   — all enforcement happens on this machine, no network calls.
+#   managed — enforcement is still fully local, but if this machine is logged in
+#             (run `nanny auth login`) a copy of the event log is synced to Nanny
+#             Cloud. The cloud never gates a stop; it only adds dashboards and
+#             history. Skip a single run's sync with `nanny run --no-sync`.
 mode = "local"
-
-# [managed]
-# Cloud mode — copy the endpoint from your Nanny dashboard.
-# endpoint = "https://api.nanny.run/v1"
-#
-# The API key is read from the NANNY_API_KEY environment variable, so this file
-# stays safe to commit. Export it in your shell, CI secret store, or Vault:
-#   export NANNY_API_KEY="nny_..."
 
 [start]
 # How to launch your agent. `nanny run` always reads this command.
@@ -655,21 +592,6 @@ timeout = 5000
     }
 
     #[test]
-    fn managed_section_is_optional() {
-        let config: NannyConfig = toml::from_str(
-            r#"
-[limits]
-steps   = 10
-tokens  = 5000
-timeout = 5000
-"#,
-        )
-        .expect("must parse");
-
-        assert!(config.managed.is_none());
-    }
-
-    #[test]
     fn start_section_is_parsed() {
         let config: NannyConfig = toml::from_str(
             r#"
@@ -786,7 +708,9 @@ timeout = 5000
     }
 
     #[test]
-    fn managed_section_parses_when_present() {
+    fn managed_mode_parses_without_a_managed_section() {
+        // The [managed] block is retired; `mode = "managed"` alone is valid — the
+        // key now comes from `nanny auth login`, not the file.
         let config: NannyConfig = toml::from_str(
             r#"
 [runtime]
@@ -796,76 +720,17 @@ mode = "managed"
 steps   = 10
 tokens  = 5000
 timeout = 5000
-
-[managed]
-endpoint = "https://api.nanny.run/v1"
-api_key  = "nny_from_file"
 "#,
         )
         .expect("must parse");
-
         assert_eq!(config.runtime.mode, Mode::Managed);
-        let m = config.managed.expect("managed section must be present");
-        assert_eq!(m.endpoint, "https://api.nanny.run/v1");
-        assert_eq!(m.api_key.as_deref(), Some("nny_from_file"));
-    }
-
-    // ── API key resolution ────────────────────────────────────────────────
-    //
-    // These mutate a process-global (the environment), so they are combined
-    // into one serial test rather than racing each other across threads.
-
-    fn managed(api_key: Option<&str>) -> ManagedConfig {
-        ManagedConfig {
-            endpoint: "https://api.nanny.run/v1".to_string(),
-            api_key: api_key.map(str::to_string),
-        }
     }
 
     #[test]
-    fn api_key_resolution_precedence() {
-        // SAFETY: single-threaded within this test; no other test reads the var.
-        unsafe { std::env::remove_var(API_KEY_ENV) };
-
-        // 1. Neither source set → None.
-        assert_eq!(managed(None).resolve_api_key(), None);
-
-        // 2. File only → file value.
-        assert_eq!(
-            managed(Some("nny_from_file")).resolve_api_key().as_deref(),
-            Some("nny_from_file")
-        );
-
-        // 3. Env set → env wins over the file.
-        unsafe { std::env::set_var(API_KEY_ENV, "nny_from_env") };
-        assert_eq!(
-            managed(Some("nny_from_file")).resolve_api_key().as_deref(),
-            Some("nny_from_env"),
-            "NANNY_API_KEY must take precedence over the config file"
-        );
-
-        // 4. Env set with no file value → env value.
-        assert_eq!(managed(None).resolve_api_key().as_deref(), Some("nny_from_env"));
-
-        // 5. Empty/whitespace env (an unset CI secret) is treated as absent, so
-        //    it falls back rather than authenticating with an empty string.
-        unsafe { std::env::set_var(API_KEY_ENV, "   ") };
-        assert_eq!(
-            managed(Some("nny_from_file")).resolve_api_key().as_deref(),
-            Some("nny_from_file"),
-            "blank NANNY_API_KEY must fall back to the file, not blank out the key"
-        );
-        assert_eq!(managed(None).resolve_api_key(), None);
-
-        // 6. An empty value in the file is likewise not a key.
-        unsafe { std::env::remove_var(API_KEY_ENV) };
-        assert_eq!(managed(Some("")).resolve_api_key(), None);
-    }
-
-    #[test]
-    fn managed_section_parses_without_api_key() {
-        let config: NannyConfig = toml::from_str(
-            r#"
+    fn legacy_managed_section_is_ignored_but_detectable() {
+        // A stale [managed] block no longer breaks parsing (serde ignores unknown
+        // keys), but has_managed_section flags it so the CLI can warn.
+        let contents = r#"
 [runtime]
 mode = "managed"
 
@@ -876,19 +741,18 @@ timeout = 5000
 
 [managed]
 endpoint = "https://api.nanny.run/v1"
-"#,
-        )
-        .expect("api_key is optional — the key normally comes from NANNY_API_KEY");
-
-        let m = config.managed.expect("managed section must be present");
-        assert_eq!(m.api_key, None);
+"#;
+        let config: NannyConfig =
+            toml::from_str(contents).expect("legacy [managed] must not break parsing");
+        assert_eq!(config.runtime.mode, Mode::Managed);
+        assert!(has_managed_section(contents), "the stale section must be detectable");
     }
 
     #[test]
-    fn debug_never_leaks_the_api_key() {
-        let rendered = format!("{:?}", managed(Some("nny_supersecret")));
-        assert!(!rendered.contains("nny_supersecret"), "Debug must redact the key");
-        assert!(rendered.contains("[redacted]"));
-        assert!(format!("{:?}", managed(None)).contains("[unset]"));
+    fn has_managed_section_matches_only_the_managed_table() {
+        assert!(has_managed_section("[managed]\nendpoint = \"x\""));
+        assert!(has_managed_section("  [managed.sub]\n"));
+        assert!(!has_managed_section("[limits]\nsteps = 1"));
+        assert!(!has_managed_section("# [managed] just a comment"), "a comment is not a section");
     }
 }
