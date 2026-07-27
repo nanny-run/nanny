@@ -36,6 +36,7 @@ dirs         = { workspace = true }
 x509-parser  = { workspace = true }
 time         = { workspace = true }
 uuid         = { workspace = true }
+toml         = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 self-replace = "1"
@@ -44,4 +45,3 @@ self-replace = "1"
 nanny-bridge   = { workspace = true }
 nanny-core     = { workspace = true }
 nanny-runtime  = { workspace = true }
-toml           = { workspace = true }

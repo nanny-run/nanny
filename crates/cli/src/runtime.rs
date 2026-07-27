@@ -166,8 +166,8 @@ pub fn build_bridge_components(
 mod tests {
     use super::*;
     use nanny_config::{
-        LimitsConfig, ManagedConfig, NannyConfig, ObservabilityConfig, PartialLimitsConfig,
-        RuntimeConfig, ToolsConfig,
+        LimitsConfig, NannyConfig, ObservabilityConfig, PartialLimitsConfig, RuntimeConfig,
+        ToolsConfig,
     };
     use nanny_core::ledger::Ledger;
     use std::collections::HashMap;
@@ -186,9 +186,7 @@ mod tests {
                 allowed: vec!["http_get".to_string()],
                 per_tool: HashMap::new(),
             },
-            observability: ObservabilityConfig::default(),
-            managed: None,
-            proxy: None,
+            observability: ObservabilityConfig::default(),            proxy: None,
         }
     }
 
@@ -216,9 +214,7 @@ mod tests {
                 allowed: vec!["http_get".to_string()],
                 per_tool: HashMap::new(),
             },
-            observability: ObservabilityConfig::default(),
-            managed: None,
-            proxy: None,
+            observability: ObservabilityConfig::default(),            proxy: None,
         }
     }
 
@@ -276,9 +272,7 @@ mod tests {
                 allowed: vec![],
                 per_tool: HashMap::new(),
             },
-            observability: ObservabilityConfig::default(),
-            managed: None,
-            proxy: None,
+            observability: ObservabilityConfig::default(),            proxy: None,
         };
 
         let components = build_from_config(&config);
@@ -315,32 +309,6 @@ mod tests {
     }
 
     #[test]
-    fn managed_config_compiles() {
-        // Ensures ManagedConfig is importable and the managed field works.
-        let config = NannyConfig {
-            runtime: RuntimeConfig::default(),
-            start: None,
-            limits: LimitsConfig {
-                max_steps: 10,
-                max_tokens: 100,
-                timeout_ms: 5_000,
-                named: HashMap::new(),
-            },
-            tools: ToolsConfig::default(),
-            observability: ObservabilityConfig::default(),
-            managed: Some(ManagedConfig {
-                endpoint: "https://api.nanny.run/v1".to_string(),
-                api_key: Some("nny_test_key".to_string()),
-            }),
-            proxy: None,
-        };
-
-        // build_from_config uses runtime limits regardless of managed presence
-        let components = build_from_config(&config);
-        assert_eq!(components.limits.max_steps, 10);
-    }
-
-    #[test]
     fn ceiling_cap_clamps_named_scope_to_cli_limits() {
         // Global limits: steps=100, cost=1000, timeout=30_000.
         // Named "big" scope: steps=500, cost=9999, timeout=60_000 — all exceed global.
@@ -364,9 +332,7 @@ mod tests {
                 named,
             },
             tools: ToolsConfig::default(),
-            observability: ObservabilityConfig::default(),
-            managed: None,
-            proxy: None,
+            observability: ObservabilityConfig::default(),            proxy: None,
         };
         let ceiling = Limits { max_steps: 100, max_tokens: 1000, timeout_ms: 30_000 };
         let components = build_bridge_components(&config, ceiling, true);
@@ -398,9 +364,7 @@ mod tests {
                 named,
             },
             tools: ToolsConfig::default(),
-            observability: ObservabilityConfig::default(),
-            managed: None,
-            proxy: None,
+            observability: ObservabilityConfig::default(),            proxy: None,
         };
         let base = Limits { max_steps: 100, max_tokens: 1000, timeout_ms: 30_000 };
         let components = build_bridge_components(&config, base, false);
@@ -433,9 +397,7 @@ mod tests {
                 allowed: vec!["http_get".to_string()],
                 per_tool,
             },
-            observability: ObservabilityConfig::default(),
-            managed: None,
-            proxy: None,
+            observability: ObservabilityConfig::default(),            proxy: None,
         };
 
         let components = build_from_config(&config);

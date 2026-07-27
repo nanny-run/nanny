@@ -1,8 +1,10 @@
 // Nanny CLI — the only surface humans touch.
+mod cloud;
 mod commands;
+mod credentials;
 mod events;
-mod managed;
 mod runtime;
+mod sync;
 //
 // Two commands exist:
 //   nanny init                        — write a starter nanny.toml in the current directory
@@ -60,6 +62,11 @@ enum Command {
         #[arg(long)]
         limits: Option<String>,
 
+        /// Do not forward events to Nanny Cloud for this run, even if logged in.
+        /// Enforcement is unaffected. Also settable with NANNY_NO_SYNC=1.
+        #[arg(long)]
+        no_sync: bool,
+
         /// Extra arguments appended to [start].cmd.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         extra_args: Vec<String>,
@@ -90,6 +97,14 @@ enum Command {
     /// Checks: local bridge, network server, certificate expiry.
     /// Exits 0 if healthy, 1 if any active component is unhealthy.
     Health,
+
+    /// Connect this machine to Nanny Cloud (`login` / `logout`).
+    ///
+    /// Optional. Enforcement is always local and never depends on this — login
+    /// only turns on cloud event sync. `nanny auth login` opens the browser to
+    /// approve, then stores an ingest-only key in ~/.nanny/credentials.toml.
+    #[command(subcommand)]
+    Auth(commands::auth::AuthCommand),
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -99,11 +114,14 @@ fn main() {
 
     let result = match cli.command {
         Command::Init => cmd_init(),
-        Command::Run { limits, extra_args } => cmd_run(&cli.config, limits.as_deref(), extra_args),
+        Command::Run { limits, no_sync, extra_args } => {
+            cmd_run(&cli.config, limits.as_deref(), no_sync, extra_args)
+        }
         Command::Uninstall => cmd_uninstall(),
         Command::Server(action) => commands::server::cmd_server(action),
         Command::Certs(action) => commands::certs::cmd_certs(action),
         Command::Health => commands::health::cmd_health(),
+        Command::Auth(action) => commands::auth::cmd_auth(action),
     };
 
     if let Err(e) = result {
@@ -352,7 +370,7 @@ fn cmd_run_via_network_server(command: Vec<String>, server: NetworkServerInfo) -
     Ok(())
 }
 
-fn cmd_run(config_path: &Path, limits_name: Option<&str>, extra_args: Vec<String>) -> Result<()> {
+fn cmd_run(config_path: &Path, limits_name: Option<&str>, no_sync: bool, extra_args: Vec<String>) -> Result<()> {
     // Guard: exactly one nanny*.toml allowed per directory.
     let config_dir = config_path
         .parent()
@@ -377,6 +395,17 @@ fn cmd_run(config_path: &Path, limits_name: Option<&str>, extra_args: Vec<String
     // Load and validate config — fail immediately if anything is wrong.
     let config = nanny_config::load(config_path)
         .with_context(|| format!("failed to load config from '{}'", config_path.display()))?;
+
+    // [managed] endpoint/api_key was retired in favor of `nanny auth login`; a
+    // stale section is now ignored, so warn rather than silently do nothing.
+    if let Ok(raw) = std::fs::read_to_string(config_path) {
+        if nanny_config::has_managed_section(&raw) {
+            eprintln!(
+                "nanny: [managed] in nanny.toml is deprecated and ignored — run \
+                 `nanny auth login` to sync (keep `mode = \"managed\"` to enable it)."
+            );
+        }
+    }
 
     // Require [start] — nanny run always reads the command from config.
     let start = config.start.as_ref()
@@ -441,18 +470,22 @@ fn cmd_run(config_path: &Path, limits_name: Option<&str>, extra_args: Vec<String
     let bridge = Bridge::start(bridge_components)
         .context("failed to start bridge")?;
 
-    // ── Managed-mode cloud sender (None + no-op in local mode) ─────────────
+    // ── Cloud sync (None + no-op unless the run opted in) ──────────────────
     // Forwards a copy of the NDJSON event log to the cloud; enforcement stays
-    // fully local. Fire-and-forget — never blocks or fails the run.
-    let managed = managed::ManagedSender::maybe_start(&config, &bridge.session_token);
-    if managed.is_some() {
-        if let Some(m) = &config.managed {
-            println!("nanny: managed — forwarding events to {}", m.endpoint.trim_end_matches('/'));
+    // fully local. Fire-and-forget — never blocks or fails the run. Runs only
+    // when mode = "managed" AND this machine is logged in, and `--no-sync` did
+    // not turn it off.
+    let credentials = credentials::Credentials::load().ok().flatten();
+    let managed = match sync::resolve_sync(&config, credentials.as_ref(), no_sync) {
+        Some(target) => {
+            println!("nanny: syncing events to {} (enforcement stays local)", target.endpoint);
+            sync::CloudSync::start(target.endpoint, target.api_key, &bridge.session_token)
         }
-        // ExecutionStarted was already written locally; forward it too.
-        if let (Some(sender), Ok(line)) = (&managed, serde_json::to_string(&started_event)) {
-            sender.enqueue(line);
-        }
+        None => None,
+    };
+    // ExecutionStarted was already written locally; forward it too.
+    if let (Some(sender), Ok(line)) = (&managed, serde_json::to_string(&started_event)) {
+        sender.enqueue(line);
     }
 
     // ── Spawn child process ───────────────────────────────────────────────
