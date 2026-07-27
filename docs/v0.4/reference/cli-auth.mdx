@@ -1,11 +1,11 @@
 ---
 title: nanny auth
-description: Connect a machine to Nanny Cloud (login) or disconnect it (logout). Enforcement stays fully local either way.
+description: Log in to Nanny Cloud, or log out. Enforcement stays fully local either way.
 ---
 
-`nanny auth` connects this machine to [Nanny Cloud](https://nanny.run) so `nanny run` can sync its event log to your dashboard. It is optional, and enforcement never depends on it — logging in only turns on cloud sync.
+`nanny auth` logs you in to [Nanny Cloud](https://nanny.run) so `nanny run` can sync its event log to your dashboard. It's optional — enforcement is always local and never depends on it.
 
-Sync runs only when **both** are true: the project sets `mode = "managed"` in `nanny.toml`, and this machine is logged in. See [Connect to Nanny Cloud](/v0.4/guides/managed-mode) for the full flow.
+Sync runs only when **both** are true: the project sets `mode = "managed"` in `nanny.toml`, and you're logged in. See [Connect to Nanny Cloud](/v0.4/guides/managed-mode) for the full flow.
 
 ```bash
 nanny auth <COMMAND>
@@ -17,30 +17,24 @@ nanny auth <COMMAND>
 
 ### login
 
-Connect this machine. Opens your browser to approve, picks your org there, and stores an ingest-only key in `~/.nanny/credentials.toml` — this machine only, never your repo.
+Log in by approving in your browser.
 
 ```bash
 nanny auth login [--env <env>]
 ```
 
-#### Flags
-
-| Flag      | Type                          | Default | Description                                                                                                             |
-| --------- | ----------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `--env`   | `dev` \| `staging` \| `prod`  | `prod`  | Which Nanny Cloud to connect to. `dev`/`staging` are for Nanny's own testing. Accepts `--env staging` or `--env=staging`. |
-| `--token` | flag                          | —       | Machine login for CI and headless boxes: no browser. Reads the key from `NANNY_API_KEY` or stdin. Requires `--env`.     |
-
-#### Browser login (people)
-
-```bash
-nanny auth login
-```
-
 Approve in the browser and you're connected. Set `mode = "managed"` in `nanny.toml`, and `nanny run` starts syncing.
 
-#### Machine login (CI, headless)
+#### Flags
 
-A browser flow needs a person, so CI logs in with a pre-minted ingest key instead — supplied through the environment or stdin, never a command argument:
+| Flag      | Type                          | Default | Description                                                                                                              |
+| --------- | ----------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `--env`   | `dev` \| `staging` \| `prod`  | `prod`  | Which Nanny Cloud to log in to. `dev`/`staging` are for Nanny's own testing. Accepts `--env staging` or `--env=staging`. |
+| `--token` | flag                          | —       | Log in without a browser, for CI and headless machines. Reads an API key from `NANNY_API_KEY` or stdin. Requires `--env`. |
+
+#### CI and headless machines
+
+A browser flow needs a person. For CI, log in with an API key instead — supplied through `NANNY_API_KEY` or stdin, never a command argument:
 
 ```bash
 NANNY_API_KEY="nny_..." nanny auth login --token --env prod
@@ -48,19 +42,19 @@ NANNY_API_KEY="nny_..." nanny auth login --token --env prod
 echo "$NANNY_API_KEY" | nanny auth login --token --env staging
 ```
 
-`--env` is required so the machine targets the right cloud. Mint the key once with a browser login on a laptop, then drop it in your CI secrets.
+`--env` is required so it targets the right cloud.
 
 ---
 
 ### logout
 
-Disconnect this machine by deleting the local credential.
+Log out and stop syncing.
 
 ```bash
 nanny auth logout
 ```
 
-Enforcement is unaffected. This is local only — the key still exists in the cloud until you revoke it from the dashboard.
+Enforcement is unaffected. To revoke the key everywhere, use the dashboard.
 
 ---
 
