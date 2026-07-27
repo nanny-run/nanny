@@ -37,7 +37,7 @@ pub struct SyncTarget {
 }
 
 /// Decide whether — and where — to forward. Sync is opt-in twice over:
-/// `mode = "managed"` (this project wants cloud) AND a stored credential (this
+/// `mode = "managed"` (this project wants cloud) AND a stored credential (your
 /// machine logged in). `--no-sync` overrides to off. `None` means "don't sync";
 /// enforcement never depends on this.
 pub fn resolve_sync(
@@ -53,10 +53,10 @@ pub fn resolve_sync(
         return None;
     }
     let Some(creds) = credentials else {
-        // Managed mode was asked for but this machine isn't logged in. Say so
+        // Managed mode was asked for but your machine isn't logged in. Say so
         // loudly; local enforcement is unaffected.
         eprintln!(
-            "nanny: mode is \"managed\" but this machine is not logged in — run \
+            "nanny: mode is \"managed\" but your machine isn't logged in — run \
              `nanny auth login`. Enforcing locally, not syncing."
         );
         return None;

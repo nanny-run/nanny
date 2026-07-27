@@ -34,7 +34,7 @@ pub enum CertsCommand {
     /// others. Partial generation is not supported.
     ///
     /// After generating, start the server with:
-    ///     nanny server start
+    ///     nanny run --serve
     ///
     /// Distribute client.crt + client.key to agents running on other machines.
     Generate {
@@ -62,7 +62,7 @@ pub enum CertsCommand {
     /// leave the existing file unchanged. After any import Nanny validates that
     /// all three are present and that cert is signed by ca.
     ///
-    /// If nanny server is running, it hot-reloads the new certs automatically.
+    /// If the governance server is running, it hot-reloads the new certs automatically.
     Import {
         /// key=value pairs: ca=, cert=, key=. Values are PEM or @file.
         #[arg(required = true)]
@@ -256,7 +256,7 @@ fn cmd_certs_generate(out_dir: Option<PathBuf>, force: bool, days: u32) -> Resul
     println!("  valid until: {}", not_after.format(&Rfc3339).unwrap_or_default());
     println!();
     println!("Start the server:");
-    println!("  nanny server start");
+    println!("  nanny run --serve");
     println!();
     println!("Cross-machine agents: copy client.crt + client.key to each agent machine");
     println!("and set NANNY_BRIDGE_CERT, NANNY_BRIDGE_KEY, NANNY_BRIDGE_CA in the env.");
@@ -625,12 +625,12 @@ fn cmd_certs_show() -> Result<()> {
 /// Start watching the certs directory for file changes.
 ///
 /// Returns a channel receiver that fires on every change event.
-/// Called by `nanny server start` (Day 3) to hot-reload certs into
+/// Called by `nanny run --serve` (Day 3) to hot-reload certs into
 /// `Arc<RwLock<ServerConfig>>` without restarting the server.
 ///
 /// New connections use the new cert immediately; existing connections
 /// finish on the old cert until they disconnect.
-#[allow(dead_code)] // consumed by nanny server start (Day 3 — NetworkListener hot-reload)
+#[allow(dead_code)] // consumed by nanny run --serve (Day 3 — NetworkListener hot-reload)
 pub fn watch_certs_dir(
     dir: &Path,
 ) -> Result<std::sync::mpsc::Receiver<notify::Result<notify::Event>>> {
@@ -673,11 +673,11 @@ fn check_git_warning(dir: &Path) {
     }
 }
 
-/// Check whether the nanny server is running (TCP connectivity check).
+/// Check whether the governance server is running (TCP connectivity check).
 /// Used to hint that hot-reload will happen after import or rotate.
 fn nanny_server_is_running() -> bool {
     // Prefer the injected env var; fall back to ~/.nanny/server.addr written
-    // by `nanny server start` so this works from any terminal, not just a
+    // by `nanny run --serve` so this works from any terminal, not just a
     // governed child process.
     let addr = std::env::var("NANNY_BRIDGE_ADDR").ok().or_else(|| {
         dirs::home_dir()

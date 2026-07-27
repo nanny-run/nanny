@@ -32,13 +32,13 @@ Two steps, and neither puts a secret in your config.
 mode = "managed"
 ```
 
-**2. Connect this machine** — log in once (opens your browser to approve, and picks your org there):
+**2. Log in** — this opens your browser to approve:
 
 ```bash
 nanny auth login
 ```
 
-That stores an ingest-only key in `~/.nanny/credentials.toml` — this machine only, never your repo. Now run as usual:
+Approve, and you're connected. Now run as usual:
 
 ```bash
 nanny run python agent.py
@@ -47,23 +47,21 @@ nanny run python agent.py
 Your run appears in the dashboard within a few seconds of finishing. No code changes, no per-call instrumentation, and **no endpoint or key in `nanny.toml`**.
 
 <Note>
-  Sync needs **both** halves, and they live in different places on purpose: the
-  intent (`mode = "managed"`) is committable config, and the credential
-  (`nanny auth login`) is stored outside your repo. So a local-mode project never
-  syncs even while you are logged in, and a machine that never logged in never
-  syncs even in managed mode.
+  Sync needs **both**: `mode = "managed"` in the project, and being logged in. A
+  local-mode project never syncs even when you're logged in, and a machine that
+  never logged in never syncs even in managed mode.
 </Note>
 
 ## CI and headless machines
 
-A browser flow needs a person. For CI or a headless box, log in with a pre-minted ingest key instead of the browser — the key comes from `NANNY_API_KEY` (a CI secret) or stdin, never a command argument:
+A browser flow needs a person. For CI or a headless machine, log in with an API key instead — supplied through `NANNY_API_KEY` (a CI secret) or stdin, never a command argument:
 
 ```bash
 NANNY_API_KEY="nny_..." nanny auth login --token --env prod
 # or:  echo "$NANNY_API_KEY" | nanny auth login --token --env staging
 ```
 
-This writes the same `~/.nanny/credentials.toml` without opening a browser. `--env` is required so the machine targets the right cloud (log in once on a laptop to mint the key, then drop it in your CI secrets).
+This logs in without opening a browser. `--env` is required so it targets the right cloud.
 
 ## Skip a single run
 
@@ -90,5 +88,5 @@ nanny run --no-sync python agent.py
 ## Turning it off
 
 - **One run:** `nanny run --no-sync`.
-- **This machine, for good:** `nanny auth logout` (deletes the local credential; the key still exists in the cloud until you revoke it from the dashboard).
+- **Your machine, for good:** `nanny auth logout`. To revoke the key everywhere, use the dashboard.
 - **This project:** set `mode = "local"` in `nanny.toml`.

@@ -60,7 +60,7 @@ allowed_hosts = ["api.openai.com", "*.anthropic.com"]   # required when proxy mo
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `mode` | `"local"` \| `"managed"` | `"local"` | `"local"` enforces on this machine only. `"managed"` additionally syncs the event log to Nanny Cloud **when this machine is logged in** (`nanny auth login`). Enforcement stays local either way. See [Connect to Nanny Cloud](/v0.4/guides/managed-mode). |
+| `mode` | `"local"` \| `"managed"` | `"local"` | `"local"` enforces locally with no network calls. `"managed"` additionally syncs the event log to Nanny Cloud **when you're logged in** (`nanny auth login`). Enforcement stays local either way. See [Connect to Nanny Cloud](/v0.4/guides/managed-mode). |
 
 ---
 
@@ -157,7 +157,7 @@ See [HTTP proxy mode](/v0.4/guides/http-proxy-mode) for full details.
 
 ## Cloud sync
 
-Cloud sync has no config block. It turns on when **both** are true: `[runtime] mode = "managed"` above, and this machine is logged in via `nanny auth login`. The ingest key and endpoint are provisioned by login and stored in `~/.nanny/credentials.toml`, never in `nanny.toml` — so no secret and no URL ever lives in your committed config. Your organization is derived from the key on the cloud side, so there is no `org_id` to configure.
+Cloud sync has no config block. It turns on when **both** are true: `[runtime] mode = "managed"` above, and you're logged in via `nanny auth login`. No key, endpoint, or org lives in `nanny.toml` — login handles the credential, so your committed config never holds a secret.
 
 See [Connect to Nanny Cloud](/v0.4/guides/managed-mode) for the full flow, including the `--token` path for CI and headless machines.
 

@@ -1,4 +1,4 @@
-// nanny server — governance server daemon commands.
+// Governance server daemon commands (nanny run --serve, nanny stop, nanny status).
 //
 // For single-process agents, use `nanny run` instead. This command starts a
 // standalone governance server for cross-process or cross-machine enforcement.
@@ -35,7 +35,7 @@ fn nanny_state_dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
-// ── nanny server start ────────────────────────────────────────────────────────
+// ── nanny run --serve (governance server start) ───────────────────────────────
 
 /// DoS protection: hard-coded 100 req/s per client IP.
 /// Not a config knob — if this is ever wrong for a real workload, bump the
@@ -94,7 +94,7 @@ pub fn cmd_server_start(
                      \n\
                      For same-machine multi-agent use, bind to loopback instead:\n\
                      \n\
-                     \x20   nanny server start\n\
+                     \x20   nanny run --serve\n\
                      \n\
                      (default is 127.0.0.1:62669 — no certs needed)",
                     path.display()
@@ -103,7 +103,7 @@ pub fn cmd_server_start(
         }
     }
 
-    // Write the listen address to ~/.nanny/server.addr so `nanny server status`
+    // Write the listen address to ~/.nanny/server.addr so `nanny status`
     // and `nanny run` can discover the server without config.
     let state_dir = nanny_state_dir()?;
     std::fs::write(state_dir.join("server.addr"), addr.to_string())
@@ -144,7 +144,7 @@ pub fn cmd_server_start(
     Ok(())
 }
 
-// ── nanny server stop ─────────────────────────────────────────────────────────
+// ── nanny stop (governance server stop) ───────────────────────────────────────
 
 pub fn cmd_server_stop() -> Result<()> {
     let state_dir = nanny_state_dir()?;
@@ -153,7 +153,7 @@ pub fn cmd_server_stop() -> Result<()> {
     let raw = std::fs::read_to_string(&pid_file).with_context(|| {
         format!(
             "no running server found (PID file not present at {})\n\
-             Start the server with: nanny server start",
+             Start the server with: nanny run --serve",
             pid_file.display()
         )
     })?;
@@ -171,10 +171,10 @@ pub fn cmd_server_stop() -> Result<()> {
         if !status.success() {
             anyhow::bail!(
                 "failed to stop server (PID {pid}) — it may have already exited.\n\
-                 Check with: nanny server status"
+                 Check with: nanny status"
             );
         }
-        println!("nanny server: stopped (PID {pid})");
+        println!("nanny: governance server stopped (PID {pid})");
     }
 
     #[cfg(windows)]
@@ -186,16 +186,16 @@ pub fn cmd_server_stop() -> Result<()> {
         if !status.success() {
             anyhow::bail!(
                 "failed to stop server (PID {pid}) — it may have already exited.\n\
-                 Check with: nanny server status"
+                 Check with: nanny status"
             );
         }
-        println!("nanny server: stopped (PID {pid})");
+        println!("nanny: governance server stopped (PID {pid})");
     }
 
     Ok(())
 }
 
-// ── nanny server status ───────────────────────────────────────────────────────
+// ── nanny status (governance server status) ───────────────────────────────────
 
 pub fn cmd_server_status() -> Result<()> {
     let state_dir = nanny_state_dir()?;
@@ -205,7 +205,7 @@ pub fn cmd_server_status() -> Result<()> {
     let addr_str = std::fs::read_to_string(&addr_file).with_context(|| {
         format!(
             "no server address found (file not present at {})\n\
-             Start the server with: nanny server start",
+             Start the server with: nanny run --serve",
             addr_file.display()
         )
     })?;
@@ -214,7 +214,7 @@ pub fn cmd_server_status() -> Result<()> {
     // Try a TCP connection to check reachability.
     match std::net::TcpStream::connect(addr) {
         Ok(_) => {
-            println!("nanny server: running");
+            println!("nanny: governance server running");
             println!("  address: {addr}");
 
             // Read PID if available.
@@ -229,8 +229,8 @@ pub fn cmd_server_status() -> Result<()> {
             }
         }
         Err(_) => {
-            println!("nanny server: not reachable at {addr}");
-            println!("  Start with: nanny server start");
+            println!("nanny: governance server not reachable at {addr}");
+            println!("  Start with: nanny run --serve");
             std::process::exit(1);
         }
     }

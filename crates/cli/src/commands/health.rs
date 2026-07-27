@@ -44,7 +44,7 @@ pub fn cmd_health() -> Result<()> {
 
     // ── 2. Network server ─────────────────────────────────────────────────────
     // Set by `nanny run` (or manually) when NANNY_BRIDGE_ADDR points at a
-    // remote governance server started with `nanny server start`.
+    // remote governance server started with `nanny run --serve`.
     let server_status = check_network_server();
     match &server_status {
         ServerStatus::NotConfigured => {
@@ -263,7 +263,7 @@ fn tcp_probe_status(addr: String) -> ServerStatus {
         Some(true) => ServerStatus::Reachable(addr, "TCP ping"),
         _ => ServerStatus::Unreachable(
             addr,
-            "TCP connection refused — is `nanny server start` running?".to_string(),
+            "TCP connection refused — is `nanny run --serve` running?".to_string(),
         ),
     }
 }
