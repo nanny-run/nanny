@@ -663,3 +663,214 @@ log = "stdout"
         "stale server.token must be deleted when TCP probe fails"
     );
 }
+
+// ── T10: proxy env vars are auto-injected when the SERVER has [proxy] configured (G8) ─
+//
+// The server's own nanny.toml (not the client's) decides whether [proxy]
+// allowed_hosts is active. When it is, cmd_run_via_network_server must set
+// HTTPS_PROXY / HTTP_PROXY (and lowercase) on the child pointing at the
+// governor, plus NO_PROXY for the loopback address — without the dev setting
+// anything by hand. Uses a different directory/nanny.toml for the server vs.
+// the client on purpose, matching how these are used in practice.
+//
+// Skipped on Windows: same `dirs::home_dir()` / `HOME` limitation as T8.
+
+#[cfg(not(windows))]
+#[test]
+fn proxy_env_vars_injected_when_server_has_proxy_configured() {
+    let dir  = temp_dir();
+    let home = temp_dir();
+
+    // Client nanny.toml — deliberately has NO [proxy] section, to prove the
+    // decision comes from the server's config, not this one.
+    fs::write(
+        dir.join("nanny.toml"),
+        r#"[runtime]
+mode = "local"
+
+[start]
+cmd = "sh -c 'echo GOT:HTTPS_PROXY=$HTTPS_PROXY:HTTP_PROXY=$HTTP_PROXY:NO_PROXY=$NO_PROXY'"
+
+[limits]
+steps   = 10
+tokens  = 100
+timeout = 10000
+
+[observability]
+log = "stdout"
+"#,
+    )
+    .unwrap();
+
+    // Server nanny.toml — [proxy] allowed_hosts is what should drive injection.
+    let server_toml_dir = temp_dir();
+    fs::write(
+        server_toml_dir.join("nanny.toml"),
+        r#"[runtime]
+mode = "local"
+
+[start]
+cmd = "echo unused"
+
+[limits]
+steps   = 100
+tokens  = 1000
+timeout = 60000
+
+[proxy]
+allowed_hosts = ["api.openai.com"]
+
+[observability]
+log = "stdout"
+"#,
+    )
+    .unwrap();
+
+    let server_port = 15902u16;
+    let mut server = Command::new(nanny_bin())
+        .current_dir(&server_toml_dir)
+        .env("HOME", &home)
+        .args(["run", "--serve", "--addr", &format!("127.0.0.1:{server_port}")])
+        .spawn()
+        .expect("governance server must spawn");
+
+    let mut ready = false;
+    for _ in 0..50 {
+        if std::net::TcpStream::connect(format!("127.0.0.1:{server_port}")).is_ok() {
+            ready = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(ready, "governance server must become ready within 5 s");
+
+    let output = Command::new(nanny_bin())
+        .current_dir(&dir)
+        .env("HOME", &home)
+        .args(["--config", &config_arg(&dir), "run"])
+        .output()
+        .expect("nanny run must complete");
+
+    let _ = server.kill();
+    let _ = server.wait();
+    let _ = fs::remove_dir_all(&dir);
+    let _ = fs::remove_dir_all(&home);
+    let _ = fs::remove_dir_all(&server_toml_dir);
+
+    assert!(
+        output.status.success(),
+        "nanny run must exit 0\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let expected = format!(
+        "GOT:HTTPS_PROXY=http://127.0.0.1:{server_port}:HTTP_PROXY=http://127.0.0.1:{server_port}:NO_PROXY=127.0.0.1,localhost"
+    );
+    assert!(
+        stdout.contains(&expected),
+        "child must see HTTPS_PROXY/HTTP_PROXY/NO_PROXY pointed at the governor\nexpected to find: {expected}\ngot stdout: {stdout}"
+    );
+}
+
+// ── T11: proxy env vars are NOT injected when the server has no [proxy] ──────
+//
+// Regression guard for the opposite case: a server with no [proxy] section
+// (or an empty allowed_hosts) must not cause the child to get HTTPS_PROXY/
+// HTTP_PROXY pointed at it — that would route all outbound traffic into a
+// proxy that immediately 404s every CONNECT ("proxy not configured"),
+// breaking legitimate calls.
+//
+// Skipped on Windows: same `dirs::home_dir()` / `HOME` limitation as T8.
+
+#[cfg(not(windows))]
+#[test]
+fn proxy_env_vars_not_injected_when_server_has_no_proxy_configured() {
+    let dir  = temp_dir();
+    let home = temp_dir();
+
+    fs::write(
+        dir.join("nanny.toml"),
+        r#"[runtime]
+mode = "local"
+
+[start]
+cmd = "sh -c 'echo GOT:HTTPS_PROXY=[$HTTPS_PROXY]'"
+
+[limits]
+steps   = 10
+tokens  = 100
+timeout = 10000
+
+[observability]
+log = "stdout"
+"#,
+    )
+    .unwrap();
+
+    // Server nanny.toml — no [proxy] section at all.
+    let server_toml_dir = temp_dir();
+    fs::write(
+        server_toml_dir.join("nanny.toml"),
+        r#"[runtime]
+mode = "local"
+
+[start]
+cmd = "echo unused"
+
+[limits]
+steps   = 100
+tokens  = 1000
+timeout = 60000
+
+[observability]
+log = "stdout"
+"#,
+    )
+    .unwrap();
+
+    let server_port = 15903u16;
+    let mut server = Command::new(nanny_bin())
+        .current_dir(&server_toml_dir)
+        .env("HOME", &home)
+        .args(["run", "--serve", "--addr", &format!("127.0.0.1:{server_port}")])
+        .spawn()
+        .expect("governance server must spawn");
+
+    let mut ready = false;
+    for _ in 0..50 {
+        if std::net::TcpStream::connect(format!("127.0.0.1:{server_port}")).is_ok() {
+            ready = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(ready, "governance server must become ready within 5 s");
+
+    let output = Command::new(nanny_bin())
+        .current_dir(&dir)
+        .env("HOME", &home)
+        .args(["--config", &config_arg(&dir), "run"])
+        .output()
+        .expect("nanny run must complete");
+
+    let _ = server.kill();
+    let _ = server.wait();
+    let _ = fs::remove_dir_all(&dir);
+    let _ = fs::remove_dir_all(&home);
+    let _ = fs::remove_dir_all(&server_toml_dir);
+
+    assert!(
+        output.status.success(),
+        "nanny run must exit 0\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("GOT:HTTPS_PROXY=[]"),
+        "HTTPS_PROXY must be unset when the server has no [proxy] configured\ngot stdout: {stdout}"
+    );
+}

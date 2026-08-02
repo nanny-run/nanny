@@ -1040,7 +1040,7 @@ pub(crate) fn handle_stop(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> Brid
 /// Mark execution as stopped.
 /// Idempotent — does nothing if already stopped.
 /// ExecutionStopped is emitted by the CLI, not the bridge.
-fn mark_stopped(state: &mut BridgeState, reason: &str) {
+pub(crate) fn mark_stopped(state: &mut BridgeState, reason: &str) {
     if matches!(state.execution, ExecutionState::Stopped { .. }) {
         return;
     }

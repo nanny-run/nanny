@@ -109,6 +109,16 @@ pub fn cmd_server_start(
     std::fs::write(state_dir.join("server.addr"), addr.to_string())
         .context("failed to write ~/.nanny/server.addr")?;
 
+    // G8: record whether this server has [proxy] allowed_hosts active, so a
+    // joining `nanny run` (possibly in a different directory with its own,
+    // irrelevant nanny.toml) knows whether to inject HTTPS_PROXY/HTTP_PROXY —
+    // the proxy is configured on the SERVER's config, not the client's.
+    std::fs::write(
+        state_dir.join("server.proxy"),
+        if proxy_allowed_hosts.is_some() { "1" } else { "0" },
+    )
+    .context("failed to write ~/.nanny/server.proxy")?;
+
     // Cloud forwarding (auth-free, cli-side): the same gate as `nanny run` —
     // mode = "managed" AND logged in, and not --no-sync. The engine only exposes
     // events; the forwarder that talks to the cloud lives here. `resolve_sync`

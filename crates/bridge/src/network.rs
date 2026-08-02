@@ -42,7 +42,7 @@ use uuid::Uuid;
 use nanny_runtime::ToolRegistry;
 
 use super::{
-    append_event, now_ms,
+    append_event, mark_stopped, now_ms,
     BridgeComponents, BridgeResp, BridgeState, ContentType,
     handle_agent_enter, handle_agent_exit, handle_events, handle_harness, handle_health,
     handle_llm_usage, handle_rule_evaluate, handle_status, handle_step, handle_stop,
@@ -376,6 +376,16 @@ async fn route_proxy(State(app): State<AppState>, req: Request) -> Response {
     // ToolAllowed/ToolDenied events land on the right run's event log.
     let shared = app.run_state(req.headers());
 
+    // G9: match every other action endpoint (route_tool_call, route_rule_evaluate,
+    // route_agent_enter) — once this run has stopped (including from an earlier
+    // proxy denial), refuse every further CONNECT with 410, not just the host
+    // that caused the stop. Without this, the same run could keep tunneling to
+    // an allowed host after being denied elsewhere, which would silently undo
+    // the hard stop this fix exists to guarantee.
+    if let Some(reason) = stopped_reason(&shared) {
+        return stopped_gone(&reason);
+    }
+
     let Some(allowed) = app.proxy_allowed_hosts.as_deref() else {
         return (
             StatusCode::NOT_FOUND,
@@ -421,6 +431,12 @@ async fn route_proxy(State(app): State<AppState>, req: Request) -> Response {
                 ts:   now_ms(),
                 tool: format!("http_proxy:{host}"),
             });
+            // G9: a proxy denial is a hard stop, same as any other ToolDenied
+            // (lib.rs pairs append_event with mark_stopped for every other
+            // denial path) — without this the run never actually stops, only
+            // that one connection fails, contradicting the manifesto's "hard
+            // stops are real stops" and the documented behavior.
+            mark_stopped(&mut guard, "ToolDenied");
         }
         eprintln!("nanny proxy: blocked SSRF attempt to {host}");
         return (
@@ -438,6 +454,9 @@ async fn route_proxy(State(app): State<AppState>, req: Request) -> Response {
                 ts:   now_ms(),
                 tool: format!("http_proxy:{host}"),
             });
+            // G9: see the SSRF-guard branch above — a proxy denial must end
+            // the run, matching every other ToolDenied path.
+            mark_stopped(&mut guard, "ToolDenied");
         }
         eprintln!("nanny proxy: denied host {host}");
         return (
@@ -1648,6 +1667,72 @@ mod tests {
                 .unwrap_or(false)
         });
         assert!(has_tool_denied, "ToolDenied event must appear after proxy denial\ngot: {body}");
+    }
+
+    #[test]
+    fn proxy_denial_marks_run_stopped() {
+        // G9: a proxy denial must be a hard stop — /status must report the run
+        // Stopped with reason ToolDenied, not still Running with a single
+        // failed connection. Matches the documented behavior and every other
+        // denial path (RuleDenied, ToolDenied via /tool/call).
+        let (port, token, dir) = start_proxy_server(Some(vec!["api.openai.com".into()]));
+
+        let ca   = std::fs::read(dir.join("ca.crt")).unwrap();
+        let cert = std::fs::read(dir.join("client.crt")).unwrap();
+        let key  = std::fs::read(dir.join("client.key")).unwrap();
+        let mut stream = tls_connect_raw(&format!("127.0.0.1:{port}"), &ca, &cert, &key);
+        let (status, _) = send_connect(&mut stream, "evil.com:443", &token);
+        assert_eq!(status, 403);
+
+        let ca_cert  = reqwest::Certificate::from_pem(&ca).unwrap();
+        let identity = reqwest::Identity::from_pem(&[cert, key].concat()).unwrap();
+        let client = reqwest::blocking::Client::builder()
+            .add_root_certificate(ca_cert)
+            .identity(identity)
+            .use_rustls_tls()
+            .danger_accept_invalid_hostnames(true)
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap();
+
+        let resp = client
+            .get(format!("https://127.0.0.1:{port}/status"))
+            .header("X-Nanny-Session-Token", &token)
+            .send()
+            .unwrap();
+        let body: serde_json::Value = resp.json().unwrap();
+        assert_eq!(body["state"], "stopped", "run must be Stopped after a proxy denial\ngot: {body}");
+        assert_eq!(body["reason"], "ToolDenied", "stop reason must be ToolDenied\ngot: {body}");
+    }
+
+    #[test]
+    fn proxy_stopped_run_denies_subsequent_allowed_host() {
+        // G9: once a run is stopped (by any denial), it must stay stopped for
+        // every further CONNECT in that run — including to an otherwise
+        // allowed host — same as route_tool_call/route_rule_evaluate already
+        // do. Otherwise a denied run could keep tunneling to its LLM host as
+        // if nothing happened, quietly undoing the hard stop.
+        let (port, token, dir) =
+            start_proxy_server(Some(vec!["api.openai.com".into()]));
+
+        let ca   = std::fs::read(dir.join("ca.crt")).unwrap();
+        let cert = std::fs::read(dir.join("client.crt")).unwrap();
+        let key  = std::fs::read(dir.join("client.key")).unwrap();
+
+        // First connection: denied host, stops the run.
+        let mut stream1 = tls_connect_raw(&format!("127.0.0.1:{port}"), &ca, &cert, &key);
+        let (status1, _) = send_connect(&mut stream1, "evil.com:443", &token);
+        assert_eq!(status1, 403);
+
+        // Second connection, same token (same default run, no X-Nanny-Run-Id):
+        // CONNECT to the ALLOWED host must now be refused too — 410, not 200.
+        let mut stream2 = tls_connect_raw(&format!("127.0.0.1:{port}"), &ca, &cert, &key);
+        let (status2, body2) = send_connect(&mut stream2, "api.openai.com:443", &token);
+        assert_eq!(
+            status2, 410,
+            "an allowed host must still be refused once the run has stopped\nbody: {body2}"
+        );
+        assert!(body2.contains("ToolDenied"), "410 body must carry the typed reason\ngot: {body2}");
     }
 
     #[test]
