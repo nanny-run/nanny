@@ -27,7 +27,7 @@ Installed via nvm-managed Node v24.15.0.
   - Working dir: `~/.openclaw`
 - Gateway binds loopback-only by default (`127.0.0.1:18789`), local dashboard at `http://127.0.0.1:18789/`.
 - **Config file: `~/.openclaw/openclaw.json`** — both CLI and service config live here.
-- Default model: `openai/gpt-5.5` — outbound LLM calls go to `api.openai.com`. Relevant for `[proxy] allowed_hosts` later.
+- Model in use: **DeepSeek API** (switched from the default `openai/gpt-5.5`) — outbound LLM calls go to `api.deepseek.com`, not `api.openai.com`. Relevant for `[proxy] allowed_hosts` later.
 
 **Implication for the demo:** since our proxy auto-injection only works when `nanny run` itself spawns the process, testing/recording requires stopping the LaunchAgent (`openclaw gateway stop`, or `launchctl unload` the plist) and launching the gateway command manually under `nanny run` instead of the managed service.
 
