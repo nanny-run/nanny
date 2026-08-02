@@ -325,7 +325,7 @@ struct NetworkServerInfo {
     /// Whether the SERVER (not the joining client's own nanny.toml, which may
     /// live in a different directory entirely) has `[proxy] allowed_hosts`
     /// configured — read from `~/.nanny/server.proxy`, written by
-    /// `cmd_server_start` at the same time as `server.addr` (G8). Missing file
+    /// `cmd_server_start` at the same time as `server.addr`. Missing file
     /// (older server binary) defaults to false — no proxy env injection.
     proxy_configured: bool,
 }
@@ -376,7 +376,7 @@ fn try_detect_network_server() -> Option<NetworkServerInfo> {
 /// When `server.proxy_configured` is true, the child also gets
 /// `HTTPS_PROXY`/`HTTP_PROXY` (and lowercase variants) pointed at the same
 /// governor address automatically — the governance API and the CONNECT proxy
-/// share one port (G8). Without this, the allowlist silently does nothing
+/// share one port. Without this, the allowlist silently does nothing
 /// unless a human remembers to set these vars by hand, which is a fail-open
 /// gap the manifesto forbids. Read from the SERVER's own config
 /// (`server.proxy`), not the joining client's nanny.toml — the two may live in
@@ -419,7 +419,7 @@ fn cmd_run_via_network_server(command: Vec<String>, server: NetworkServerInfo) -
     if key_file.exists()  { cmd.env("NANNY_BRIDGE_KEY",  &key_file); }
     if ca_file.exists()   { cmd.env("NANNY_BRIDGE_CA",   &ca_file); }
 
-    // G8: auto-inject the CONNECT proxy address so [proxy] allowed_hosts is
+    // Auto-inject the CONNECT proxy address so [proxy] allowed_hosts is
     // enforced without the dev having to set these by hand. The governance API
     // and the proxy share one port (network.rs), so the same server address
     // works for both. Set both cases — some HTTP clients only check lowercase

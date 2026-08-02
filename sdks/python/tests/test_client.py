@@ -117,7 +117,7 @@ def test_agent_enter_410_raises_typed_stop(mock_bridge: HTTPServer) -> None:
 
 
 def test_call_tool_410_from_proxy_denial_raises_execution_stopped(mock_bridge: HTTPServer) -> None:
-    """A run stopped by an HTTP proxy denial (G9) reads 'ToolDenied' as the 410
+    """A run stopped by an HTTP proxy denial reads 'ToolDenied' as the 410
     reason — same body shape as any other denial, no separate handling needed
     on the SDK side. ToolDenied isn't one of the known limit classes here (that
     class needs a tool_name, which a proxy denial that happened on an earlier,

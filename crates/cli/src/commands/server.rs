@@ -109,7 +109,7 @@ pub fn cmd_server_start(
     std::fs::write(state_dir.join("server.addr"), addr.to_string())
         .context("failed to write ~/.nanny/server.addr")?;
 
-    // G8: record whether this server has [proxy] allowed_hosts active, so a
+    // Record whether this server has [proxy] allowed_hosts active, so a
     // joining `nanny run` (possibly in a different directory with its own,
     // irrelevant nanny.toml) knows whether to inject HTTPS_PROXY/HTTP_PROXY —
     // the proxy is configured on the SERVER's config, not the client's.

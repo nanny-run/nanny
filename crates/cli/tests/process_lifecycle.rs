@@ -664,7 +664,7 @@ log = "stdout"
     );
 }
 
-// ── T10: proxy env vars are auto-injected when the SERVER has [proxy] configured (G8) ─
+// ── T10: proxy env vars are auto-injected when the SERVER has [proxy] configured ─
 //
 // The server's own nanny.toml (not the client's) decides whether [proxy]
 // allowed_hosts is active. When it is, cmd_run_via_network_server must set

@@ -376,7 +376,7 @@ async fn route_proxy(State(app): State<AppState>, req: Request) -> Response {
     // ToolAllowed/ToolDenied events land on the right run's event log.
     let shared = app.run_state(req.headers());
 
-    // G9: match every other action endpoint (route_tool_call, route_rule_evaluate,
+    // Match every other action endpoint (route_tool_call, route_rule_evaluate,
     // route_agent_enter) — once this run has stopped (including from an earlier
     // proxy denial), refuse every further CONNECT with 410, not just the host
     // that caused the stop. Without this, the same run could keep tunneling to
@@ -431,7 +431,7 @@ async fn route_proxy(State(app): State<AppState>, req: Request) -> Response {
                 ts:   now_ms(),
                 tool: format!("http_proxy:{host}"),
             });
-            // G9: a proxy denial is a hard stop, same as any other ToolDenied
+            // A proxy denial is a hard stop, same as any other ToolDenied
             // (lib.rs pairs append_event with mark_stopped for every other
             // denial path) — without this the run never actually stops, only
             // that one connection fails, contradicting the manifesto's "hard
@@ -454,7 +454,7 @@ async fn route_proxy(State(app): State<AppState>, req: Request) -> Response {
                 ts:   now_ms(),
                 tool: format!("http_proxy:{host}"),
             });
-            // G9: see the SSRF-guard branch above — a proxy denial must end
+            // See the SSRF-guard branch above — a proxy denial must end
             // the run, matching every other ToolDenied path.
             mark_stopped(&mut guard, "ToolDenied");
         }
@@ -1671,7 +1671,7 @@ mod tests {
 
     #[test]
     fn proxy_denial_marks_run_stopped() {
-        // G9: a proxy denial must be a hard stop — /status must report the run
+        // A proxy denial must be a hard stop — /status must report the run
         // Stopped with reason ToolDenied, not still Running with a single
         // failed connection. Matches the documented behavior and every other
         // denial path (RuleDenied, ToolDenied via /tool/call).
@@ -1707,7 +1707,7 @@ mod tests {
 
     #[test]
     fn proxy_stopped_run_denies_subsequent_allowed_host() {
-        // G9: once a run is stopped (by any denial), it must stay stopped for
+        // Once a run is stopped (by any denial), it must stay stopped for
         // every further CONNECT in that run — including to an otherwise
         // allowed host — same as route_tool_call/route_rule_evaluate already
         // do. Otherwise a denied run could keep tunneling to its LLM host as
