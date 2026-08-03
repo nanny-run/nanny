@@ -62,6 +62,12 @@ pub struct NannyConfig {
     /// Only active on `nanny run --serve` when `[proxy] allowed_hosts` is set.
     #[serde(default)]
     pub proxy: Option<ProxyConfig>,
+
+    /// Opt-in dollars-denominated budget, resolved into `[limits].tokens` by
+    /// the CLI before the engine runs. See `BudgetConfig` — this crate never
+    /// resolves it, only parses it.
+    #[serde(default)]
+    pub budget: Option<BudgetConfig>,
 }
 
 // ── RuntimeConfig ─────────────────────────────────────────────────────────────
@@ -249,6 +255,55 @@ pub struct ProxyConfig {
     pub allowed_hosts: Vec<String>,
 }
 
+// ── BudgetConfig ─────────────────────────────────────────────────────────────
+
+/// Opt-in, dollars-denominated budget — resolved into `[limits].tokens` (and
+/// `[limits.<name>].tokens` for each named override below) by the CLI, once,
+/// immediately after this file is loaded and before the engine is ever built.
+/// `nanny-core`/`nanny-bridge` never see this section at all, only the final
+/// resolved `tokens = N` — the resolution itself (reading a local pricing
+/// cache, doing the dollars÷price arithmetic) lives in `crates/cli`, never
+/// here. This struct is purely inert: parsed and validated like everything
+/// else in this crate, nothing more — no HTTP, no arithmetic, matching this
+/// crate's "turn a static file into a trusted config, nothing else" charter.
+///
+/// Absent by default. When absent, nothing changes — every existing
+/// `nanny.toml` (raw `tokens = N`) behaves exactly as it always has.
+///
+/// ```toml
+/// [budget]
+/// model   = "deepseek-v4-flash"
+/// dollars = 10
+///
+/// [budget.reviewer]
+/// dollars = 3
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BudgetConfig {
+    /// Which model's pricing to resolve against — must match a model name in
+    /// the local pricing cache (`~/.nanny/pricing.json`). Resolution fails
+    /// loudly, not silently, if the model isn't cached.
+    pub model: String,
+
+    /// The overall dollar budget for the run. Resolved into `[limits].tokens`.
+    pub dollars: f64,
+
+    /// Named per-scope dollar overrides. In TOML: [budget.researcher],
+    /// [budget.writer], etc. — mirrors `[limits.<name>]`. Each resolves into
+    /// the matching `[limits.<name>].tokens`.
+    #[serde(flatten, default)]
+    pub named: HashMap<String, PartialBudgetConfig>,
+}
+
+/// A partial per-scope budget override. `dollars: None` means that named
+/// scope has no budget override and keeps whatever `[limits.<name>].tokens`
+/// already resolved to (from `[limits]`, or its own hand-written value).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PartialBudgetConfig {
+    #[serde(default)]
+    pub dollars: Option<f64>,
+}
+
 // ── Cloud sync ─────────────────────────────────────────────────────────────────
 
 /// Environment variable holding the cloud API key, read by the machine login
@@ -386,6 +441,17 @@ timeout = 30000
 # steps   = 500
 # tokens  = 200000
 # timeout = 600000
+
+# Prefer thinking in dollars instead of hand-computing tokens? Uncomment
+# [budget] — it resolves into the tokens value above automatically, using a
+# local pricing cache refreshed by `nanny init` and friends (no cloud account
+# needed). Leave [budget] out entirely to keep authoring tokens directly.
+# [budget]
+# model   = "deepseek-v4-flash"
+# dollars = 10
+#
+# [budget.researcher]
+# dollars = 3
 
 [tools]
 # Explicit allowlist of tools the agent is permitted to call.
@@ -705,6 +771,76 @@ timeout = 5000
 
         let proxy = config.proxy.expect("[proxy] must be present");
         assert!(proxy.allowed_hosts.is_empty());
+    }
+
+    #[test]
+    fn budget_config_is_optional() {
+        // Absent [budget] must change nothing — full backward compatibility
+        // for every existing nanny.toml authored with raw tokens = N.
+        let config: NannyConfig = toml::from_str(
+            r#"
+[limits]
+steps   = 10
+tokens  = 5000
+timeout = 5000
+"#,
+        )
+        .expect("must parse");
+
+        assert!(config.budget.is_none());
+    }
+
+    #[test]
+    fn budget_config_parses_dollars_and_named_overrides() {
+        let config: NannyConfig = toml::from_str(
+            r#"
+[limits]
+steps   = 10
+tokens  = 5000
+timeout = 5000
+
+[budget]
+model   = "deepseek-v4-flash"
+dollars = 10
+
+[budget.reviewer]
+dollars = 3
+"#,
+        )
+        .expect("must parse");
+
+        let budget = config.budget.expect("[budget] must be present");
+        assert_eq!(budget.model, "deepseek-v4-flash");
+        assert_eq!(budget.dollars, 10.0);
+
+        let reviewer = budget.named.get("reviewer").expect("[budget.reviewer] must be present");
+        assert_eq!(reviewer.dollars, Some(3.0));
+    }
+
+    #[test]
+    fn budget_config_named_override_without_dollars_is_none() {
+        // A named [budget.<name>] table with no dollars key is valid TOML —
+        // it just means that scope has no override, same spirit as
+        // PartialLimitsConfig's optional fields.
+        let config: NannyConfig = toml::from_str(
+            r#"
+[limits]
+steps   = 10
+tokens  = 5000
+timeout = 5000
+
+[budget]
+model   = "deepseek-v4-flash"
+dollars = 10
+
+[budget.scout]
+"#,
+        )
+        .expect("must parse");
+
+        let budget = config.budget.expect("[budget] must be present");
+        let scout = budget.named.get("scout").expect("[budget.scout] must be present");
+        assert_eq!(scout.dollars, None);
     }
 
     #[test]
