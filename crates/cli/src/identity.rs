@@ -3,9 +3,9 @@
 //! One app, one id, forever. `nanny init` is a per-app, once-ever action — the
 //! `git init` analogy — never re-run for "the same app" in a new environment.
 //! Whatever it produces here is what gets deployed everywhere that app runs
-//! (laptop, VPS, CI), byte-for-byte, unmodified. There is no `--force`: identity
-//! is never regenerated. A genuinely different app is a genuinely different
-//! `nanny init` in a genuinely different checkout.
+//! (laptop, VPS, CI), byte-for-byte, unmodified. Identity is never regenerated.
+//! A genuinely different app is a genuinely different `nanny init` in a
+//! genuinely different checkout.
 //!
 //! Committed to git, not gitignored — an app id is not a secret (unlike a
 //! session token or an ingest key), and committing it is what makes "init once,
@@ -59,10 +59,9 @@ impl AppIdentity {
     }
 
     /// Create and persist a new identity. Fails if one already exists — the
-    /// `app_id` is never regenerated; there is no `--force`. `name` is the
-    /// caller's job to resolve (prompt, default, whatever) — this function
-    /// just persists it, and never validates it for uniqueness, since it's
-    /// purely a display label.
+    /// `app_id` is never regenerated. `name` is the caller's job to resolve
+    /// (prompt, default, whatever) — this function just persists it, and
+    /// never validates it for uniqueness, since it's purely a display label.
     pub fn create(dir: &Path, name: String) -> Result<Self> {
         let path = app_toml_path(dir);
         if path.exists() {
