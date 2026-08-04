@@ -1,13 +1,13 @@
-//! `.nanny/app.toml` — an app's permanent identity, created once by `nanny init`.
+//! `.nanny/app.toml`, an app's permanent identity, created once by `nanny init`.
 //!
-//! One app, one id, forever. `nanny init` is a per-app, once-ever action — the
-//! `git init` analogy — never re-run for "the same app" in a new environment.
+//! One app, one id, forever. `nanny init` is a per-app, once-ever action, the
+//! `git init` analogy, never re-run for "the same app" in a new environment.
 //! Whatever it produces here is what gets deployed everywhere that app runs
 //! (laptop, VPS, CI), byte-for-byte, unmodified. Identity is never regenerated.
 //! A genuinely different app is a genuinely different `nanny init` in a
 //! genuinely different checkout.
 //!
-//! Committed to git, not gitignored — an app id is not a secret (unlike a
+//! Committed to git, not gitignored, an app id is not a secret (unlike a
 //! session token or an ingest key), and committing it is what makes "init once,
 //! deploy as-is" work without any manual id-copying step between environments.
 
@@ -18,11 +18,11 @@ use std::path::{Path, PathBuf};
 const DIR_NAME: &str = ".nanny";
 const FILE_NAME: &str = "app.toml";
 
-/// An app's permanent identity. `app_id` is generated once and never changes —
+/// An app's permanent identity. `app_id` is generated once and never changes;
 /// it's the only thing ever used for addressing (`--join`, `--app`, Cloud
 /// linking). `name` is purely for humans: easier to recognize than a hash in
-/// `nanny status` output, never used to look anything up, and — unlike
-/// `app_id` — free to edit by hand at any time.
+/// `nanny status` output, never used to look anything up, and, unlike
+/// `app_id`, free to edit by hand at any time.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppIdentity {
     pub app_id: String,
@@ -31,7 +31,7 @@ pub struct AppIdentity {
 
 impl AppIdentity {
     /// Look for `.nanny/app.toml` under `dir`. `Ok(None)` means this directory
-    /// was never `nanny init`-ed with identity — a normal state for older
+    /// was never `nanny init`-ed with identity, a normal state for older
     /// projects, not an error.
     pub fn load(dir: &Path) -> Result<Option<Self>> {
         let path = app_toml_path(dir);
@@ -46,12 +46,12 @@ impl AppIdentity {
     }
 
     /// Load identity from the current directory, or fail with a clear pointer
-    /// to `nanny init` — used by commands that require an app id to function
+    /// to `nanny init`, used by commands that require an app id to function
     /// (`--serve`, self-minting) rather than treating it as optional.
     pub fn load_required(dir: &Path) -> Result<Self> {
         Self::load(dir)?.ok_or_else(|| {
             anyhow::anyhow!(
-                "no app identity found in '{}' — run `nanny init` here first \
+                "no app identity found in '{}', run `nanny init` here first \
                  (writes .nanny/app.toml, once, permanently)",
                 dir.display()
             )
@@ -66,7 +66,7 @@ impl AppIdentity {
         let path = app_toml_path(dir);
         if path.exists() {
             anyhow::bail!(
-                "{} already exists — an app's identity is set once and never \
+                "{} already exists, an app's identity is set once and never \
                  regenerated. If this is genuinely a different app, run `nanny init` \
                  in a different directory instead.",
                 path.display()
@@ -78,12 +78,12 @@ impl AppIdentity {
             .with_context(|| format!("failed to create {}", dot_nanny.display()))?;
         let body = toml::to_string_pretty(&identity).context("failed to serialize app identity")?;
         let commented = format!(
-            "# Written once by `nanny init`. app_id is permanent — never edit or\n\
+            "# Written once by `nanny init`. app_id is permanent, never edit or\n\
              # regenerate it; it's the only thing used to address this app\n\
-             # (--join, --app, cloud linking). `name` is just for you — edit it\n\
+             # (--join, --app, cloud linking). `name` is just for you, edit it\n\
              # freely, it's never used to look anything up. Commit this file: an\n\
              # app id is not a secret, and committing it is what lets `nanny init`\n\
-             # stay a one-time, local action — deploy this file as-is to every\n\
+             # stay a one-time, local action, deploy this file as-is to every\n\
              # environment this app runs in.\n\
              {body}"
         );

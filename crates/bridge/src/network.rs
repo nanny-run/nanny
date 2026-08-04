@@ -108,17 +108,17 @@ struct AppState {
     template: Arc<RunTemplate>,
     registry: Arc<ToolRegistry>,
     /// Session token stored separately for fast auth check without locking.
-    /// Guards every ordinary request (tool calls, status, etc.) — never the
+    /// Guards every ordinary request (tool calls, status, etc.), never the
     /// CONNECT tunnel, which uses `proxy_token` instead (see its own doc).
     session_token: String,
-    /// A second, independent credential — deliberately NOT `session_token` —
+    /// A second, independent credential, deliberately NOT `session_token`,
     /// that authorizes only the CONNECT tunnel, nothing else. Two reasons it's
     /// separate rather than reused:
     /// 1. `session_token` grants full run control (stop the run, call any
     ///    tool, exhaust budget); `proxy_token` grants only "open a tunnel to
     ///    an already-allowlisted host". If `proxy_token` leaks (its one real
     ///    exposure path: a developer's own HTTP client printing the proxy URL
-    ///    in verbose/debug logging — CONNECT has no other way to carry a
+    ///    in verbose/debug logging, CONNECT has no other way to carry a
     ///    credential with zero app-side code changes, see `handle_connect`),
     ///    the blast radius is the tunnel only, not the whole run.
     /// 2. `session_token` is meant to be visible (printed at startup, read by
@@ -135,7 +135,7 @@ struct AppState {
 /// Constant-time byte comparison for secrets (session/proxy tokens). Plain
 /// `==` short-circuits on the first differing byte, which leaks a timing
 /// signal proportional to how many leading bytes an attacker guessed
-/// correctly. This is the standard XOR-accumulate technique — no crypto
+/// correctly. This is the standard XOR-accumulate technique, no crypto
 /// library needed for a short, fixed-shape token compare.
 fn secure_compare(a: &str, b: &str) -> bool {
     let (a, b) = (a.as_bytes(), b.as_bytes());
@@ -175,20 +175,20 @@ impl AppState {
 // ── Auth & rate-limit checks ───────────────────────────────────────────────────
 //
 // Plain functions, not axum middleware. They're called from exactly one
-// place — `GovernorService::call`, below — which is the single dispatch
+// place (`GovernorService::call`, below) which is the single dispatch
 // point every request passes through before anything else happens, CONNECT
 // included. This used to be two axum `.layer()` calls on the router, which
 // worked for ordinary requests but silently never ran for CONNECT (CONNECT
-// bypasses the router entirely — see `handle_connect`'s doc comment for why).
+// bypasses the router entirely, see `handle_connect`'s doc comment for why).
 // Rather than duplicate these checks in two places that could drift apart,
 // there is now exactly one place they can be added: here, called
 // unconditionally from `GovernorService::call`. Any FUTURE check meant to
 // apply to all traffic (an audit log, a body-size cap, whatever) belongs
-// here too — a `Router.layer()` only ever sees non-CONNECT traffic, by
+// here too: a `Router.layer()` only ever sees non-CONNECT traffic, by
 // construction, so it is structurally the wrong place for anything that
 // must cover every request.
 
-/// `X-Nanny-Session-Token` — guards every ordinary request.
+/// Checks the `X-Nanny-Session-Token` header; guards every ordinary request.
 fn session_token_ok(headers: &HeaderMap, expected: &str) -> bool {
     match headers.get("x-nanny-session-token").and_then(|v| v.to_str().ok()) {
         Some(got) => secure_compare(got, expected),
@@ -395,17 +395,17 @@ pub fn validate_allowed_hosts(entries: &[String]) -> Result<()> {
 // ── Proxy (HTTP CONNECT) ──────────────────────────────────────────────────────
 //
 // CONNECT is intercepted at the raw hyper-connection level, by `GovernorService`
-// below, BEFORE it ever reaches axum's `Router::call()` — never via a normal
+// below, BEFORE it ever reaches axum's `Router::call()`, never via a normal
 // axum route or fallback. This is not a style choice: routing a CONNECT request
 // through `axum::Router::call()` silently breaks hyper's server-side upgrade
-// handoff (`hyper::upgrade::on(req)` never resolves — `OnUpgrade` errors
+// handoff (`hyper::upgrade::on(req)` never resolves, `OnUpgrade` errors
 // "operation was canceled", and the client sees a dead connection with zero
 // bytes back). Confirmed with a minimal reproduction outside this codebase:
 // bare `hyper::server::conn::http1` + `.with_upgrades()` completes the upgrade
 // correctly; the identical request/response routed through `axum::Router`
 // (with or without axum-server, with or without our own middleware) does not.
 // Since `GovernorService::call` branches BEFORE axum sees the request, this
-// function performs its own auth and rate-limit checks below — the checks
+// function performs its own auth and rate-limit checks below, the checks
 // `require_token`/`rate_limit_middleware` normally provide via `.layer()`
 // never run for CONNECT, because CONNECT never reaches the layered router
 // at all.
@@ -415,15 +415,15 @@ pub fn validate_allowed_hosts(entries: &[String]) -> Result<()> {
 // style choice either: a CONNECT tunnel is established by whatever HTTP
 // client the target process already uses (httpx, curl, Node's http client…),
 // driven purely by the `HTTPS_PROXY`/`HTTP_PROXY` env vars `nanny run`
-// injects — no such client sends an arbitrary custom header on the CONNECT
+// injects, no such client sends an arbitrary custom header on the CONNECT
 // handshake itself, only the one auth mechanism every proxy-aware client
 // already implements: Basic auth via userinfo in the proxy URL
 // (`http://<token>@host:port`), which becomes `Proxy-Authorization` on the
 // wire. `cmd_run_via_network_server` (crates/cli/src/main.rs) is what embeds
 // the token there.
-/// Check `Proxy-Authorization: Basic <b64(proxy_token:)>` — the CONNECT-only
+/// Check `Proxy-Authorization: Basic <b64(proxy_token:)>`, the CONNECT-only
 /// credential (see `AppState::proxy_token`), never `session_token`. The
-/// password half is always empty (`proxy_token:`) — there's only one secret
+/// password half is always empty (`proxy_token:`): there's only one secret
 /// here, matching how `cmd_run_via_network_server` encodes it.
 fn proxy_auth_ok(headers: &HeaderMap, proxy_token: &str) -> bool {
     use base64::{engine::general_purpose::STANDARD, Engine};
@@ -450,8 +450,8 @@ fn proxy_auth_ok(headers: &HeaderMap, proxy_token: &str) -> bool {
 }
 
 /// Called only after `GovernorService::call` has already confirmed the rate
-/// limit and `Proxy-Authorization` pass — this function starts from "this
-/// CONNECT is authorized," never re-checks either itself.
+/// limit and `Proxy-Authorization` pass; this function starts from "this
+/// CONNECT is authorized" and never re-checks either itself.
 async fn handle_connect(req: hyper::Request<Incoming>, app: AppState) -> Response {
     // Proxy traffic belongs to the connecting agent's run — resolve it so the
     // ToolAllowed/ToolDenied events land on the right run's event log.
@@ -558,12 +558,12 @@ async fn handle_connect(req: hyper::Request<Incoming>, app: AppState) -> Respons
 
     // ── Tunnel ────────────────────────────────────────────────────────────────
     // CRITICAL: call hyper::upgrade::on(req) BEFORE returning the response,
-    // and on the RAW hyper::Request<Incoming> — not a request that has passed
+    // and on the RAW hyper::Request<Incoming>, not a request that has passed
     // through axum's Router (see the module comment above for why). This
     // removes the `OnUpgrade` extension from the request, which signals hyper
     // to keep the connection alive after sending the 200 instead of closing
     // it. Calling `on` inside the spawned task (after the return) is too
-    // late — hyper would close the connection first.
+    // late, hyper would close the connection first.
     //
     // Flow after 200:
     //   client ──mTLS──► bridge (hyper Upgraded stream)
@@ -597,7 +597,7 @@ async fn handle_connect(req: hyper::Request<Incoming>, app: AppState) -> Respons
 }
 
 /// Router fallback for genuinely unmatched, non-CONNECT requests. CONNECT
-/// never reaches this — `GovernorService` intercepts it earlier — so this is
+/// never reaches this (`GovernorService` intercepts it earlier) so this is
 /// just a 404 for any other unrecognized method/path.
 async fn route_not_found() -> Response {
     (StatusCode::NOT_FOUND, r#"{"error":"Not Found"}"#).into_response()
@@ -609,12 +609,12 @@ async fn route_not_found() -> Response {
 // `Router::into_make_service_with_connect_info`. This exists because CONNECT
 // must never reach axum's `Router::call()` (see `handle_connect`'s doc
 // comment for why), so something has to sit in front of the router and
-// branch — and since that something already sees every request before
+// branch, and since that something already sees every request before
 // anything else does, it is also the single, structurally-unbypassable place
 // rate-limiting and auth happen. There is no axum `.layer()` for either
 // anymore: a `Router.layer()` only ever sees non-CONNECT traffic (the router
 // isn't even reached until after this checkpoint), so it was the wrong place
-// for anything meant to apply universally — a future protection added there
+// for anything meant to apply universally: a future protection added there
 // would silently never cover CONNECT. Any check that must apply to ALL
 // traffic belongs in `GovernorService::call`, below, full stop; that's not a
 // convention to remember, it's the only place wired to see everything.
@@ -675,7 +675,7 @@ impl TowerService<hyper::Request<Incoming>> for GovernorService {
             }
 
             if is_connect {
-                // CONNECT's own credential — never session_token. See
+                // CONNECT's own credential, never session_token. See
                 // AppState::proxy_token for why they're deliberately distinct.
                 if !proxy_auth_ok(req.headers(), &app.proxy_token) {
                     return Ok((
@@ -703,7 +703,7 @@ impl TowerService<hyper::Request<Incoming>> for GovernorService {
 
 // ── Router ────────────────────────────────────────────────────────────────────
 //
-// No auth or rate-limit layers here anymore — GovernorService (above) is the
+// No auth or rate-limit layers here anymore, GovernorService (above) is the
 // single checkpoint both are enforced at, for every request, before the
 // router is ever reached.
 
@@ -723,7 +723,7 @@ fn build_router(app: AppState) -> Router {
         .route("/step",          post(route_step))
         .route("/llm/usage",     post(route_llm_usage))
         .route("/harness",       post(route_harness))
-        // Fallback for genuinely unmatched requests. CONNECT never reaches this —
+        // Fallback for genuinely unmatched requests. CONNECT never reaches this;
         // GovernorService (see above) intercepts it before the router at all.
         .fallback(route_not_found)
         .with_state(app)
@@ -809,7 +809,7 @@ impl NetworkServer {
     /// The token is printed to stdout and written to `<state_dir>/server.token` so
     /// `nanny run --join=<id>` can auto-inject it into child environments.
     /// `state_dir` is per-app (`~/.nanny/servers/<app_id>/`, resolved by the
-    /// caller) — never the shared `~/.nanny`, so two unrelated apps' governors
+    /// caller), never the shared `~/.nanny`, so two unrelated apps' governors
     /// on one machine can never collide or overwrite each other's state.
     /// Start the server with no cloud forwarding — the common case and every
     /// existing entry point. See [`Self::start_blocking_synced`] to attach a
@@ -847,7 +847,7 @@ impl NetworkServer {
         session_token: Option<String>,
         rate_limit_rps: u32,  // max req/s per client IP — DoS protection, default 100
         event_sink: Option<Sender<(String, Vec<String>)>>,
-        state_dir: PathBuf,   // ~/.nanny/servers/<app_id>/ — keyed, per-app, never shared
+        state_dir: PathBuf,   // ~/.nanny/servers/<app_id>/, keyed, per-app, never shared
     ) -> Result<()> {
         // Install ring crypto provider — safe to call multiple times.
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -858,9 +858,9 @@ impl NetworkServer {
         }
 
         let token = session_token.unwrap_or_else(|| Uuid::new_v4().to_string());
-        // A separate, freshly generated credential for the CONNECT tunnel only
-        // — see AppState::proxy_token for why it's never the same value as
-        // `token`. Always generated, even when [proxy] isn't configured —
+        // A separate, freshly generated credential for the CONNECT tunnel only.
+        // See AppState::proxy_token for why it's never the same value as
+        // `token`. Always generated, even when [proxy] isn't configured;
         // matches `token`'s own unconditional generation, avoids a branch.
         let proxy_token = Uuid::new_v4().to_string();
         let (template, registry) = init_run_template(components, token.clone());
@@ -908,7 +908,7 @@ impl NetworkServer {
         };
 
         // Write token to <state_dir>/server.token for auto-injection by
-        // `nanny run --join=<id>`. Keyed per-app — never the shared ~/.nanny.
+        // `nanny run --join=<id>`. Keyed per-app, never the shared ~/.nanny.
         std::fs::create_dir_all(&state_dir)
             .with_context(|| format!("failed to create {}", state_dir.display()))?;
 
@@ -916,14 +916,14 @@ impl NetworkServer {
         std::fs::write(&token_file, &token)
             .with_context(|| format!("failed to write {}", token_file.display()))?;
 
-        // Separate file for the CONNECT-only credential — never merged into
+        // Separate file for the CONNECT-only credential, never merged into
         // server.token. `cmd_run_via_network_server` reads this one specifically
         // when embedding Proxy-Authorization userinfo into HTTPS_PROXY.
         let proxy_token_file = state_dir.join("server.proxy_token");
         std::fs::write(&proxy_token_file, &proxy_token)
             .with_context(|| format!("failed to write {}", proxy_token_file.display()))?;
 
-        // Restrict both token files to owner-read-only. They're shared secrets —
+        // Restrict both token files to owner-read-only. They're shared secrets;
         // other users on the same machine must not be able to read them.
         #[cfg(unix)]
         {
@@ -1143,6 +1143,30 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
 
+    // secure_compare ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn secure_compare_matches_equal_strings() {
+        assert!(secure_compare("same-token-value", "same-token-value"));
+    }
+
+    #[test]
+    fn secure_compare_rejects_different_strings_same_length() {
+        assert!(!secure_compare("token-aaaaaaaaaa", "token-bbbbbbbbbb"));
+    }
+
+    #[test]
+    fn secure_compare_rejects_different_lengths() {
+        assert!(!secure_compare("short", "a-lot-longer-value"));
+        assert!(!secure_compare("a-lot-longer-value", "short"));
+    }
+
+    #[test]
+    fn secure_compare_rejects_empty_against_nonempty() {
+        assert!(!secure_compare("", "nonempty"));
+        assert!(secure_compare("", ""));
+    }
+
     // ── Day 6/7 unit tests ────────────────────────────────────────────────────
 
     // host_is_allowed ─────────────────────────────────────────────────────────
@@ -1315,7 +1339,7 @@ mod tests {
     }
 
     /// A scratch `state_dir` for `start_blocking`/`start_blocking_synced` in
-    /// tests — real usage keys this by app id under `~/.nanny/servers/`; tests
+    /// tests, real usage keys this by app id under `~/.nanny/servers/`; tests
     /// use an isolated temp dir per call so parallel tests never collide.
     fn test_state_dir() -> PathBuf {
         use std::sync::atomic::AtomicU64;
@@ -1666,7 +1690,7 @@ mod tests {
         token: &str,
     ) -> (u16, String) {
         // Real clients only ever send Proxy-Authorization on a CONNECT
-        // handshake (see handle_connect's doc comment) — match that here so
+        // handshake (see handle_connect's doc comment), match that here so
         // this test exercises the real auth path, not a header no real HTTP
         // client can actually produce for CONNECT.
         use base64::{engine::general_purpose::STANDARD, Engine};
@@ -1774,7 +1798,7 @@ mod tests {
     /// Two distinct credentials, matching production: `session_token` guards
     /// ordinary requests (e.g. GET /events), `proxy_token` guards CONNECT
     /// only. A test that does both (e.g. CONNECT then check /events) needs
-    /// the right one for each call — using one where the other belongs fails
+    /// the right one for each call, using one where the other belongs fails
     /// with 401/407, by design.
     struct ProxyServer {
         port: u16,
@@ -1806,7 +1830,7 @@ mod tests {
         });
         wait_for_port(port);
 
-        // proxy_token is generated internally, not settable by the caller —
+        // proxy_token is generated internally, not settable by the caller;
         // read it from the state file after the server writes it, matching
         // how production (`cmd_run_via_network_server`) discovers it too.
         let proxy_token_file = state_dir.join("server.proxy_token");
@@ -1847,6 +1871,50 @@ mod tests {
         let (status, body) = send_connect(&mut stream, "evil.com:443", &s.proxy_token);
         assert_eq!(status, 403, "CONNECT to non-allowlisted host must return 403");
         assert!(body.contains("denied"), "body must indicate the reason");
+    }
+
+    #[test]
+    fn connect_rejects_the_ordinary_session_token() {
+        // The whole point of the proxy_token/session_token split: a token that
+        // works for ordinary requests must NOT also work on CONNECT.
+        let s = start_proxy_server(Some(vec!["api.openai.com".into()]));
+
+        let ca   = std::fs::read(s.cert_dir.join("ca.crt")).unwrap();
+        let cert = std::fs::read(s.cert_dir.join("client.crt")).unwrap();
+        let key  = std::fs::read(s.cert_dir.join("client.key")).unwrap();
+        let mut stream = tls_connect_raw(&format!("127.0.0.1:{}", s.port), &ca, &cert, &key);
+        let (status, _) = send_connect(&mut stream, "api.openai.com:443", &s.session_token);
+        assert_eq!(status, 407, "session_token must not authenticate a CONNECT tunnel");
+    }
+
+    #[test]
+    fn ordinary_request_rejects_the_proxy_token() {
+        // The reverse direction of the same split: a token that works on
+        // CONNECT must NOT also work for ordinary governance requests.
+        let s = start_proxy_server(Some(vec!["api.openai.com".into()]));
+
+        let ca_pem   = std::fs::read(s.cert_dir.join("ca.crt")).unwrap();
+        let cert_pem = std::fs::read(s.cert_dir.join("client.crt")).unwrap();
+        let key_pem  = std::fs::read(s.cert_dir.join("client.key")).unwrap();
+        let ca_cert  = reqwest::Certificate::from_pem(&ca_pem).unwrap();
+        let identity = reqwest::Identity::from_pem(&[cert_pem, key_pem].concat()).unwrap();
+
+        let client = reqwest::blocking::Client::builder()
+            .add_root_certificate(ca_cert)
+            .identity(identity)
+            .use_rustls_tls()
+            .danger_accept_invalid_hostnames(true)
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+
+        let resp = client
+            .get(format!("https://127.0.0.1:{}/health", s.port))
+            .header("X-Nanny-Session-Token", &s.proxy_token)
+            .send()
+            .expect("request must complete");
+
+        assert_eq!(resp.status(), 401, "proxy_token must not authenticate an ordinary request");
     }
 
     #[test]
@@ -2171,7 +2239,7 @@ mod tests {
                 let rc = axum_server::tls_rustls::RustlsConfig::from_config(
                     Arc::new(tls_config),
                 );
-                // Route through GovernorMakeService, not the router directly —
+                // Route through GovernorMakeService, not the router directly;
                 // rate limiting and auth are enforced there now, not as router
                 // layers (see GovernorService's doc comment). Using the router
                 // alone here would silently skip both.

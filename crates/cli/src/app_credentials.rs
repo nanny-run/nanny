@@ -1,15 +1,15 @@
-//! `.nanny/credentials.local.toml` — one app's own Cloud ingest credential.
+//! `.nanny/credentials.local.toml`, one app's own Cloud ingest credential.
 //!
 //! Unlike `.nanny/app.toml` (permanent identity, committed), this is a real
-//! secret and must never be committed — gitignored, one file per app checkout.
+//! secret and must never be committed, gitignored, one file per app checkout.
 //! This is what makes app isolation real: two unrelated apps on one machine no
 //! longer share a single Cloud identity the way the old machine-wide
 //! `~/.nanny/credentials.toml` did.
 //!
-//! Not minted by `nanny init` (that runs once, ever, on one machine — a VPS
+//! Not minted by `nanny init` (that runs once, ever, on one machine, a VPS
 //! that never runs `init` would never get a credential if minting lived there).
 //! Minted per machine, by `nanny run`, the same category of action as
-//! `nanny auth login` — see `maybe_self_mint`.
+//! `nanny auth login`, see `maybe_self_mint`.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -23,7 +23,7 @@ const DIR_NAME: &str = ".nanny";
 const FILE_NAME: &str = "credentials.local.toml";
 const GITIGNORE_LINE: &str = ".nanny/credentials.local.toml";
 
-/// One app's own ingest credential — scoped to a single app id on the cloud
+/// One app's own ingest credential, scoped to a single app id on the cloud
 /// side (once Cloud understands `app_id`; until then this degrades gracefully
 /// to an org-wide key, see `maybe_self_mint`).
 #[derive(Clone, Serialize, Deserialize)]
@@ -72,7 +72,7 @@ fn creds_path(dir: &Path) -> PathBuf {
 }
 
 /// Best-effort: append the credential file to `.gitignore` if it isn't already
-/// covered. Never fails the caller — a missed gitignore entry is a nudge, not
+/// covered. Never fails the caller, a missed gitignore entry is a nudge, not
 /// a hard requirement (the file's own 0600 perms are the real protection).
 fn ensure_gitignored(dir: &Path) {
     let path = dir.join(".gitignore");
@@ -101,12 +101,12 @@ fn harden_file(_: &Path) {}
 
 /// If no app-scoped credential exists locally yet, and this machine has a
 /// login credential (`~/.nanny/credentials.toml`, from `nanny auth login`),
-/// silently mint an app-scoped key using it and save it here — no browser, no
+/// silently mint an app-scoped key using it and save it here, no browser, no
 /// manual step, so there is never a window where a run syncs under an
 /// unscoped, ambiguous-provenance credential once an app has identity.
 ///
 /// Best-effort: any failure (no login, network error, non-2xx) just means no
-/// app-scoped credential exists yet — the caller falls back to "don't sync
+/// app-scoped credential exists yet, the caller falls back to "don't sync
 /// this run", never to a less-scoped credential. A run must never be blocked
 /// or slowed meaningfully by this; the request has a short timeout.
 pub fn maybe_self_mint(dir: &Path, app_id: &str) -> Option<AppCredentials> {
@@ -130,7 +130,7 @@ pub fn maybe_self_mint(dir: &Path, app_id: &str) -> Option<AppCredentials> {
         Err(_) => {
             // Silent: this fires on every `nanny run` on a machine that's
             // logged in but whose Cloud doesn't yet support app-scoped
-            // minting (or is briefly unreachable) — not worth a warning on
+            // minting (or is briefly unreachable), not worth a warning on
             // every run. `resolve_sync`'s own "not syncing" message covers it.
             None
         }
@@ -176,4 +176,72 @@ fn mint(env: CloudEnv, bearer_key: &str, app_id: &str, environment: Option<&str>
     let parsed: MintResp =
         serde_json::from_str(&text).with_context(|| format!("unexpected response from {url}: {text}"))?;
     Ok(parsed.api_key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch_dir() -> PathBuf {
+        std::env::temp_dir().join(format!("nanny-app-credentials-test-{}", uuid::Uuid::new_v4()))
+    }
+
+    #[test]
+    fn save_then_load_round_trips() {
+        let dir = scratch_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let creds = AppCredentials { api_key: "nny_test_key".to_string(), env: CloudEnv::Prod };
+        creds.save(&dir).unwrap();
+
+        let loaded = AppCredentials::load(&dir).unwrap().expect("just-saved credentials must load");
+        assert_eq!(loaded.api_key, "nny_test_key");
+        assert_eq!(loaded.env, CloudEnv::Prod);
+    }
+
+    #[test]
+    fn missing_credentials_load_none() {
+        let dir = scratch_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(AppCredentials::load(&dir).unwrap().is_none());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn saved_credentials_file_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let creds = AppCredentials { api_key: "nny_test_key".to_string(), env: CloudEnv::Prod };
+        creds.save(&dir).unwrap();
+
+        let mode = std::fs::metadata(creds_path(&dir)).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "credential file must be readable only by its owner");
+    }
+
+    #[test]
+    fn save_appends_gitignore_entry_once() {
+        let dir = scratch_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let creds = AppCredentials { api_key: "nny_test_key".to_string(), env: CloudEnv::Prod };
+
+        creds.save(&dir).unwrap();
+        creds.save(&dir).unwrap(); // saving twice must not duplicate the line
+
+        let gitignore = std::fs::read_to_string(dir.join(".gitignore")).unwrap();
+        let count = gitignore.lines().filter(|l| l.trim() == GITIGNORE_LINE).count();
+        assert_eq!(count, 1, "gitignore entry must appear exactly once, got: {gitignore:?}");
+    }
+
+    #[test]
+    fn self_mint_returns_existing_credential_without_reminting() {
+        // The early-return branch: an app-scoped credential already on disk
+        // must short-circuit before any network call is attempted.
+        let dir = scratch_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let creds = AppCredentials { api_key: "nny_already_minted".to_string(), env: CloudEnv::Staging };
+        creds.save(&dir).unwrap();
+
+        let result = maybe_self_mint(&dir, "app_whatever").expect("existing credential must be returned");
+        assert_eq!(result.api_key, "nny_already_minted");
+    }
 }

@@ -1,10 +1,10 @@
 //! Cloud sync — forwards a copy of the append-only NDJSON event log to the cloud.
 //!
 //! Enforcement stays entirely local (the bridge is untouched); this is a
-//! best-effort, fire-and-forget side channel. There is no `mode` setting —
+//! best-effort, fire-and-forget side channel. There is no `mode` setting;
 //! sync is decided by one signal only: whether a valid, app-scoped Cloud
 //! credential exists locally (`.nanny/credentials.local.toml`, minted by
-//! `app_credentials::maybe_self_mint`). No credential, no sync — that's the
+//! `app_credentials::maybe_self_mint`). No credential, no sync, that's the
 //! default state, not a warning-worthy one, since a credential now only ever
 //! exists because someone deliberately logged in for this specific app.
 //! `--no-sync` skips a run regardless.
@@ -39,9 +39,9 @@ pub struct SyncTarget {
     pub api_key: String,
 }
 
-/// Decide whether — and where — to forward. `None` means "don't sync";
+/// Decide whether (and where) to forward. `None` means "don't sync";
 /// enforcement never depends on this. `--no-sync` always wins; otherwise sync
-/// happens exactly when an app-scoped credential is present, full stop — no
+/// happens exactly when an app-scoped credential is present, full stop, no
 /// separate mode to disagree with it.
 pub fn resolve_sync(credentials: Option<&AppCredentials>, no_sync: bool) -> Option<SyncTarget> {
     if no_sync {
@@ -54,7 +54,7 @@ pub fn resolve_sync(credentials: Option<&AppCredentials>, no_sync: bool) -> Opti
     })
 }
 
-/// What to print at startup for "mode" — purely a derived display value, never
+/// What to print at startup for "mode", purely a derived display value, never
 /// read back as config. Reflects whether this run actually has a credential to
 /// sync with, not a stored preference.
 pub fn effective_mode_label(credentials: Option<&AppCredentials>) -> &'static str {

@@ -61,7 +61,7 @@ fn config_arg(dir: &Path) -> String {
 }
 
 /// Write `.nanny/app.toml` directly (bypassing `nanny init`, which also wants
-/// to write nanny.toml — tests that need an app id but already have their own
+/// to write nanny.toml, tests that need an app id but already have their own
 /// nanny.toml call this instead). Returns the id.
 fn write_app_identity(dir: &Path) -> String {
     let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
@@ -370,7 +370,7 @@ fn server_start_nonloopback_without_certs_exits_with_message() {
     let home  = temp_dir(); // override HOME so no ~/.nanny/certs/ exists
 
     // Write a minimal nanny.toml so the config load succeeds, plus an app
-    // identity — `--serve` requires one to key its state.
+    // identity, `--serve` requires one to key its state.
     fs::write(
         dir.join("nanny.toml"),
         r#"[start]
@@ -484,7 +484,7 @@ log = "stdout"
 
 // ── T8: nanny run --join=<id> joins an explicit governance server ────────────
 //
-// There is no auto-detection anymore — two unrelated apps' governors on one
+// There is no auto-detection anymore, two unrelated apps' governors on one
 // machine must never collide by one silently absorbing the other's run. A
 // server started with `nanny run --serve` (which requires an app identity, to
 // key its state) is joined only by `nanny run --join=<that id>`.
@@ -500,7 +500,7 @@ fn nanny_run_joins_explicit_server_and_prints_message() {
     let dir  = temp_dir();
     let home = temp_dir();
 
-    // Write nanny.toml for the joining client — deliberately different from
+    // Write nanny.toml for the joining client, deliberately different from
     // the server's, to prove the client's own config isn't what matters here.
     fs::write(
         dir.join("nanny.toml"),
@@ -519,7 +519,7 @@ log = "stdout"
     .unwrap();
 
     // Start a plain-HTTP governance server on a loopback port, with its own
-    // app identity — `--serve` requires one to key its state.
+    // app identity, `--serve` requires one to key its state.
     let server_port = 15901u16;
     let server_toml_dir = temp_dir();
     fs::write(
@@ -588,7 +588,7 @@ log = "stdout"
 // ── T9: nanny run --join=<id> fails loudly when that server isn't reachable ──
 //
 // An explicit `--join` that doesn't find its target is a mistake worth
-// surfacing, not something to quietly fall back to a local bridge for — the
+// surfacing, not something to quietly fall back to a local bridge for, the
 // old auto-detect behavior silently cleaned up stale state and ran locally
 // instead; the new explicit-join behavior errors instead, since the caller
 // asked for a SPECIFIC governor by id.
@@ -618,7 +618,7 @@ log = "stdout"
     .unwrap();
 
     // Write server state for an app id, pointing at a port with nothing
-    // listening — port 1 is typically reserved / always unreachable locally.
+    // listening, port 1 is typically reserved / always unreachable locally.
     let app_id = "app_test_unreachable";
     let state_dir = home.join(".nanny").join("servers").join(app_id);
     fs::create_dir_all(&state_dir).unwrap();
@@ -721,8 +721,8 @@ log = "stdout"
     }
     assert!(ready, "governance server must become ready within 5 s");
 
-    // proxy_token — a separate credential from the session token, CONNECT-only
-    // — is embedded as userinfo in the injected proxy URL (so the child's HTTP
+    // proxy_token, a separate CONNECT-only credential from the session token,
+    // is embedded as userinfo in the injected proxy URL (so the child's HTTP
     // client sends it as Proxy-Authorization on CONNECT). Read the real value
     // the server wrote so the assertion below matches exactly.
     let token = fs::read_to_string(

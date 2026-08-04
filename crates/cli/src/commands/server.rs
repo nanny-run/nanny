@@ -4,9 +4,9 @@
 // standalone governance server for cross-process or cross-machine enforcement.
 //
 // Implementation:
-//   start  — build BridgeComponents from nanny.toml, call NetworkServer::start_blocking
-//   stop   — send SIGTERM to PID in ~/.nanny/servers/<app_id>/server.pid
-//   status — TCP-connect to address in ~/.nanny/servers/<app_id>/server.addr and call /health
+//   start:  build BridgeComponents from nanny.toml, call NetworkServer::start_blocking
+//   stop:   send SIGTERM to PID in ~/.nanny/servers/<app_id>/server.pid
+//   status: TCP-connect to address in ~/.nanny/servers/<app_id>/server.addr and call /health
 //
 // State is keyed by app id, not global: two unrelated apps' governors on one
 // machine each get their own subdirectory under ~/.nanny/servers/ and can
@@ -32,7 +32,7 @@ use super::certs::default_certs_dir;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Path to ~/.nanny/servers/<app_id> — created on demand. Public so `main.rs`
+/// Path to ~/.nanny/servers/<app_id>, created on demand. Public so `main.rs`
 /// can resolve the same path for `nanny run --join=<appId>`.
 pub fn nanny_server_state_dir(app_id: &str) -> Result<PathBuf> {
     let dir = dirs::home_dir()
@@ -47,7 +47,7 @@ pub fn nanny_server_state_dir(app_id: &str) -> Result<PathBuf> {
 
 /// Resolve which app's governor a command should act on: the explicit
 /// `--app=<appId>` flag if given, else the identity of the app in the current
-/// directory. No further fallback — a missing id either way is a loud error,
+/// directory. No further fallback, a missing id either way is a loud error,
 /// never a silent guess at "the" server.
 fn resolve_app_id(explicit: Option<String>) -> Result<String> {
     if let Some(id) = explicit {
@@ -80,7 +80,7 @@ pub fn cmd_server_start(
         anyhow::anyhow!("failed to load nanny.toml: {e}\n\nRun `nanny init` to create one.")
     })?;
 
-    // An app identity is required to key this governor's state — without it
+    // An app identity is required to key this governor's state, without it
     // two unrelated `--serve` instances on one machine would collide again,
     // exactly the bug this keying exists to fix.
     let app = AppIdentity::load_required(&cwd)?;
@@ -141,7 +141,7 @@ pub fn cmd_server_start(
     // Record whether this server has [proxy] allowed_hosts active, so a
     // joining `nanny run --join=<appId>` (possibly in a different directory with
     // its own, irrelevant nanny.toml) knows whether to inject
-    // HTTPS_PROXY/HTTP_PROXY — the proxy is configured on the SERVER's config,
+    // HTTPS_PROXY/HTTP_PROXY, the proxy is configured on the SERVER's config,
     // not the client's.
     std::fs::write(
         state_dir.join("server.proxy"),
@@ -282,4 +282,47 @@ pub fn cmd_server_status(app: Option<String>) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Regression coverage for the bug this whole per-app keying scheme exists
+    // to fix: two unrelated apps' governor state must never collide, and the
+    // same app id must always resolve to the same directory.
+
+    #[test]
+    fn different_app_ids_get_different_state_dirs() {
+        let a = nanny_server_state_dir("app_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+        let b = nanny_server_state_dir("app_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap();
+        assert_ne!(a, b, "two different app ids must never resolve to the same state dir");
+    }
+
+    #[test]
+    fn same_app_id_is_stable_across_calls() {
+        let a1 = nanny_server_state_dir("app_cccccccccccccccccccccccccccccc").unwrap();
+        let a2 = nanny_server_state_dir("app_cccccccccccccccccccccccccccccc").unwrap();
+        assert_eq!(a1, a2, "the same app id must always resolve to the same state dir");
+    }
+
+    #[test]
+    fn state_dir_is_scoped_under_servers_by_app_id() {
+        let id = "app_dddddddddddddddddddddddddddddd";
+        let dir = nanny_server_state_dir(id).unwrap();
+        assert!(
+            dir.ends_with(format!("servers/{id}")),
+            "state dir must be nested under .nanny/servers/<app_id>, got {}",
+            dir.display()
+        );
+    }
+
+    #[test]
+    fn resolve_app_id_prefers_explicit_over_cwd() {
+        // The explicit --app=<id> flag must win outright, with no fallback to
+        // the current directory's own identity, no ambiguity about which
+        // governor a command targets when both are available.
+        let id = resolve_app_id(Some("app_explicit_wins".to_string())).unwrap();
+        assert_eq!(id, "app_explicit_wins");
+    }
 }
