@@ -46,6 +46,7 @@ from nanny_sdk._context import PolicyContext
 from nanny_sdk.exceptions import (
     AgentCompleted,
     AgentNotFound,
+    BridgeUnavailable,
     BudgetExhausted,
     ExecutionStopped,
     MaxStepsReached,
@@ -280,6 +281,27 @@ def _make_client(**kwargs: Any) -> httpx.Client:
     )
 
 
+@contextmanager
+def _bridge_call() -> Generator[None, None, None]:
+    """Translate a network-level failure to reach the bridge into ``BridgeUnavailable``.
+
+    ``httpx.TransportError`` covers connection refused, DNS failure, TLS
+    handshake failure, and timeouts: anything below the HTTP layer, before a
+    response was ever received. A response the bridge actually sent (even an
+    unwelcome status code) is not a ``TransportError`` and is handled by each
+    call site's own status-code logic; this only covers "never got a response
+    at all." Without this, the raw httpx/httpcore exception (and its full
+    traceback) propagates to the calling agent, which the manifesto's
+    fail-closed guarantee already treats as unacceptable for the identical
+    case in ``@rule`` evaluation. This makes every bridge call consistent
+    with that, not just ``GET /status``.
+    """
+    try:
+        yield
+    except httpx.TransportError as exc:
+        raise BridgeUnavailable() from exc
+
+
 def _headers() -> dict[str, str]:
     h = {"X-Nanny-Session-Token": _token()}
     run_id = _run_id()
@@ -355,7 +377,7 @@ def _raise_stop_from_410(resp: httpx.Response) -> None:
 
 def health() -> bool:
     """Connectivity check — returns True if bridge responds with state running."""
-    with _make_client(timeout=5.0) as c:
+    with _bridge_call(), _make_client(timeout=5.0) as c:
         resp = c.get("/health", headers=_headers())
     resp.raise_for_status()
     data: dict[str, str] = resp.json()
@@ -372,16 +394,21 @@ def get_status() -> PolicyContext:
     The bridge response uses short wire names (``step``, ``cost_spent``) which
     ``PolicyContext.from_dict()`` maps to Python field names automatically.
     """
-    with _make_client(timeout=5.0) as c:
+    with _bridge_call(), _make_client(timeout=5.0) as c:
         resp = c.get("/status", headers=_headers())
     resp.raise_for_status()
     return PolicyContext.from_dict(resp.json())
 
 
 def call_tool(tool_name: str, tokens: int, args: dict[str, Any]) -> None:
-    """POST /tool/call — raises a NannyStop subclass if denied, returns None if allowed."""
+    """POST /tool/call — raises a NannyStop subclass if denied, returns None if allowed.
+
+    Raises ``BridgeUnavailable`` (also a ``NannyStop``) if the bridge can't be
+    reached at all: a governed tool call must fail closed, not silently run
+    ungoverned because the governor happened to be down.
+    """
     payload = {"tool": tool_name, "tokens": tokens, "args": args}
-    with _make_client(timeout=10.0) as c:
+    with _bridge_call(), _make_client(timeout=10.0) as c:
         resp = c.post("/tool/call", json=payload, headers=_headers())
     # 410 Gone → this run already stopped; raise a typed stop, not a raw HTTP error.
     if resp.status_code == 410:
@@ -400,9 +427,10 @@ def agent_enter(name: str) -> None:
     """POST /agent/enter — activate a named limit scope.
 
     The bridge returns 404 when the named scope is not in nanny.toml —
-    raises ``AgentNotFound`` in that case.
+    raises ``AgentNotFound`` in that case. Raises ``BridgeUnavailable`` if the
+    bridge can't be reached at all, same reasoning as ``call_tool``.
     """
-    with _make_client(timeout=5.0) as c:
+    with _bridge_call(), _make_client(timeout=5.0) as c:
         resp = c.post("/agent/enter", json={"name": name}, headers=_headers())
     if resp.status_code == 404:
         raise AgentNotFound()

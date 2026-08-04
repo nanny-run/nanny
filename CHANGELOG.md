@@ -50,6 +50,16 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `requests`/urllib3) silently drop the username too when the password is
   merely absent rather than present-and-empty.
 
+### Fixed
+
+- **Python SDK: an unreachable bridge now raises `BridgeUnavailable`, not a
+  raw httpx traceback.** `agent_enter`, `call_tool`, `health`, and
+  `get_status` previously let a connection failure (governor not running,
+  wrong address) propagate as an unhandled `httpx.ConnectError` through
+  `@agent`/`@tool`. Every other bridge failure mode already gets a typed
+  exception; this makes the "bridge simply isn't there" case consistent
+  with the rest, matching how `@rule`'s own status check already handled it.
+
 ### Removed
 
 - **`[runtime]` / `mode` in `nanny.toml`**, entirely. There is no config

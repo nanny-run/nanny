@@ -4,7 +4,7 @@ import pytest
 from pytest_httpserver import HTTPServer
 
 import nanny_sdk._client as client
-from nanny_sdk.exceptions import BudgetExhausted, ExecutionStopped
+from nanny_sdk.exceptions import BridgeUnavailable, BudgetExhausted, ExecutionStopped
 
 
 def test_passthrough_when_no_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -81,6 +81,49 @@ def test_report_stop_rule_ignores_bridge_errors(monkeypatch: pytest.MonkeyPatch)
 
     # Must not raise even though no bridge is running
     client.report_stop_rule("read_file", "no_sensitive_files")
+
+
+# ---------------------------------------------------------------------------
+# An unreachable bridge fails closed as BridgeUnavailable, never a raw httpx
+# traceback: the identical guarantee @rule's GET /status check already had,
+# now applied consistently to every bridge call.
+# ---------------------------------------------------------------------------
+
+
+def test_agent_enter_raises_bridge_unavailable_when_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NANNY_BRIDGE_PORT", "19999")  # nothing listening here
+    monkeypatch.setenv("NANNY_SESSION_TOKEN", "test-token")
+    with pytest.raises(BridgeUnavailable):
+        client.agent_enter("researcher")
+
+
+def test_call_tool_raises_bridge_unavailable_when_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NANNY_BRIDGE_PORT", "19999")
+    monkeypatch.setenv("NANNY_SESSION_TOKEN", "test-token")
+    with pytest.raises(BridgeUnavailable):
+        client.call_tool("search", 10, {})
+
+
+def test_health_raises_bridge_unavailable_when_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NANNY_BRIDGE_PORT", "19999")
+    monkeypatch.setenv("NANNY_SESSION_TOKEN", "test-token")
+    with pytest.raises(BridgeUnavailable):
+        client.health()
+
+
+def test_get_status_raises_bridge_unavailable_when_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NANNY_BRIDGE_PORT", "19999")
+    monkeypatch.setenv("NANNY_SESSION_TOKEN", "test-token")
+    with pytest.raises(BridgeUnavailable):
+        client.get_status()
 
 
 # ---------------------------------------------------------------------------
