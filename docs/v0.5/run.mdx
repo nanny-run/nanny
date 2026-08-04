@@ -114,6 +114,17 @@ nanny stop --app=<appId>
 
 Both commands default to the current directory's own `app_id` when `--app` is omitted. `nanny status` reads `~/.nanny/servers/<appId>/server.addr` and probes the server (exit `0` if reachable, `1` otherwise). `nanny stop` reads the PID from `~/.nanny/servers/<appId>/server.pid` and sends `SIGTERM` (on Windows, `taskkill /F`).
 
+### Relocating the state directory
+
+Set `NANNY_HOME` to put `.nanny/servers/` (and everything else normally under `~/.nanny/`) somewhere other than the home directory:
+
+```bash
+NANNY_HOME=/opt/nanny nanny run --serve
+NANNY_HOME=/opt/nanny nanny run --join=<appId>
+```
+
+Both sides of a `--serve`/`--join` pair need the same `NANNY_HOME` to find each other's state. Falls back to the OS home directory when unset.
+
 ---
 
 For per-function governance (marking individual tools and rules in code), see the [Rust SDK guide](/v0.5/guides/rust-sdk) or [Python SDK guide](/v0.5/guides/python-sdk).
