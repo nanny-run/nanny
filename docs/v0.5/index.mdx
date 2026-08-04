@@ -85,9 +85,9 @@ nanny run                        # reads [start].cmd from nanny.toml
 nanny run --limits=researcher    # activates a named limit set
 ```
 
-**Rust SDK** — For Rust agents, go deeper. Annotate individual functions with `#[nanny::tool]`, `#[nanny::rule]`, and `#[nanny::agent]` to get per-function token accounting, allowlist enforcement, and custom rules. See the [Rust SDK guide](/v0.4/guides/rust-sdk).
+**Rust SDK**, For Rust agents, go deeper. Annotate individual functions with `#[nanny::tool]`, `#[nanny::rule]`, and `#[nanny::agent]` to get per-function token accounting, allowlist enforcement, and custom rules. See the [Rust SDK guide](/v0.5/guides/rust-sdk).
 
-**Python SDK** — The same model as the Rust SDK, as Python decorators. `@tool`, `@rule`, `@agent`. Each agent in your fleet gets its own budget ceiling, tool allowlist, and custom rules. Works with LangChain, CrewAI, or any Python agent framework. See [Python SDK](/v0.4/guides/python-sdk).
+**Python SDK**, The same model as the Rust SDK, as Python decorators. `@tool`, `@rule`, `@agent`. Each agent in your fleet gets its own budget ceiling, tool allowlist, and custom rules. Works with LangChain, CrewAI, or any Python agent framework. See [Python SDK](/v0.5/guides/python-sdk).
 
 **Nanny Cloud** _(coming soon)_ — Durable audit logs, team dashboards, org-level budget aggregation, and managed enforcement across all your agents. The OSS runtime stays unchanged — Cloud is the observability and coordination layer above it.
 
@@ -104,22 +104,22 @@ Source code, issues, and contributions live at [github.com/nanny-run/nanny](http
 ## Next steps
 
 <CardGroup cols={2}>
-  <Card title="Quickstart" icon="bolt" href="/v0.4/quickstart">
+  <Card title="Quickstart" icon="bolt" href="/v0.5/quickstart">
     Install nanny and run your first governed agent in under five minutes.
   </Card>
-  <Card title="Installation" icon="package" href="/v0.4/install">
+  <Card title="Installation" icon="package" href="/v0.5/install">
     Install, upgrade, and uninstall on macOS, Linux, and Windows.
   </Card>
-  <Card title="How it works" icon="cpu" href="/v0.4/concepts/how-it-works">
+  <Card title="How it works" icon="cpu" href="/v0.5/concepts/how-it-works">
     Understand the enforcement model and passthrough mode.
   </Card>
-  <Card title="Limits" icon="shield" href="/v0.4/concepts/limits">
+  <Card title="Limits" icon="shield" href="/v0.5/concepts/limits">
     Learn how timeout, steps, and token limits work.
   </Card>
   <Card
     title="nanny.toml reference"
     icon="file-text"
-    href="/v0.4/reference/nanny-toml"
+    href="/v0.5/reference/nanny-toml"
   >
     Full schema for the configuration file.
   </Card>
@@ -127,16 +127,16 @@ Source code, issues, and contributions live at [github.com/nanny-run/nanny](http
     title="Rust SDK guide"
     icon="rust"
     iconType="brands"
-    href="/v0.4/guides/rust-sdk"
+    href="/v0.5/guides/rust-sdk"
   >
     Per-function governance with `#[nanny::tool]`, `#[nanny::rule]`,
     `#[nanny::agent]`.
   </Card>
-  <Card title="Python SDK guide" icon="python" href="/v0.4/guides/python-sdk">
+  <Card title="Python SDK guide" icon="python" href="/v0.5/guides/python-sdk">
     Per-function governance with `@tool`, `@rule`, `@agent` decorators. Works
     with LangChain, CrewAI, and any Python agent framework.
   </Card>
-  <Card title="Governance server" icon="server" href="/v0.4/guides/governance-server">
+  <Card title="Governance server" icon="server" href="/v0.5/guides/governance-server">
     Cross-process and cross-machine enforcement with shared budget and mTLS.
   </Card>
 </CardGroup>

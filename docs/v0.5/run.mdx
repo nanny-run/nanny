@@ -28,9 +28,9 @@ nanny run --limits=researcher
 | Flag              | Type   | Default        | Description                                                                                                              |
 | ----------------- | ------ | -------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | `--limits=<name>` | string | —              | Activate a named limit set from `nanny.toml`. Inherits from `[limits]`.                                                 |
-| `--join=<appId>`  | string | —              | Join an existing governance server by app id (from that server's `.nanny/app.toml`), instead of starting a local bridge. Explicit and app-id-only: never a name, never auto-detected. Not compatible with `--serve`. |
+| `--join=<appId>`  | string |,              | Join an existing governance server by app id (from that server's `.nanny/app.toml`), instead of starting a local bridge. Explicit and app-id-only: never a name, never auto-detected. Not compatible with `--serve`. |
 | `--serve`         | flag   | —              | Run as the governance server that other processes and machines join, instead of launching a command. See [Governance server](#governance-server) below. |
-| `--no-sync`       | flag   | —              | Do not forward events to Nanny Cloud for this run, even if the machine is logged in. Enforcement is unaffected. See [Connect to Nanny Cloud](/v0.4/guides/managed-mode). |
+| `--no-sync`       | flag   |,              | Do not forward events to Nanny Cloud for this run, even if the machine is logged in. Enforcement is unaffected. See [Connect to Nanny Cloud](/v0.5/guides/managed-mode). |
 | `--config=<path>` | path   | `./nanny.toml` | Path to config file.                                                                                                   |
 
 ---
@@ -62,7 +62,7 @@ This message is separate from the structured event log, which goes to stdout (or
 
 ## Event log
 
-Every run emits [NDJSON events](/v0.4/concepts/event-log) to stdout. `ExecutionStarted` is always first; `ExecutionStopped` is always last:
+Every run emits [NDJSON events](/v0.5/concepts/event-log) to stdout. `ExecutionStarted` is always first; `ExecutionStopped` is always last:
 
 ```json
 {"event":"ExecutionStarted","ts":1711234567000,"limits":{"steps":100,"tokens":1000,"timeout":30000},"limits_set":"[limits]","command":"python agent.py"}
@@ -100,7 +100,7 @@ It reads `nanny.toml` from the current directory and blocks until stopped (`nann
 | `--key`  | path           | `~/.nanny/certs/server.key` | Server TLS private key PEM. Required only for non-loopback addresses.                                          |
 | `--ca`   | path           | `~/.nanny/certs/ca.crt`     | CA certificate PEM used to validate agent client certs. Required only for non-loopback addresses.             |
 
-The bind address sets the security posture: **loopback** (`127.0.0.1`) is plain HTTP for same-machine agents; a **non-loopback** address (`0.0.0.0`) makes mTLS mandatory, and the server refuses to start without certs. For cross-machine setup, certificates, and connecting agents, see the [Governance server guide](/v0.4/guides/governance-server).
+The bind address sets the security posture: **loopback** (`127.0.0.1`) is plain HTTP for same-machine agents; a **non-loopback** address (`0.0.0.0`) makes mTLS mandatory, and the server refuses to start without certs. For cross-machine setup, certificates, and connecting agents, see the [Governance server guide](/v0.5/guides/governance-server).
 
 ### Manage a running server
 
@@ -116,4 +116,4 @@ Both commands default to the current directory's own `app_id` when `--app` is om
 
 ---
 
-For per-function governance (marking individual tools and rules in code), see the [Rust SDK guide](/v0.4/guides/rust-sdk) or [Python SDK guide](/v0.4/guides/python-sdk).
+For per-function governance (marking individual tools and rules in code), see the [Rust SDK guide](/v0.5/guides/rust-sdk) or [Python SDK guide](/v0.5/guides/python-sdk).

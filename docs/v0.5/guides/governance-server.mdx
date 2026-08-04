@@ -47,7 +47,7 @@ This requires the directory to have run `nanny init` first: the server's state i
 nanny run --join=<appId>
 ```
 
-`--join` reads the address and tokens from `~/.nanny/servers/<appId>/`, then injects `NANNY_BRIDGE_ADDR` and `NANNY_SESSION_TOKEN` into the agent process (and, if `[proxy]` is configured, an authenticated proxy URL: see [HTTP proxy mode](/v0.4/guides/http-proxy-mode)). There's no auto-detection: if the target app id isn't reachable, `--join` fails loudly rather than silently falling back to a local bridge.
+`--join` reads the address and tokens from `~/.nanny/servers/<appId>/`, then injects `NANNY_BRIDGE_ADDR` and `NANNY_SESSION_TOKEN` into the agent process (and, if `[proxy]` is configured, an authenticated proxy URL: see [HTTP proxy mode](/v0.5/guides/http-proxy-mode)). There's no auto-detection: if the target app id isn't reachable, `--join` fails loudly rather than silently falling back to a local bridge.
 
 A confirmation message appears before your agent starts:
 
@@ -220,7 +220,7 @@ Partial imports are supported: omit any key to leave the existing file unchanged
 
 The governance server can also act as an HTTP CONNECT proxy on the same port. Any outbound HTTP or HTTPS request your agent makes through the proxy is subject to Nanny's allowlist — even calls from code that has no `@nanny_tool` decorator.
 
-See [HTTP proxy mode](/v0.4/guides/http-proxy-mode) for setup and configuration.
+See [HTTP proxy mode](/v0.5/guides/http-proxy-mode) for setup and configuration.
 
 ---
 
