@@ -1,28 +1,31 @@
 //! Cloud sync — forwards a copy of the append-only NDJSON event log to the cloud.
 //!
 //! Enforcement stays entirely local (the bridge is untouched); this is a
-//! best-effort, fire-and-forget side channel. It runs only when the run opted in
-//! two ways: `mode = "managed"` in nanny.toml AND a prior `nanny auth login`
-//! (a stored credential). `--no-sync` skips a run.
+//! best-effort, fire-and-forget side channel. There is no `mode` setting —
+//! sync is decided by one signal only: whether a valid, app-scoped Cloud
+//! credential exists locally (`.nanny/credentials.local.toml`, minted by
+//! `app_credentials::maybe_self_mint`). No credential, no sync — that's the
+//! default state, not a warning-worthy one, since a credential now only ever
+//! exists because someone deliberately logged in for this specific app.
+//! `--no-sync` skips a run regardless.
 //!
 //! Design guarantees:
-//! - **Local-first.** In local mode, or when not logged in, nothing starts and
-//!   the engine runs offline with no dependency.
+//! - **Local-first.** With no credential, nothing starts and the engine runs
+//!   offline with no dependency.
 //! - **Non-blocking.** `enqueue` just pushes onto a channel; a background thread
 //!   batches and POSTs, so the run's poll loop never waits on the network.
 //! - **Fail-safe.** Network errors are swallowed (one warning, once). A slow or
 //!   down cloud never blocks, fails, or alters the agent run.
 //!
-//! The organization is derived from the API key on the cloud side, so only the
-//! key (`X-Nanny-Key`) and a per-run session id (`X-Nanny-Session`) are sent.
+//! The organization (and, once Cloud supports it, the app) is derived from the
+//! API key on the cloud side, so only the key (`X-Nanny-Key`) and a per-run
+//! session id (`X-Nanny-Session`) are sent.
 
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use nanny_config::{Mode, NannyConfig};
-
-use crate::credentials::Credentials;
+use crate::app_credentials::AppCredentials;
 
 // Match the cloud ingest caps so a batch is never rejected wholesale.
 const MAX_LINES: usize = 1000; // NDJSON lines per request
@@ -36,35 +39,26 @@ pub struct SyncTarget {
     pub api_key: String,
 }
 
-/// Decide whether — and where — to forward. Sync is opt-in twice over:
-/// `mode = "managed"` (this project wants cloud) AND a stored credential (your
-/// machine logged in). `--no-sync` overrides to off. `None` means "don't sync";
-/// enforcement never depends on this.
-pub fn resolve_sync(
-    config: &NannyConfig,
-    credentials: Option<&Credentials>,
-    no_sync: bool,
-) -> Option<SyncTarget> {
+/// Decide whether — and where — to forward. `None` means "don't sync";
+/// enforcement never depends on this. `--no-sync` always wins; otherwise sync
+/// happens exactly when an app-scoped credential is present, full stop — no
+/// separate mode to disagree with it.
+pub fn resolve_sync(credentials: Option<&AppCredentials>, no_sync: bool) -> Option<SyncTarget> {
     if no_sync {
         return None;
     }
-    if config.runtime.mode != Mode::Managed {
-        // Local mode never syncs, even when logged in.
-        return None;
-    }
-    let Some(creds) = credentials else {
-        // Managed mode was asked for but your machine isn't logged in. Say so
-        // loudly; local enforcement is unaffected.
-        eprintln!(
-            "nanny: mode is \"managed\" but your machine isn't logged in — run \
-             `nanny auth login`. Enforcing locally, not syncing."
-        );
-        return None;
-    };
+    let creds = credentials?;
     Some(SyncTarget {
         endpoint: creds.env.ingest_url(),
         api_key: creds.api_key.clone(),
     })
+}
+
+/// What to print at startup for "mode" — purely a derived display value, never
+/// read back as config. Reflects whether this run actually has a credential to
+/// sync with, not a stored preference.
+pub fn effective_mode_label(credentials: Option<&AppCredentials>) -> &'static str {
+    if credentials.is_some() { "managed" } else { "local" }
 }
 
 /// A forwarder to the cloud orchestrator. Present only when a run syncs.
@@ -209,53 +203,36 @@ mod tests {
     use std::net::TcpListener;
     use std::sync::mpsc;
 
-    fn parse_config(toml_str: &str) -> NannyConfig {
-        toml::from_str(toml_str).expect("test config must parse")
-    }
-
-    fn managed_config() -> NannyConfig {
-        parse_config(
-            "[runtime]\nmode = \"managed\"\n\n[start]\ncmd = \"true\"\n\n\
-             [limits]\nsteps = 10\ntokens = 100\ntimeout = 1000\n\n[tools]\nallowed = []\n",
-        )
-    }
-
-    fn local_config() -> NannyConfig {
-        parse_config(
-            "[runtime]\nmode = \"local\"\n\n[start]\ncmd = \"true\"\n\n\
-             [limits]\nsteps = 10\ntokens = 100\ntimeout = 1000\n\n[tools]\nallowed = []\n",
-        )
-    }
-
-    fn cred(env: CloudEnv) -> Credentials {
-        Credentials { api_key: "nny_k".to_string(), env }
+    fn cred(env: CloudEnv) -> AppCredentials {
+        AppCredentials { api_key: "nny_k".to_string(), env }
     }
 
     // ── resolve_sync (the gate) — no network ──────────────────────────────
 
     #[test]
-    fn syncs_when_managed_and_logged_in() {
+    fn syncs_when_a_credential_is_present() {
         let c = cred(CloudEnv::Prod);
-        let t = resolve_sync(&managed_config(), Some(&c), false).expect("managed + login → sync");
+        let t = resolve_sync(Some(&c), false).expect("credential present → sync");
         assert_eq!(t.endpoint, CloudEnv::Prod.ingest_url(), "endpoint derived from the credential env");
         assert_eq!(t.api_key, "nny_k");
     }
 
     #[test]
-    fn no_sync_in_local_mode_even_when_logged_in() {
-        let c = cred(CloudEnv::Prod);
-        assert!(resolve_sync(&local_config(), Some(&c), false).is_none(), "local mode never syncs");
-    }
-
-    #[test]
-    fn no_sync_when_managed_but_not_logged_in() {
-        assert!(resolve_sync(&managed_config(), None, false).is_none(), "managed without a credential → no sync");
+    fn no_sync_without_a_credential() {
+        assert!(resolve_sync(None, false).is_none(), "no credential → no sync, no warning needed");
     }
 
     #[test]
     fn no_sync_flag_disables_sync() {
         let c = cred(CloudEnv::Prod);
-        assert!(resolve_sync(&managed_config(), Some(&c), true).is_none(), "--no-sync overrides to off");
+        assert!(resolve_sync(Some(&c), true).is_none(), "--no-sync overrides to off");
+    }
+
+    #[test]
+    fn effective_mode_label_reflects_credential_presence() {
+        let c = cred(CloudEnv::Prod);
+        assert_eq!(effective_mode_label(Some(&c)), "managed");
+        assert_eq!(effective_mode_label(None), "local");
     }
 
     // ── CloudSync (the sender) — mock ingest, injected endpoint ───────────

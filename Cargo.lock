@@ -1191,6 +1191,7 @@ dependencies = [
  "anyhow",
  "axum",
  "axum-server",
+ "base64",
  "dirs",
  "hyper",
  "hyper-util",
@@ -1208,6 +1209,7 @@ dependencies = [
  "tiny_http",
  "tokio",
  "tokio-rustls",
+ "tower",
  "uuid",
 ]
 
@@ -1254,6 +1256,7 @@ name = "nannyd"
 version = "0.4.2"
 dependencies = [
  "anyhow",
+ "base64",
  "clap",
  "dirs",
  "inventory",

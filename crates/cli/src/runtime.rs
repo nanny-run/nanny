@@ -166,7 +166,7 @@ pub fn build_bridge_components(
 mod tests {
     use super::*;
     use nanny_config::{
-        LimitsConfig, NannyConfig, ObservabilityConfig, PartialLimitsConfig, RuntimeConfig,
+        LimitsConfig, NannyConfig, ObservabilityConfig, PartialLimitsConfig,
         ToolsConfig,
     };
     use nanny_core::ledger::Ledger;
@@ -174,7 +174,6 @@ mod tests {
 
     fn test_config() -> NannyConfig {
         NannyConfig {
-            runtime: RuntimeConfig::default(),
             start: None,
             limits: LimitsConfig {
                 max_steps: 42,
@@ -202,7 +201,6 @@ mod tests {
         );
 
         NannyConfig {
-            runtime: RuntimeConfig::default(),
             start: None,
             limits: LimitsConfig {
                 max_steps: 42,
@@ -260,7 +258,6 @@ mod tests {
     #[test]
     fn empty_allowlist_is_valid() {
         let config = NannyConfig {
-            runtime: RuntimeConfig::default(),
             start: None,
             limits: LimitsConfig {
                 max_steps: 10,
@@ -323,7 +320,6 @@ mod tests {
             },
         );
         let config = NannyConfig {
-            runtime: RuntimeConfig::default(),
             start: None,
             limits: LimitsConfig {
                 max_steps: 100,
@@ -355,7 +351,6 @@ mod tests {
             },
         );
         let config = NannyConfig {
-            runtime: RuntimeConfig::default(),
             start: None,
             limits: LimitsConfig {
                 max_steps: 100,
@@ -385,7 +380,6 @@ mod tests {
             ToolConfig { max_calls: None, tokens_per_call: Some(25) },
         );
         let config = NannyConfig {
-            runtime: RuntimeConfig::default(),
             start: None,
             limits: LimitsConfig {
                 max_steps: 10,

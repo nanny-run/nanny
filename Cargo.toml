@@ -40,9 +40,11 @@ time         = { version = "0.3", features = ["formatting", "parsing", "macros"]
 # v0.2.0 — Network Bridge (server + SDK TLS client)
 axum         = { version = "0.7" }
 axum-server  = { version = "0.7", features = ["tls-rustls-no-provider"] }
+tower        = { version = "0.5" }
 tokio        = { version = "1", features = ["full"] }
 rustls       = "0.23"
 rustls-pemfile = "2"
+base64       = "0.22"
 reqwest      = { version = "0.12", features = ["rustls-tls", "blocking"] }
 hyper        = { version = "1", features = ["server", "http1"] }
 hyper-util   = { version = "0.1", features = ["tokio"] }
