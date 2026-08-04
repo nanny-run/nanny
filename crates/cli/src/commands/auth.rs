@@ -4,8 +4,8 @@
 //! This is the ONLY thing that authenticates, and it authenticates to the
 //! *optional* hosted cloud, never to the engine. Enforcement is always local and
 //! never depends on any of this (manifesto: the engine works without the company).
-//! Login just stores an ingest-only key locally; `nanny run` forwards only when
-//! the project also sets `mode = "managed"`.
+//! Login just stores an ingest-only key locally; `nanny run` forwards
+//! automatically from then on, no config field to set.
 //!
 //! Flow (RFC 8628 device authorization, via Better Auth):
 //!   1. `POST /v1/auth/device/code`  → a user code + a URL to approve at.

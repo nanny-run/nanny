@@ -28,8 +28,9 @@ nanny run --limits=researcher
 | Flag              | Type   | Default        | Description                                                                                                              |
 | ----------------- | ------ | -------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | `--limits=<name>` | string | —              | Activate a named limit set from `nanny.toml`. Inherits from `[limits]`.                                                 |
+| `--join=<appId>`  | string | —              | Join an existing governance server by app id (from that server's `.nanny/app.toml`), instead of starting a local bridge. Explicit and app-id-only: never a name, never auto-detected. Not compatible with `--serve`. |
 | `--serve`         | flag   | —              | Run as the governance server that other processes and machines join, instead of launching a command. See [Governance server](#governance-server) below. |
-| `--no-sync`       | flag   | —              | Do not forward events to Nanny Cloud for this run, even in managed mode. Enforcement is unaffected. See [Connect to Nanny Cloud](/v0.4/guides/managed-mode). |
+| `--no-sync`       | flag   | —              | Do not forward events to Nanny Cloud for this run, even if the machine is logged in. Enforcement is unaffected. See [Connect to Nanny Cloud](/v0.4/guides/managed-mode). |
 | `--config=<path>` | path   | `./nanny.toml` | Path to config file.                                                                                                   |
 
 ---
@@ -80,7 +81,9 @@ nanny run > nanny.log
 
 ## Governance server
 
-`nanny run --serve` starts a long-lived **governance server** instead of launching a command. Other processes and machines connect to it over TCP, and every tool call from every connected agent counts against one shared budget and step limit. For a single-process agent you don't need this — plain `nanny run` is enough.
+`nanny run --serve` starts a long-lived **governance server** instead of launching a command. Other processes and machines connect to it over TCP with `nanny run --join=<appId>`, and every tool call from every connected agent counts against one shared budget and step limit. For a single-process agent you don't need this: plain `nanny run` is enough.
+
+Starting a server requires `nanny init` to have already run in that directory: the server's state is keyed by the app's permanent `app_id`, not a global path, so two unrelated apps' servers on one machine never collide.
 
 ```bash
 nanny run --serve [--addr <addr>] [--cert <path>] [--key <path>] [--ca <path>]
@@ -102,11 +105,14 @@ The bind address sets the security posture: **loopback** (`127.0.0.1`) is plain 
 ### Manage a running server
 
 ```bash
-nanny status   # listen address, PID, and reachability
-nanny stop     # SIGTERM, then a 10-second graceful drain
+nanny status                  # current directory's own app, by .nanny/app.toml
+nanny status --app=<appId>    # or target a specific app explicitly
+
+nanny stop                    # SIGTERM, then a 10-second graceful drain
+nanny stop --app=<appId>
 ```
 
-`nanny status` reads `~/.nanny/server.addr` and probes the server (exit `0` if reachable, `1` otherwise). `nanny stop` reads the PID from `~/.nanny/server.pid` and sends `SIGTERM` (on Windows, `taskkill /F`).
+Both commands default to the current directory's own `app_id` when `--app` is omitted. `nanny status` reads `~/.nanny/servers/<appId>/server.addr` and probes the server (exit `0` if reachable, `1` otherwise). `nanny stop` reads the PID from `~/.nanny/servers/<appId>/server.pid` and sends `SIGTERM` (on Windows, `taskkill /F`).
 
 ---
 
