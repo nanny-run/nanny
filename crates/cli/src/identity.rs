@@ -58,9 +58,9 @@ impl AppIdentity {
         })
     }
 
-    /// Create and persist a new identity. Fails if one already exists — the
+    /// Create and persist a new identity. Fails if one already exists: the
     /// `app_id` is never regenerated. `name` is the caller's job to resolve
-    /// (prompt, default, whatever) — this function just persists it, and
+    /// (prompt, default, whatever); this function just persists it, and
     /// never validates it for uniqueness, since it's purely a display label.
     pub fn create(dir: &Path, name: String) -> Result<Self> {
         let path = app_toml_path(dir);

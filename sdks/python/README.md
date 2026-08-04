@@ -111,9 +111,6 @@ Activates `[limits.researcher]` from `nanny.toml` for the duration of the functi
 ## `nanny.toml` example
 
 ```toml
-[runtime]
-mode = "local"
-
 [start]
 cmd = "uv run agent.py"
 
@@ -129,6 +126,8 @@ tokens = 100
 [tools]
 allowed = ["fetch_page", "search"]
 ```
+
+Cloud sync isn't a config field. Run `nanny auth login` once on a machine and every `nanny run` there forwards its event log automatically. No login, no sync.
 
 ---
 

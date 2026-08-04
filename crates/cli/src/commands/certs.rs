@@ -675,11 +675,11 @@ fn check_git_warning(dir: &Path) {
 
 /// Check whether any governance server is running (TCP connectivity check).
 /// Used to hint that hot-reload will happen after import or rotate. Certs are
-/// shared, global material (`~/.nanny/certs/`) — governors are per-app
+/// shared, global material (`~/.nanny/certs/`); governors are per-app
 /// (`~/.nanny/servers/<app_id>/`), so there's no single app id to check here;
 /// this reports true if at least one is reachable.
 fn nanny_server_is_running() -> bool {
-    // Prefer the injected env var — cheap, and correct for a governed child
+    // Prefer the injected env var: cheap, and correct for a governed child
     // process without needing to scan anything.
     if let Ok(addr) = std::env::var("NANNY_BRIDGE_ADDR") {
         if addr_is_reachable(&addr) {
