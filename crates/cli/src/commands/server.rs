@@ -32,14 +32,25 @@ use super::certs::default_certs_dir;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/// The directory `.nanny/servers/<app_id>` is nested under. `NANNY_HOME`
+/// overrides it when set (a real, always-available override, not just for
+/// tests); otherwise falls back to the OS home directory. Reading an env var
+/// is portable, unlike overriding `HOME` directly: `dirs::home_dir()` ignores
+/// `HOME` on Windows, so it's the only override that works identically
+/// everywhere `nanny` runs.
+fn nanny_home_dir() -> Result<PathBuf> {
+    if let Ok(dir) = std::env::var("NANNY_HOME") {
+        if !dir.is_empty() {
+            return Ok(PathBuf::from(dir));
+        }
+    }
+    dirs::home_dir().context("cannot determine home directory")
+}
+
 /// Path to ~/.nanny/servers/<app_id>, created on demand. Public so `main.rs`
 /// can resolve the same path for `nanny run --join=<appId>`.
 pub fn nanny_server_state_dir(app_id: &str) -> Result<PathBuf> {
-    let dir = dirs::home_dir()
-        .context("cannot determine home directory")?
-        .join(".nanny")
-        .join("servers")
-        .join(app_id);
+    let dir = nanny_home_dir()?.join(".nanny").join("servers").join(app_id);
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("failed to create {}", dir.display()))?;
     Ok(dir)

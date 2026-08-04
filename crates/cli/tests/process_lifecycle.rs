@@ -417,21 +417,15 @@ log = "stdout"
 // Regression guard: if the cert check accidentally runs for loopback, the
 // server would fail to start and this test would catch it.
 //
-// Skipped on Windows: `dirs::home_dir()` ignores the `HOME` env override, so
-// `nanny run --serve` writes `server.addr` and `server.token` to the REAL
-// `~/.nanny/`. When the server is killed with TerminateProcess the cleanup
-// hook does not run, leaving stale files. Those stale files cause concurrent
-// tests (e.g. timeout_kills_process_and_exits_nonzero) to mistakenly route
-// through `cmd_run_via_network_server`, which has no timeout kill — the child
-// runs to completion and the timeout test fails. Skipping T7 on Windows
-// eliminates the contamination; the loopback-vs-mTLS branch is
-// platform-independent code covered by the Linux/macOS run.
+// Sandboxed via NANNY_HOME, not HOME: `dirs::home_dir()` ignores the `HOME`
+// env override on Windows, so `nanny_server_state_dir` reads `NANNY_HOME`
+// first (see `commands::server::nanny_home_dir`), which works identically on
+// every platform since it's a plain env var read, not an OS profile lookup.
 
-#[cfg(not(windows))]
 #[test]
 fn server_start_loopback_does_not_require_cert_files() {
     let dir  = temp_dir();
-    let home = temp_dir(); // fresh HOME — no certs directory
+    let home = temp_dir(); // fresh NANNY_HOME — no certs directory
 
     fs::write(
         dir.join("nanny.toml"),
@@ -455,7 +449,7 @@ log = "stdout"
 
     let mut child = Command::new(nanny_bin())
         .current_dir(&dir)
-        .env("HOME", &home)
+        .env("NANNY_HOME", &home)
         .args(["run", "--serve", "--addr", &format!("127.0.0.1:{port}")])
         .spawn()
         .expect("nanny run --serve must spawn");
@@ -489,12 +483,8 @@ log = "stdout"
 // server started with `nanny run --serve` (which requires an app identity, to
 // key its state) is joined only by `nanny run --join=<that id>`.
 //
-// Skipped on Windows: `dirs::home_dir()` uses the Windows API
-// (`SHGetKnownFolderPath` / `USERPROFILE`) and ignores the `HOME` environment
-// variable entirely. Setting `env("HOME", &temp)` has no effect — nanny reads
-// from the real user home, never finds the test state files.
+// Sandboxed via NANNY_HOME, not HOME (see T7's comment for why).
 
-#[cfg(not(windows))]
 #[test]
 fn nanny_run_joins_explicit_server_and_prints_message() {
     let dir  = temp_dir();
@@ -541,7 +531,7 @@ log = "stdout"
 
     let mut server = Command::new(nanny_bin())
         .current_dir(&server_toml_dir)
-        .env("HOME", &home)
+        .env("NANNY_HOME", &home)
         .args(["run", "--serve", "--addr", &format!("127.0.0.1:{server_port}")])
         .spawn()
         .expect("governance server must spawn");
@@ -560,7 +550,7 @@ log = "stdout"
     // Join it explicitly by id.
     let output = Command::new(nanny_bin())
         .current_dir(&dir)
-        .env("HOME", &home)
+        .env("NANNY_HOME", &home)
         .args(["--config", &config_arg(&dir), "run", &format!("--join={app_id}")])
         .output()
         .expect("nanny run --join must complete");
@@ -593,9 +583,8 @@ log = "stdout"
 // instead; the new explicit-join behavior errors instead, since the caller
 // asked for a SPECIFIC governor by id.
 //
-// Skipped on Windows: same `dirs::home_dir()` / `HOME` env var limitation as T8.
+// Sandboxed via NANNY_HOME, not HOME (see T7's comment for why).
 
-#[cfg(not(windows))]
 #[test]
 fn join_to_unreachable_server_fails_loudly() {
     let dir  = temp_dir();
@@ -627,7 +616,7 @@ log = "stdout"
 
     let output = Command::new(nanny_bin())
         .current_dir(&dir)
-        .env("HOME", &home)
+        .env("NANNY_HOME", &home)
         .args(["--config", &config_arg(&dir), "run", &format!("--join={app_id}")])
         .output()
         .expect("nanny run --join must complete");
@@ -655,20 +644,27 @@ log = "stdout"
 // anything by hand. Uses a different directory/nanny.toml for the server vs.
 // the client on purpose, matching how these are used in practice.
 //
-// Skipped on Windows: same `dirs::home_dir()` / `HOME` limitation as T8.
+// Sandboxed via NANNY_HOME, not HOME (see T7's comment for why).
 
-#[cfg(not(windows))]
 #[test]
 fn proxy_env_vars_injected_when_server_has_proxy_configured() {
     let dir  = temp_dir();
     let home = temp_dir();
 
     // Client nanny.toml — deliberately has NO [proxy] section, to prove the
-    // decision comes from the server's config, not this one.
+    // decision comes from the server's config, not this one. [start].cmd is
+    // spawned directly (no shell), so "sh -c ..." only works where a real
+    // `sh` is on PATH — use cmd.exe's own syntax on Windows instead.
+    #[cfg(not(windows))]
+    let print_cmd = "sh -c 'echo GOT:HTTPS_PROXY=$HTTPS_PROXY:HTTP_PROXY=$HTTP_PROXY:NO_PROXY=$NO_PROXY'";
+    #[cfg(windows)]
+    let print_cmd = "cmd /c 'echo GOT:HTTPS_PROXY=%HTTPS_PROXY%:HTTP_PROXY=%HTTP_PROXY%:NO_PROXY=%NO_PROXY%'";
+
     fs::write(
         dir.join("nanny.toml"),
-        r#"[start]
-cmd = "sh -c 'echo GOT:HTTPS_PROXY=$HTTPS_PROXY:HTTP_PROXY=$HTTP_PROXY:NO_PROXY=$NO_PROXY'"
+        format!(
+            r#"[start]
+cmd = "{print_cmd}"
 
 [limits]
 steps   = 10
@@ -677,7 +673,8 @@ timeout = 10000
 
 [observability]
 log = "stdout"
-"#,
+"#
+        ),
     )
     .unwrap();
 
@@ -706,7 +703,7 @@ log = "stdout"
     let server_port = 15902u16;
     let mut server = Command::new(nanny_bin())
         .current_dir(&server_toml_dir)
-        .env("HOME", &home)
+        .env("NANNY_HOME", &home)
         .args(["run", "--serve", "--addr", &format!("127.0.0.1:{server_port}")])
         .spawn()
         .expect("governance server must spawn");
@@ -734,7 +731,7 @@ log = "stdout"
 
     let output = Command::new(nanny_bin())
         .current_dir(&dir)
-        .env("HOME", &home)
+        .env("NANNY_HOME", &home)
         .args(["--config", &config_arg(&dir), "run", &format!("--join={app_id}")])
         .output()
         .expect("nanny run must complete");
@@ -772,18 +769,26 @@ log = "stdout"
 // proxy that immediately 404s every CONNECT ("proxy not configured"),
 // breaking legitimate calls.
 //
-// Skipped on Windows: same `dirs::home_dir()` / `HOME` limitation as T8.
+// Sandboxed via NANNY_HOME, not HOME (see T7's comment for why).
 
-#[cfg(not(windows))]
 #[test]
 fn proxy_env_vars_not_injected_when_server_has_no_proxy_configured() {
     let dir  = temp_dir();
     let home = temp_dir();
 
+    // cmd.exe and sh disagree on how an UNSET variable prints: sh's $VAR
+    // expands to empty, cmd.exe's %VAR% is left as the literal text when the
+    // variable doesn't exist. The expected assertion below accounts for that.
+    #[cfg(not(windows))]
+    let print_cmd = "sh -c 'echo GOT:HTTPS_PROXY=[$HTTPS_PROXY]'";
+    #[cfg(windows)]
+    let print_cmd = "cmd /c 'echo GOT:HTTPS_PROXY=[%HTTPS_PROXY%]'";
+
     fs::write(
         dir.join("nanny.toml"),
-        r#"[start]
-cmd = "sh -c 'echo GOT:HTTPS_PROXY=[$HTTPS_PROXY]'"
+        format!(
+            r#"[start]
+cmd = "{print_cmd}"
 
 [limits]
 steps   = 10
@@ -792,7 +797,8 @@ timeout = 10000
 
 [observability]
 log = "stdout"
-"#,
+"#
+        ),
     )
     .unwrap();
 
@@ -818,7 +824,7 @@ log = "stdout"
     let server_port = 15903u16;
     let mut server = Command::new(nanny_bin())
         .current_dir(&server_toml_dir)
-        .env("HOME", &home)
+        .env("NANNY_HOME", &home)
         .args(["run", "--serve", "--addr", &format!("127.0.0.1:{server_port}")])
         .spawn()
         .expect("governance server must spawn");
@@ -835,7 +841,7 @@ log = "stdout"
 
     let output = Command::new(nanny_bin())
         .current_dir(&dir)
-        .env("HOME", &home)
+        .env("NANNY_HOME", &home)
         .args(["--config", &config_arg(&dir), "run", &format!("--join={app_id}")])
         .output()
         .expect("nanny run must complete");
@@ -854,8 +860,12 @@ log = "stdout"
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
+    #[cfg(not(windows))]
+    let expected = "GOT:HTTPS_PROXY=[]";
+    #[cfg(windows)]
+    let expected = "GOT:HTTPS_PROXY=[%HTTPS_PROXY%]";
     assert!(
-        stdout.contains("GOT:HTTPS_PROXY=[]"),
+        stdout.contains(expected),
         "HTTPS_PROXY must be unset when the server has no [proxy] configured\ngot stdout: {stdout}"
     );
 }
