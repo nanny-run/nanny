@@ -5,6 +5,61 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-08-04
+
+### Added
+
+- **Per-app identity.** `nanny init` now writes a permanent `.nanny/app.toml`
+  (an `app_id` plus a human-facing `name`) alongside `nanny.toml`, written
+  once, ever, per app, and meant to be committed (an app id is not a
+  secret). `nanny init` never regenerates an existing identity.
+- **`nanny run --join=<appId>`**, explicitly joins a specific governance
+  server by id, reading its state from `~/.nanny/servers/<appId>/`.
+- **`--app=<id>` on `nanny status` / `nanny stop`**, targets one app's
+  governor explicitly; both still default to the current directory's own
+  identity when omitted.
+- **Per-app Cloud credentials.** A gitignored `.nanny/credentials.local.toml`
+  holds an app-scoped ingest credential, self-minted by `nanny run` on any
+  machine that's logged in (`nanny auth login`), independent of the app's
+  one-time `nanny init`.
+- **A separate CONNECT-tunnel credential.** The HTTP CONNECT proxy (`[proxy]
+  allowed_hosts`) now authenticates via its own `proxy_token`
+  (`Proxy-Authorization: Basic`), never the ordinary `session_token`.
+  Narrower blast radius if it ever ends up in a client's own verbose HTTP
+  logs, which is the one place a CONNECT credential can leak given zero
+  required app-side code changes.
+
+### Changed
+
+- **`--serve` state is now keyed by app id**
+  (`~/.nanny/servers/<appId>/server.{addr,token,proxy_token,pid,proxy}`),
+  replacing the old global, unkeyed `~/.nanny/server.*` files. Two
+  unrelated apps' governors on one machine can no longer collide or
+  overwrite each other's state.
+- **CONNECT-request auth and rate limiting moved off axum's router layers**
+  and into a single dispatch checkpoint (`GovernorService`) that every
+  request passes through before reaching a handler, CONNECT included.
+  Routing a CONNECT request through axum's `Router::call()` was silently
+  breaking hyper's server-side upgrade handoff; this also closes the gap
+  where a future protective check added only as a router layer would never
+  have covered CONNECT.
+- **Token comparisons are constant-time** (`session_token`, `proxy_token`),
+  closing a timing side-channel in the equality check.
+- **The injected `HTTPS_PROXY` URL always carries an explicit empty
+  password** (`http://<token>:@host`). Some HTTP clients (Python's
+  `requests`/urllib3) silently drop the username too when the password is
+  merely absent rather than present-and-empty.
+
+### Removed
+
+- **`[runtime]` / `mode` in `nanny.toml`**, entirely. There is no config
+  field for local-vs-managed anymore. Whether a run syncs to Cloud is
+  decided purely by whether an app-scoped credential exists locally; no
+  credential, no sync, no config knob. `--no-sync` still overrides.
+- **Blind auto-join.** Bare `nanny run` no longer silently joins whatever
+  governance server it happens to detect on the machine; `--join=<appId>`
+  is now required and explicit.
+
 ## [0.4.2] — 2026-07-27
 
 ### Changed

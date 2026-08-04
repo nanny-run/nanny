@@ -1186,7 +1186,7 @@ dependencies = [
 
 [[package]]
 name = "nanny-bridge"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1215,7 +1215,7 @@ dependencies = [
 
 [[package]]
 name = "nanny-config"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "serde",
  "thiserror 1.0.69",
@@ -1224,7 +1224,7 @@ dependencies = [
 
 [[package]]
 name = "nanny-core"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1233,7 +1233,7 @@ dependencies = [
 
 [[package]]
 name = "nanny-macros"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1242,7 +1242,7 @@ dependencies = [
 
 [[package]]
 name = "nanny-runtime"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "nanny-core",
  "serde",
@@ -1253,7 +1253,7 @@ dependencies = [
 
 [[package]]
 name = "nannyd"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "base64",
