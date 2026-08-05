@@ -37,8 +37,8 @@ tokens_per_call = 20    # overrides the decorator/macro default if set
 # ── Observability ─────────────────────────────────────────────────────────────
 
 [observability]
-log      = "stdout"          # "stdout" | "file"
-log_file = "nanny.log"       # Required when log = "file"
+log  = "stdout"   # "stdout" | "file" — "file" writes to .nanny/logs/log.ndjson
+# file = "events"   # optional, bare name only, no extension — see below
 
 # ── Proxy ─────────────────────────────────────────────────────────────────────
 
@@ -124,7 +124,7 @@ The tool name in `[tools.<name>]` must exactly match the function name used in t
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `log` | `"stdout"` \| `"file"` | `"stdout"` | Destination for the NDJSON event stream. |
-| `log_file` | string | — | Required when `log = "file"`. Path to the output file. |
+| `file` | string | `"log"` | Optional. A bare name, no extension and no path separators — Nanny always appends `.ndjson`. The directory is always `.nanny/logs/`, owned by Nanny, auto-created and gitignored — not configurable. |
 
 ---
 

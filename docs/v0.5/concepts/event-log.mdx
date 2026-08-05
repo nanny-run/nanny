@@ -16,9 +16,23 @@ To separate them, configure file output:
 
 ```toml
 [observability]
-log      = "file"
-log_file = "nanny.log"
+log = "file"
 ```
+
+This writes to `.nanny/logs/log.ndjson`, a location Nanny always owns and auto-creates,
+never something you point at a path yourself. Only set `file` if you want a different
+name — a bare name, no extension, Nanny always appends `.ndjson` itself:
+
+```toml
+[observability]
+log  = "file"
+file = "events"   # writes .nanny/logs/events.ndjson
+```
+
+`.nanny/logs/` is meant to stay out of git (Nanny adds it to `.gitignore` automatically
+the first time it's created): it's a local audit trail, not source. If you later log this
+machine in (`nanny auth login`), Cloud sync can back-fill from whatever accumulated in
+that folder before sync was ever turned on, not just events going forward.
 
 Or pipe stdout to a file at the shell level:
 

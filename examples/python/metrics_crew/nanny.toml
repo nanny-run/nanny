@@ -133,5 +133,5 @@ max_calls       = 3
 # ── Observability ─────────────────────────────────────────────────────────────
 
 [observability]
-log      = "stdout"
-log_file = "nanny.log"
+log = "stdout"   # set to "file" to write .nanny/logs/log.ndjson instead
+# file = "metrics-crew"   # optional, bare name only, no extension

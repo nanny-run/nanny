@@ -19,7 +19,6 @@ use std::path::PathBuf;
 
 use nanny_bridge::network::NetworkServer;
 use nanny_config;
-use nanny_config::LogTarget;
 use nanny_core::agent::limits::Limits;
 
 use crate::identity::AppIdentity;
@@ -186,19 +185,10 @@ pub fn cmd_server_start(
     // way. `log = "stdout"` stays a no-op here on purpose: a long-lived
     // server continuously mixing NDJSON events into its own startup/status
     // stdout output would be noisy and wrong, unlike a short-lived local run
-    // where that's the whole point. Mirrors EventWriter::from_config's own
-    // decision logic (crates/cli/src/events.rs) so both paths fail the same
-    // way on a missing log_file.
-    let local_log_path = match config.observability.log {
-        LogTarget::File => Some(
-            config
-                .observability
-                .log_file
-                .clone()
-                .context("observability.log = \"file\" requires log_file to be set")?,
-        ),
-        LogTarget::Stdout => None,
-    };
+    // where that's the whole point. Uses the same resolution logic as local
+    // `nanny run` (`ObservabilityConfig::resolve_log_path`), so both paths
+    // land on the same `.nanny/logs/<name>` file.
+    let local_log_path = config.observability.resolve_log_path(&cwd)?;
 
     println!("nanny: name ({}), appId ({})", app.name, app.app_id);
 

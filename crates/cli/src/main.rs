@@ -666,7 +666,7 @@ fn cmd_run(
     let started_at = Instant::now();
 
     // ── Open event log ────────────────────────────────────────────────────
-    let mut log = events::EventWriter::from_config(&config.observability)?;
+    let mut log = events::EventWriter::from_config(&config.observability, config_dir)?;
 
     let started_event = execution_started_event(&components.limits, active_set, &command.join(" "));
     log.write(&started_event)?;

@@ -31,6 +31,19 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **`[observability] log = "file"` now applies to `nanny run --serve`, not just
+  local `nanny run`.** Previously `--serve` silently ignored `[observability]`
+  entirely, so joined clients (`nanny run --join=<appId>`) never got a local
+  event log. Both paths now share one `EventWriter`/local-log destination.
+- **File logging no longer requires a path.** `[observability]`'s file-name
+  field is renamed `log_file` → `file`, and is now optional: unset, it
+  defaults to a filename of `log.ndjson`. The directory is no longer
+  developer-specified — it's always `.nanny/logs/`, owned by Nanny,
+  auto-created, and added to `.gitignore` automatically the first time it's
+  created (these are local audit-trail logs, not source). `file` is a bare
+  name only — no path separators, no extension, Nanny always appends
+  `.ndjson` itself (e.g. `file = "events"` writes
+  `.nanny/logs/events.ndjson`).
 - **`--serve` state is now keyed by app id**
   (`~/.nanny/servers/<appId>/server.{addr,token,proxy_token,pid,proxy}`),
   replacing the old global, unkeyed `~/.nanny/server.*` files. Two
