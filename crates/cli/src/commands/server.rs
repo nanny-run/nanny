@@ -19,6 +19,7 @@ use std::path::PathBuf;
 
 use nanny_bridge::network::NetworkServer;
 use nanny_config;
+use nanny_config::LogTarget;
 use nanny_core::agent::limits::Limits;
 
 use crate::identity::AppIdentity;
@@ -179,6 +180,26 @@ pub fn cmd_server_start(
         None => None,
     };
 
+    // [observability] applies to --serve exactly the same way it applies to
+    // local `nanny run`: the config makes the same promise either way ("here's
+    // where your event log goes"), so it must be honored the same way either
+    // way. `log = "stdout"` stays a no-op here on purpose: a long-lived
+    // server continuously mixing NDJSON events into its own startup/status
+    // stdout output would be noisy and wrong, unlike a short-lived local run
+    // where that's the whole point. Mirrors EventWriter::from_config's own
+    // decision logic (crates/cli/src/events.rs) so both paths fail the same
+    // way on a missing log_file.
+    let local_log_path = match config.observability.log {
+        LogTarget::File => Some(
+            config
+                .observability
+                .log_file
+                .clone()
+                .context("observability.log = \"file\" requires log_file to be set")?,
+        ),
+        LogTarget::Stdout => None,
+    };
+
     println!("nanny: name ({}), appId ({})", app.name, app.app_id);
 
     // Blocking — returns only when the server shuts down (CTRL-C / SIGTERM).
@@ -193,6 +214,7 @@ pub fn cmd_server_start(
         RATE_LIMIT_RPS,
         event_sink,
         nanny_server_state_dir(&app.app_id)?,
+        local_log_path,
     )?;
 
     Ok(())

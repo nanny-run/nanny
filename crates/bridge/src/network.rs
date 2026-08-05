@@ -22,6 +22,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::io::Write;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -828,7 +829,7 @@ impl NetworkServer {
     ) -> Result<()> {
         Self::start_blocking_synced(
             addr, cert_path, key_path, ca_path, components, proxy_allowed_hosts, session_token,
-            rate_limit_rps, None, state_dir,
+            rate_limit_rps, None, state_dir, None,
         )
     }
 
@@ -836,6 +837,16 @@ impl NetworkServer {
     /// `Some`, a background thread drains each run's events and sends
     /// `(run_id, lines)` to it. This is the ONLY hook cloud sync uses; the engine
     /// stays auth free — it never talks to the cloud, it just hands off strings.
+    ///
+    /// `local_log_path`: when `Some`, the same drain thread also appends each
+    /// drained line to this file, flushed per write. This is what makes
+    /// `[observability] log = "file"` behave identically whether the process
+    /// is local `nanny run` or `nanny run --serve`: before this, `nanny.toml`
+    /// promised a log file and `--serve` silently never wrote one, the config
+    /// was only ever honored by the local, single-process run path. The
+    /// caller (`commands/server.rs`) resolves this from the server's own
+    /// `nanny.toml`, the same `[observability]` table local `nanny run`
+    /// already reads via `EventWriter::from_config`.
     #[allow(clippy::too_many_arguments)]
     pub fn start_blocking_synced(
         addr: SocketAddr,
@@ -848,6 +859,7 @@ impl NetworkServer {
         rate_limit_rps: u32,  // max req/s per client IP — DoS protection, default 100
         event_sink: Option<Sender<(String, Vec<String>)>>,
         state_dir: PathBuf,   // ~/.nanny/servers/<app_id>/, keyed, per-app, never shared
+        local_log_path: Option<PathBuf>,
     ) -> Result<()> {
         // Install ring crypto provider — safe to call multiple times.
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -874,11 +886,29 @@ impl NetworkServer {
             .unwrap()
             .insert(DEFAULT_RUN_ID.to_string(), template.build_state());
 
-        // Cloud forwarding hook (auth-free): when a sink is attached, a
-        // background thread drains each run's events and hands `(run_id, lines)`
-        // to the cli-layer forwarder. No cloud code lives here.
-        if let Some(sink) = event_sink {
+        // Draining hook: when either a cloud sink or a local log path is
+        // attached, a background thread drains each run's events. Draining is
+        // destructive (take_run_events removes what it returns), so this is
+        // the one place that reads them; both destinations get their own
+        // copy of the same drained lines, neither steals from the other.
+        // Cloud sink: hands `(run_id, lines)` to the cli-layer forwarder, no
+        // cloud code lives here. Local log: appends each line to
+        // `local_log_path`, flushed per write, same guarantee
+        // `EventWriter` (the local `nanny run` path) already gives — this is
+        // what makes `[observability] log = "file"` behave the same whether
+        // the process is local `nanny run` or `nanny run --serve`.
+        if event_sink.is_some() || local_log_path.is_some() {
             let drain_runs = Arc::clone(&runs);
+            let mut local_log_file = match &local_log_path {
+                Some(path) => match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                    Ok(f) => Some(f),
+                    Err(e) => {
+                        eprintln!("nanny: failed to open local log file '{}': {e}", path.display());
+                        None
+                    }
+                },
+                None => None,
+            };
             std::thread::spawn(move || loop {
                 std::thread::sleep(std::time::Duration::from_millis(250));
                 let ids: Vec<String> = {
@@ -889,8 +919,19 @@ impl NetworkServer {
                     let state = drain_runs.lock().unwrap().get(&id).cloned();
                     if let Some(state) = state {
                         let lines = take_run_events(&state);
-                        if !lines.is_empty() && sink.send((id, lines)).is_err() {
-                            return; // forwarder gone → stop draining
+                        if lines.is_empty() {
+                            continue;
+                        }
+                        if let Some(file) = local_log_file.as_mut() {
+                            for line in &lines {
+                                let _ = writeln!(file, "{line}");
+                            }
+                            let _ = file.flush();
+                        }
+                        if let Some(sink) = &event_sink {
+                            if sink.send((id, lines)).is_err() {
+                                return; // forwarder gone → stop draining
+                            }
                         }
                     }
                 }
@@ -1139,7 +1180,6 @@ mod tests {
     use nanny_core::agent::limits::Limits;
     use nanny_runtime::ToolRegistry;
     use std::collections::HashMap;
-    use std::io::Write as _;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
 
