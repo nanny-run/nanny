@@ -50,7 +50,7 @@ use super::{
     append_event, mark_stopped, now_ms,
     BridgeComponents, BridgeResp, BridgeState, ContentType,
     handle_agent_enter, handle_agent_exit, handle_events, handle_harness, handle_health,
-    handle_llm_usage, handle_rule_evaluate, handle_status, handle_step, handle_stop,
+    handle_llm_usage, handle_rule_evaluate, handle_status, handle_stop,
     handle_tool_call, init_run_template, stopped_reason, take_run_events, RunTemplate,
 };
 use std::sync::mpsc::Sender;
@@ -269,14 +269,6 @@ async fn route_agent_enter(State(app): State<AppState>, headers: HeaderMap, body
 
 async fn route_agent_exit(State(app): State<AppState>, headers: HeaderMap) -> Response {
     to_response(handle_agent_exit(&app.run_state(&headers)))
-}
-
-async fn route_step(State(app): State<AppState>, headers: HeaderMap) -> Response {
-    let shared = app.run_state(&headers);
-    if let Some(reason) = stopped_reason(&shared) {
-        return stopped_gone(&reason);
-    }
-    to_response(handle_step(&shared))
 }
 
 async fn route_llm_usage(State(app): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
@@ -721,7 +713,6 @@ fn build_router(app: AppState) -> Router {
         .route("/rule/evaluate", post(route_rule_evaluate))
         .route("/agent/enter",   post(route_agent_enter))
         .route("/agent/exit",    post(route_agent_exit))
-        .route("/step",          post(route_step))
         .route("/llm/usage",     post(route_llm_usage))
         .route("/harness",       post(route_harness))
         // Fallback for genuinely unmatched requests. CONNECT never reaches this;
@@ -2413,7 +2404,7 @@ mod tests {
         assert_eq!(stop.status(), 200);
 
         // Action endpoints must return 410.
-        for path in &["/tool/call", "/step", "/agent/enter", "/rule/evaluate"] {
+        for path in &["/tool/call", "/llm/usage", "/agent/enter", "/rule/evaluate"] {
             let resp = client
                 .post(format!("{base}{path}"))
                 .header("X-Nanny-Session-Token", &token)
@@ -2876,7 +2867,7 @@ mod tests {
         assert_eq!(stop.status(), 200, "/stop must return 200");
 
         // All action endpoints must now return 410.
-        for path in &["/tool/call", "/step", "/agent/enter", "/rule/evaluate"] {
+        for path in &["/tool/call", "/llm/usage", "/agent/enter", "/rule/evaluate"] {
             let resp = client
                 .post(format!("{base}{path}"))
                 .header("X-Nanny-Session-Token", &token)
@@ -3017,21 +3008,25 @@ mod tests {
     // ── T11: /step increments step count ─────────────────────────────────────
 
     #[test]
-    fn step_endpoint_increments_step_count_in_status() {
+    fn tool_call_increments_step_count_in_status() {
+        // Steps come from real tool calls, not a separate /step endpoint
+        // (that endpoint was retired: nothing in any SDK ever called it,
+        // and it silently double-counted against the same step_count an
+        // ordinary tool call already increments).
         let token = format!("step-incr-{}", next_port());
         let (port, _state_dir)  = start_plain_http_server(&token);
         let client = plain_http_client();
         let base   = format!("http://127.0.0.1:{port}");
 
-        // POST /step twice.
+        // POST /tool/call twice.
         for _ in 0..2 {
             let resp = client
-                .post(format!("{base}/step"))
+                .post(format!("{base}/tool/call"))
                 .header("X-Nanny-Session-Token", &token)
-                .body("{}")
+                .body(r#"{"tool":"echo","args":{}}"#)
                 .send()
-                .expect("POST /step must succeed");
-            assert_eq!(resp.status(), 200, "POST /step must return 200");
+                .expect("POST /tool/call must succeed");
+            assert_eq!(resp.status(), 200, "POST /tool/call must return 200");
         }
 
         // GET /status — step must be at least 2.
@@ -3045,7 +3040,7 @@ mod tests {
 
         let step = status["step"].as_u64().unwrap_or(0);
         assert!(step >= 2,
-            "step must be ≥ 2 after two POST /step calls; got: {status}");
+            "step must be ≥ 2 after two POST /tool/call calls; got: {status}");
     }
 
     // ── T12–T13: Tool call events in network server ───────────────────────────
