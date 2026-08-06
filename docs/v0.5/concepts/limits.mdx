@@ -88,6 +88,32 @@ Or activate a named set from the CLI for the entire run:
 nanny run --limits=analysis
 ```
 
+### Named sets share one counter — they are not separate budgets
+
+This is easy to misread, so it's worth being explicit: entering `[limits.analysis]`
+does **not** give the analysis role its own fresh 200-token pool. There is exactly
+one running total for tokens spent (and steps taken) in a given run, for its entire
+lifetime. A named set only changes which ceiling that *same* total is compared
+against while the set is active.
+
+Concretely: if `[limits.ingestion]` already spent 40 of its own 50-token ceiling
+before handing off to `[limits.analysis]` (tokens = 200), the analysis phase starts
+with only 160 tokens of real headroom left, not a fresh 200. If the run had already
+spent close to 200 tokens by the time `[limits.reporter]` (tokens = 50) becomes
+active, the very next governed call in that phase can fail immediately, even though
+the reporter itself hasn't done anything yet.
+
+Size named-set ceilings with this in mind: later scopes in a pipeline need ceilings
+large enough to absorb everything earlier scopes may have already spent, not just
+their own expected usage in isolation.
+
+If your process runs multiple, logically independent phases and you want each one
+to start from a genuinely clean budget, unrelated to what came before, that's a
+different thing: a new **run**, not a new named set. See `fresh_run()` in the
+[Python](/v0.5/guides/python-sdk#fresh-run-starting-a-fresh-run-mid-process) or
+[Rust](/v0.5/guides/rust-sdk#nanny-fresh-run-starting-a-fresh-run-mid-process) SDK
+guide for how to do that.
+
 ## What happens when a limit is hit
 
 1. Nanny kills the child process immediately — no grace period, no way for the agent to catch or delay the stop.

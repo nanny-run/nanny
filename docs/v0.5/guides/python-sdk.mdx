@@ -209,6 +209,51 @@ Works identically for async functions. Limits revert on exit whether the functio
 
 ---
 
+## `fresh_run` — starting a fresh run mid-process
+
+`@agent` changes which ceiling the run's *one* running total is checked
+against; it does not give a role its own budget (see
+[Named sets share one counter](/v0.5/concepts/limits#named-sets-share-one-counter-they-are-not-separate-budgets)).
+If your process genuinely runs multiple, independent phases back to back,
+say, a research phase that hands off to a drafting phase, or a long-lived
+server that should give each incoming request its own clean slate, and you
+want each one to start from zero rather than inherit whatever an earlier
+phase already spent, that's a new **run**, Nanny's real unit of governance:
+one cumulative counter, one stop state, "a stop is final."
+
+```python
+import nanny_sdk
+
+nanny_sdk.fresh_run()   # everything governed after this point is a fresh run
+```
+
+Only meaningful when governed through a network server (`nanny run --serve`
+/ `--join`): the server keys independent state per run, so a stop in the run
+you just left has zero effect on the one you're starting. Under local
+`nanny run` (no `--serve`), one process is already always exactly one run,
+so this is a safe no-op there, code that might run under either mode
+doesn't need to branch on which one it's in.
+
+```python
+from nanny_sdk import agent, fresh_run
+
+def handle_request(payload: dict) -> dict:
+    fresh_run()  # this request's tokens/steps start from zero, unrelated to
+               # whatever the previous request already spent
+    return process(payload)
+
+@agent("researcher")
+def research(topic: str) -> list[str]:
+    ...
+```
+
+Before this existed, the only way to do this was setting the `NANNY_RUN_ID`
+environment variable directly, an internal detail the client happens to read
+fresh on every call, never documented as something to rely on. `fresh_run()`
+is that same mechanism, given a real, discoverable name.
+
+---
+
 ## What happens on stop
 
 When Nanny stops execution, it raises a `NannyStop` exception. All stop reasons are distinct subclasses:
@@ -370,7 +415,7 @@ allowed = ["compute_stats", "detect_anomalies", "write_report"]
 
 The key properties this gives you:
 
-- **Per-role budget:** hitting the analysis budget doesn't kill the reporter
+- **A ceiling tailored to each role:** the analysis agent gets a tighter check than the reporter while it's running, expressed once in `nanny.toml`. Worth being precise about what this is *not*: tokens spent is one running total for the whole run, not a separate pool per role, so if analysis exhausts its own ceiling, the run stops there, the reporter never gets to run at all. See [Named sets share one counter](/v0.5/concepts/limits#named-sets-share-one-counter-they-are-not-separate-budgets) for the full explanation, and `fresh_run()` below if you actually want each phase to have its own independent budget.
 - **Least-privilege tool access:** each agent only receives the tools it needs; calling outside its role raises `ToolDenied` immediately
 - **Loop detection:** the `@rule` fires client-side before Nanny’s enforcement layer is contacted — the denied tool never runs and no tokens are charged
 - **Full audit trail:** every tool call, every limit activation, every stop reason logged to NDJSON
