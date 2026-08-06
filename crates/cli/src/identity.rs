@@ -1,4 +1,4 @@
-//! `.nanny/app.toml`, an app's permanent identity, created once by `nanny init`.
+//! `.nanny/app.json`, an app's permanent identity, created once by `nanny init`.
 //!
 //! One app, one id, forever. `nanny init` is a per-app, once-ever action, the
 //! `git init` analogy, never re-run for "the same app" in a new environment.
@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 const DIR_NAME: &str = ".nanny";
-const FILE_NAME: &str = "app.toml";
+const FILE_NAME: &str = "app.json";
 
 /// An app's permanent identity. `app_id` is generated once and never changes;
 /// it's the only thing ever used for addressing (`--join`, `--app`, Cloud
@@ -30,17 +30,17 @@ pub struct AppIdentity {
 }
 
 impl AppIdentity {
-    /// Look for `.nanny/app.toml` under `dir`. `Ok(None)` means this directory
+    /// Look for `.nanny/app.json` under `dir`. `Ok(None)` means this directory
     /// was never `nanny init`-ed with identity, a normal state for older
     /// projects, not an error.
     pub fn load(dir: &Path) -> Result<Option<Self>> {
-        let path = app_toml_path(dir);
+        let path = app_identity_path(dir);
         if !path.exists() {
             return Ok(None);
         }
         let contents = std::fs::read_to_string(&path)
             .with_context(|| format!("failed to read {}", path.display()))?;
-        let identity: AppIdentity = toml::from_str(&contents)
+        let identity: AppIdentity = serde_json::from_str(&contents)
             .with_context(|| format!("failed to parse {}", path.display()))?;
         Ok(Some(identity))
     }
@@ -52,7 +52,7 @@ impl AppIdentity {
         Self::load(dir)?.ok_or_else(|| {
             anyhow::anyhow!(
                 "no app identity found in '{}', run `nanny init` here first \
-                 (writes .nanny/app.toml, once, permanently)",
+                 (writes .nanny/app.json, once, permanently)",
                 dir.display()
             )
         })
@@ -63,7 +63,7 @@ impl AppIdentity {
     /// (prompt, default, whatever); this function just persists it, and
     /// never validates it for uniqueness, since it's purely a display label.
     pub fn create(dir: &Path, name: String) -> Result<Self> {
-        let path = app_toml_path(dir);
+        let path = app_identity_path(dir);
         if path.exists() {
             anyhow::bail!(
                 "{} already exists, an app's identity is set once and never \
@@ -76,23 +76,30 @@ impl AppIdentity {
         let dot_nanny = dir.join(DIR_NAME);
         std::fs::create_dir_all(&dot_nanny)
             .with_context(|| format!("failed to create {}", dot_nanny.display()))?;
-        let body = toml::to_string_pretty(&identity).context("failed to serialize app identity")?;
-        let commented = format!(
-            "# Written once by `nanny init`. app_id is permanent, never edit or\n\
-             # regenerate it; it's the only thing used to address this app\n\
-             # (--join, --app, cloud linking). `name` is just for you, edit it\n\
-             # freely, it's never used to look anything up. Commit this file: an\n\
-             # app id is not a secret, and committing it is what lets `nanny init`\n\
-             # stay a one-time, local action, deploy this file as-is to every\n\
-             # environment this app runs in.\n\
-             {body}"
-        );
-        std::fs::write(&path, commented).with_context(|| format!("failed to write {}", path.display()))?;
+        // `_note` is written for humans reading the file, not part of
+        // `AppIdentity` itself: serde ignores unknown fields by default, so
+        // it round-trips through `load()` without needing its own struct
+        // field. JSON has no comment syntax, unlike the `.toml` header this
+        // used to carry, so this is where that explanation now lives.
+        let body = serde_json::json!({
+            "app_id": identity.app_id,
+            "name": identity.name,
+            "_note": "Written once by `nanny init`. app_id is permanent, never edit or \
+                regenerate it, it's the only thing used to address this app (--join, \
+                --app, cloud linking). name is just for you, edit it freely, it's never \
+                used to look anything up. Commit this file: an app id is not a secret, \
+                and committing it is what lets `nanny init` stay a one-time, local \
+                action, deploy this file as-is to every environment this app runs in.",
+        });
+        let text = serde_json::to_string_pretty(&body)
+            .context("failed to serialize app identity")?;
+        std::fs::write(&path, format!("{text}\n"))
+            .with_context(|| format!("failed to write {}", path.display()))?;
         Ok(identity)
     }
 }
 
-fn app_toml_path(dir: &Path) -> PathBuf {
+fn app_identity_path(dir: &Path) -> PathBuf {
     dir.join(DIR_NAME).join(FILE_NAME)
 }
 

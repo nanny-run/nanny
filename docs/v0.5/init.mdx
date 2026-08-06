@@ -18,13 +18,13 @@ Set `[start].cmd` to your agent's entry point and adjust the limit values to mat
 
 The generated file includes inline comments for every field and links to the full `nanny.toml` reference.
 
-It also writes `.nanny/app.toml`, this app's permanent identity (an `app_id` plus a
+It also writes `.nanny/app.json`, this app's permanent identity (an `app_id` plus a
 human-facing `name`, which you'll be prompted for). This is written **once, ever**:
 if it already exists, `nanny init` leaves it untouched, even if you choose to
 replace `nanny.toml`. There's no way to regenerate an existing identity; a
 genuinely different app means running `nanny init` in a genuinely different
 directory. `app_id` is what `--serve`, `--join=<appId>`, `--app=<id>`, and Cloud
-sync all use to address this app. It isn't a secret, and `.nanny/app.toml` is meant
+sync all use to address this app. It isn't a secret, and `.nanny/app.json` is meant
 to be committed to git so the identity travels with the code to every environment
 that runs it (laptop, VPS, CI) unmodified.
 
@@ -44,7 +44,7 @@ that runs it (laptop, VPS, CI) unmodified.
 | Multiple `nanny*.toml` files exist | Exits with an error listing the conflicting files. A project must have exactly one `nanny.toml`. |
 | No write permission in current directory | Exits with an error. |
 
-To reset a config to defaults, run `nanny init` and confirm when prompted. This never affects `.nanny/app.toml`: the app identity is independent of `nanny.toml` and is never reset.
+To reset a config to defaults, run `nanny init` and confirm when prompted. This never affects `.nanny/app.json`: the app identity is independent of `nanny.toml` and is never reset.
 
 ---
 

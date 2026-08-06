@@ -191,16 +191,59 @@ class FakeAsyncStreamingOpenAI:
 
 
 def test_extract_usage_patterns() -> None:
-    # Returns (input, output, model); these fakes carry no model → None.
+    # Returns (input, output, model, cache_read, cache_write); these fakes
+    # carry no model and no cache usage → None, None, None.
     assert _extract_usage(
         _Resp(usage=_Usage(prompt_tokens=10, completion_tokens=5))
-    ) == (10, 5, None)
-    assert _extract_usage(_Resp(usage=_Usage(input_tokens=8, output_tokens=3))) == (8, 3, None)
-    assert _extract_usage(_Resp(usage=_Usage(prompt_tokens=9, response_tokens=1))) == (9, 1, None)
+    ) == (10, 5, None, None, None)
+    assert _extract_usage(_Resp(usage=_Usage(input_tokens=8, output_tokens=3))) == (
+        8, 3, None, None, None,
+    )
+    assert _extract_usage(_Resp(usage=_Usage(prompt_tokens=9, response_tokens=1))) == (
+        9, 1, None, None, None,
+    )
     assert _extract_usage(
         _Resp(usage_metadata=_Usage(prompt_token_count=6, candidates_token_count=4))
-    ) == (6, 4, None)
-    assert _extract_usage(object()) == (0, 0, None)
+    ) == (6, 4, None, None, None)
+    assert _extract_usage(object()) == (0, 0, None, None, None)
+
+
+def test_extract_usage_cache_patterns() -> None:
+    # OpenAI: nested prompt_tokens_details.cached_tokens, read-only.
+    assert _extract_usage(
+        _Resp(usage=_Usage(
+            prompt_tokens=10, completion_tokens=5,
+            prompt_tokens_details=_Usage(cached_tokens=4),
+        ))
+    ) == (10, 5, None, 4, None)
+
+    # Anthropic: top-level, both read and write are real, and its own
+    # input_tokens is exclusive of both — real total input is 8+2+6=16, not
+    # the raw 8, since Nanny's `input` must stay the true total with
+    # cache_read/cache_write as a genuine subset, matching every other
+    # provider's semantics (Anthropic's own wire format is the one that's
+    # the odd one out, not Nanny's).
+    assert _extract_usage(
+        _Resp(usage=_Usage(
+            input_tokens=8, output_tokens=3,
+            cache_read_input_tokens=2, cache_creation_input_tokens=6,
+        ))
+    ) == (16, 3, None, 2, 6)
+
+    # DeepSeek: OpenAI-compatible shape, own top-level hit field, no write concept.
+    assert _extract_usage(
+        _Resp(usage=_Usage(
+            prompt_tokens=10, completion_tokens=5, prompt_cache_hit_tokens=7,
+        ))
+    ) == (10, 5, None, 7, None)
+
+    # Gemini: usage_metadata, own cached-content field.
+    assert _extract_usage(
+        _Resp(usage_metadata=_Usage(
+            prompt_token_count=6, candidates_token_count=4,
+            cached_content_token_count=3,
+        ))
+    ) == (6, 4, None, 3, None)
 
 
 # ── Passthrough — no bridge means no wrapping ─────────────────────────────────
@@ -223,6 +266,36 @@ def test_openai_reports_usage(mock_bridge: HTTPServer) -> None:
     client = instrument(FakeOpenAI())
     client.chat.completions.create(messages=[])
     assert _usage_posts(mock_bridge) == [{"input": 10, "output": 5, "provider": "openai"}]
+
+
+def test_deepseek_reports_cache_usage(mock_bridge: HTTPServer) -> None:
+    """DeepSeek's own hit/miss fields end up on the wire as generic cache_read
+    — the whole point of the generic field design: no Nanny-side knowledge of
+    DeepSeek's specific vocabulary, just the two neutral fields every
+    provider's extraction converges on."""
+    _expect_usage(mock_bridge)
+
+    class _DeepSeekCompletions:
+        def create(self, **kwargs: Any) -> Any:
+            return _Resp(usage=_Usage(
+                prompt_tokens=10, completion_tokens=5, prompt_cache_hit_tokens=7,
+            ))
+
+    class _DeepSeekChat:
+        def __init__(self) -> None:
+            self.completions = _DeepSeekCompletions()
+
+    class _DeepSeekClient:
+        base_url = "https://api.deepseek.com/v1"
+
+        def __init__(self) -> None:
+            self.chat = _DeepSeekChat()
+
+    client = instrument(_DeepSeekClient())
+    client.chat.completions.create(messages=[])
+    assert _usage_posts(mock_bridge) == [
+        {"input": 10, "output": 5, "provider": "deepseek", "cache_read": 7}
+    ]
 
 
 def test_anthropic_reports_usage(mock_bridge: HTTPServer) -> None:

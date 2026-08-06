@@ -29,7 +29,7 @@ One step, no config to edit, no secret in `nanny.toml`:
 nanny auth login
 ```
 
-This opens your browser to approve. Approve, and the machine is connected: `nanny run` self-mints an app-scoped credential the first time it runs in a given app directory, stored in a gitignored `.nanny/credentials.local.toml` alongside your permanent `.nanny/app.toml` identity. Now run as usual:
+This opens your browser to approve. Approve, and the machine is connected: `nanny run` self-mints an app-scoped credential the first time it runs in a given app directory, stored in a gitignored `.nanny/credentials.local.json` alongside your permanent `.nanny/app.json` identity. Now run as usual:
 
 ```bash
 nanny run python agent.py

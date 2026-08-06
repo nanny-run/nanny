@@ -9,7 +9,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
-- **Per-app identity.** `nanny init` now writes a permanent `.nanny/app.toml`
+- **Per-app identity.** `nanny init` now writes a permanent `.nanny/app.json`
   (an `app_id` plus a human-facing `name`) alongside `nanny.toml`, written
   once, ever, per app, and meant to be committed (an app id is not a
   secret). `nanny init` never regenerates an existing identity.
@@ -18,7 +18,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **`--app=<id>` on `nanny status` / `nanny stop`**, targets one app's
   governor explicitly; both still default to the current directory's own
   identity when omitted.
-- **Per-app Cloud credentials.** A gitignored `.nanny/credentials.local.toml`
+- **Per-app Cloud credentials.** A gitignored `.nanny/credentials.local.json`
   holds an app-scoped ingest credential, self-minted by `nanny run` on any
   machine that's logged in (`nanny auth login`), independent of the app's
   one-time `nanny init`.
@@ -34,9 +34,27 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   process already spent. Replaces directly setting the internal
   `NANNY_RUN_ID` environment variable, previously the only way to do this,
   and never documented as safe to rely on.
+- **`cache_read`/`cache_write` on `LlmUsageRecorded`**, an optional finer
+  split of `input` tokens for providers that report prompt-caching usage
+  (OpenAI, Anthropic, DeepSeek, Gemini in this pass). Reporting only —
+  enforcement still debits `input + output` exactly as before, unaffected
+  by whether either field is present. Every provider names and shapes this
+  data differently (unlike input/output tokens, cache accounting never
+  converged industry-wide); `nanny_sdk.instrument()` normalizes each
+  provider's own vocabulary into these two generic fields, and the Rust
+  SDK's `Usage` struct gained matching `cache_read`/`cache_write` fields
+  for explicit `report_usage()` calls. Exists so a downstream cost
+  calculator (Nanny Cloud) can price cache-hit tokens at their real, much
+  cheaper rate instead of treating all input as one undifferentiated price.
 
 ### Changed
 
+- **`nanny auth login`'s local credential moved from `~/.nanny/credentials.toml`
+  (shipped in 0.4.2) to `~/.nanny/credentials.json`.** `nanny.toml` is the only
+  file meant to be hand-edited and commented, so it's the only one that
+  should ever be TOML; every other Nanny-owned data file has no reason to
+  carry TOML's comment syntax. No automatic migration: anyone who ran
+  `nanny auth login` under 0.4.x needs to run it again after upgrading.
 - **`[observability] log = "file"` now applies to `nanny run --serve`, not just
   local `nanny run`.** Previously `--serve` silently ignored `[observability]`
   entirely, so joined clients (`nanny run --join=<appId>`) never got a local

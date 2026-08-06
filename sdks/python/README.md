@@ -73,6 +73,8 @@ Call once at startup. Every LLM completion response is intercepted and its token
 
 Supported: OpenAI, Groq, Together AI, Azure OpenAI, LiteLLM, Anthropic, Mistral, Google Gemini (google-genai), Cohere v2. No-op in passthrough mode.
 
+For providers that report prompt-caching usage (OpenAI, Anthropic, DeepSeek, Gemini), `instrument` also captures `cache_read`/`cache_write` — a finer, reporting-only split of `input`, never additional tokens and never used for enforcement.
+
 ---
 
 ## `@rule` — enforce a custom policy

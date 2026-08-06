@@ -681,6 +681,9 @@ pub(crate) fn handle_agent_exit(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp 
 /// nanny.instrument()-wrapped client (Python). Debits `input + output` tokens
 /// from the shared ledger and emits an `LlmUsageRecorded` audit event. The
 /// optional `model`/`provider` are recorded as labels only — no pricing.
+/// The optional `cache_read`/`cache_write` are a finer split of `input` for
+/// providers that report prompt-caching usage — reporting only, never
+/// debited separately from `input`.
 ///
 /// Returns `{"status":"ok"}` if accepted.
 /// Returns `{"status":"denied","reason":"BudgetExhausted"}` if the submission
@@ -705,6 +708,14 @@ pub(crate) fn handle_llm_usage(body: &[u8], shared: &Arc<Mutex<BridgeState>>) ->
         model: Option<String>,
         #[serde(default)]
         provider: Option<String>,
+        // Optional finer split of `input` (never additional tokens beyond
+        // it), present only for providers that report prompt-caching usage.
+        // Reporting only, same as model/provider — never debited separately,
+        // `total` below still just sums input + output regardless.
+        #[serde(default)]
+        cache_read: Option<u64>,
+        #[serde(default)]
+        cache_write: Option<u64>,
         // Optional harness, auto-detected by the SDK and (re)sent on every call.
         // Deduped by `record_harness`, so resending it is cheap.
         #[serde(default)]
@@ -737,6 +748,8 @@ pub(crate) fn handle_llm_usage(body: &[u8], shared: &Arc<Mutex<BridgeState>>) ->
         output: req.output,
         model: req.model,
         provider: req.provider,
+        cache_read: req.cache_read,
+        cache_write: req.cache_write,
     });
 
     let max_tokens = guard.current_limits.max_tokens;
@@ -1722,6 +1735,35 @@ mod tests {
         // Absent labels are skipped, not serialized as null.
         assert!(usage.get("model").is_none());
         assert!(usage.get("provider").is_none());
+        assert!(usage.get("cache_read").is_none());
+        assert!(usage.get("cache_write").is_none());
+    }
+
+    #[test]
+    fn llm_usage_carries_cache_read_and_write() {
+        let b = started(1000);
+        let (s, body) = post(
+            &b,
+            "/llm/usage",
+            r#"{"input":30,"output":12,"provider":"anthropic","cache_read":5,"cache_write":10}"#,
+        );
+        assert_eq!(s, 200);
+        assert_eq!(json_val(&body)["status"], "ok");
+
+        // Debited exactly input+output — cache_read/cache_write never change
+        // the debit, they're a reporting-only split of input already
+        // included in it, never additional tokens.
+        let (_, status) = get(&b, "/status");
+        assert_eq!(json_val(&status)["tokens_spent"], 42);
+
+        let (_, events) = get(&b, "/events");
+        let usage = events
+            .lines()
+            .map(json_val)
+            .find(|e| e["event"] == "LlmUsageRecorded")
+            .expect("LlmUsageRecorded event must appear in /events");
+        assert_eq!(usage["cache_read"], 5);
+        assert_eq!(usage["cache_write"], 10);
     }
 
     #[test]

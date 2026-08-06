@@ -74,7 +74,7 @@ enum Command {
         no_sync: bool,
 
         /// Join an existing governance server by appId (from that server's
-        /// `.nanny/app.toml`), instead of starting a local bridge. Explicit and
+        /// `.nanny/app.json`), instead of starting a local bridge. Explicit and
         /// appId-only, never a name, and never auto-detected: two unrelated
         /// governors on one machine must never be able to collide by accident.
         /// Example: nanny run --join=app_3f9c2a1e...
@@ -124,7 +124,7 @@ enum Command {
     /// Prints its listen address, connected agents, and current budget.
     Status {
         /// Which app's governor to check, by appId. Defaults to the app identified
-        /// by .nanny/app.toml in the current directory.
+        /// by .nanny/app.json in the current directory.
         #[arg(long)]
         app: Option<String>,
     },
@@ -132,7 +132,7 @@ enum Command {
     /// Stop a running governance server (SIGTERM, 10-second graceful drain).
     Stop {
         /// Which app's governor to stop, by appId. Defaults to the app identified
-        /// by .nanny/app.toml in the current directory.
+        /// by .nanny/app.json in the current directory.
         #[arg(long)]
         app: Option<String>,
     },

@@ -116,6 +116,8 @@ Supported clients (detected by duck-typing — no provider package is imported):
 
 `instrument` returns the same client unchanged — it patches the method in-place. In passthrough mode (outside `nanny run`), it is a no-op: no wrapping, no overhead.
 
+For providers that report prompt-caching usage (OpenAI, Anthropic, DeepSeek, Gemini), `instrument` also captures it and reports it as `cache_read`/`cache_write` — a finer split of `input`, never additional tokens beyond it, and never used for enforcement (Nanny still debits `input + output` exactly as before). Every provider names and shapes this data differently, so `instrument` normalizes each one's own vocabulary into these two generic fields; absent, not zero, for a provider/response that doesn't report cache usage at all. Exists purely so a downstream cost calculator can price cache-hit tokens at their real, much cheaper rate — see [`LlmUsageRecorded`](/v0.5/reference/events#llmusagerecorded) for the full field reference.
+
 ---
 
 ## `@rule` — declare an enforcement rule

@@ -108,6 +108,16 @@ pub struct Usage {
     pub model: Option<String>,
     /// Optional provider identifier (e.g. `"openai"`). Label only — no pricing.
     pub provider: Option<String>,
+    /// Optional finer split of `input` (never additional tokens beyond it) —
+    /// set these only if the provider's response reports prompt-caching
+    /// usage (e.g. OpenAI's `usage.prompt_tokens_details.cached_tokens`,
+    /// Anthropic's `cache_read_input_tokens`/`cache_creation_input_tokens`).
+    /// Reporting only, same as `model`/`provider`: never debited separately
+    /// from `input`, and no pricing logic reads these in the engine — they
+    /// exist so a downstream cost calculator can price cache-hit tokens at
+    /// their real, much cheaper rate.
+    pub cache_read: Option<u64>,
+    pub cache_write: Option<u64>,
     /// Optional harness attribution reported alongside this call — the "on every
     /// request" path (parity with the Python SDK). Deduped bridge-side, so it is
     /// safe to set on every report. Prefer [`set_harness`] for a one-shot declare.
@@ -154,6 +164,8 @@ pub fn report_usage(usage: Usage) {
         usage.output,
         usage.model,
         usage.provider,
+        usage.cache_read,
+        usage.cache_write,
         harness_name,
         harness_version,
     );
@@ -792,6 +804,8 @@ mod runtime {
         output: u64,
         model: Option<String>,
         provider: Option<String>,
+        cache_read: Option<u64>,
+        cache_write: Option<u64>,
         harness_name: Option<String>,
         harness_version: Option<String>,
     ) {
@@ -804,6 +818,12 @@ mod runtime {
         }
         if let Some(p) = provider {
             body["provider"] = serde_json::Value::String(p);
+        }
+        if let Some(cr) = cache_read {
+            body["cache_read"] = serde_json::Value::from(cr);
+        }
+        if let Some(cw) = cache_write {
+            body["cache_write"] = serde_json::Value::from(cw);
         }
         if let Some(name) = harness_name {
             let mut h = serde_json::json!({ "name": name });

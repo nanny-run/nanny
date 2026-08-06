@@ -39,7 +39,7 @@ This covers the common case where all your agents run on the same machine but in
 nanny run --serve
 ```
 
-This requires the directory to have run `nanny init` first: the server's state is keyed by that app's permanent `app_id` (from `.nanny/app.toml`), so two unrelated apps' servers on the same machine never collide. The server starts on `127.0.0.1:62669` (loopback) by default, generates a session token and a separate proxy token, and writes the address and both tokens to `~/.nanny/servers/<app_id>/`. The token is printed at startup for reference. No certs needed.
+This requires the directory to have run `nanny init` first: the server's state is keyed by that app's permanent `app_id` (from `.nanny/app.json`), so two unrelated apps' servers on the same machine never collide. The server starts on `127.0.0.1:62669` (loopback) by default, generates a session token and a separate proxy token, and writes the address and both tokens to `~/.nanny/servers/<app_id>/`. The token is printed at startup for reference. No certs needed.
 
 **2. Join it from your agents, explicitly, by app id:**
 
@@ -163,7 +163,7 @@ nanny stop --app=<appId>
 nanny health
 ```
 
-Both commands default to the current directory's own `app_id` (from `.nanny/app.toml`) when `--app` is omitted. `nanny stop` sends `SIGTERM` to the server process. In-flight requests complete within a 10-second grace window before the server exits. This means a running agent can finish its current tool call before the server shuts down.
+Both commands default to the current directory's own `app_id` (from `.nanny/app.json`) when `--app` is omitted. `nanny stop` sends `SIGTERM` to the server process. In-flight requests complete within a 10-second grace window before the server exits. This means a running agent can finish its current tool call before the server shuts down.
 
 Set `NANNY_HOME` to move `~/.nanny/servers/` (and everything else nanny keeps) to a directory of your choice instead of the home directory. Every `--serve`/`--join`/`status`/`stop` invocation for a given governor needs the same `NANNY_HOME` to find its state.
 

@@ -130,7 +130,7 @@ report_usage(Usage {
 });
 ```
 
-Only `input` and `output` are required. You can optionally attach `model` and `provider` labels — identifiers only, never prompt or response content:
+Only `input` and `output` are required. You can optionally attach `model` and `provider` labels — identifiers only, never prompt or response content — and, if your provider's response reports it, `cache_read`/`cache_write` (a finer split of `input`, never additional tokens beyond it):
 
 ```rust
 report_usage(Usage {
@@ -138,6 +138,7 @@ report_usage(Usage {
     output: resp.usage.completion_tokens,
     model:    Some("gpt-4o".into()),
     provider: Some("openai".into()),
+    ..Default::default()
 });
 ```
 

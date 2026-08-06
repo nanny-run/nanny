@@ -988,14 +988,14 @@ impl NetworkServer {
             println!("  address      : {addr}");
             println!("  session token: {token}");
             println!();
-            println!("Join with: nanny run --join=<this app's id>  (see .nanny/app.toml)");
+            println!("Join with: nanny run --join=<this app's id>  (see .nanny/app.json)");
         } else {
             println!("nanny: governance server started  (mTLS)");
             println!("  address      : {addr}");
             println!("  session token: {token}");
             println!("  token file   : {}", token_file.display());
             println!();
-            println!("Join with: nanny run --join=<this app's id>  (see .nanny/app.toml)");
+            println!("Join with: nanny run --join=<this app's id>  (see .nanny/app.json)");
             println!();
             println!("Cross-machine agents — set these in your deployment config:");
             println!("  NANNY_BRIDGE_ADDR={addr}");

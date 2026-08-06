@@ -3,7 +3,7 @@
 //! Enforcement stays entirely local (the bridge is untouched); this is a
 //! best-effort, fire-and-forget side channel. There is no `mode` setting;
 //! sync is decided by one signal only: whether a valid, app-scoped Cloud
-//! credential exists locally (`.nanny/credentials.local.toml`, minted by
+//! credential exists locally (`.nanny/credentials.local.json`, minted by
 //! `app_credentials::maybe_self_mint`). No credential, no sync, that's the
 //! default state, not a warning-worthy one, since a credential now only ever
 //! exists because someone deliberately logged in for this specific app.

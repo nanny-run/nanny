@@ -60,7 +60,7 @@ fn config_arg(dir: &Path) -> String {
     dir.join("nanny.toml").to_string_lossy().into_owned()
 }
 
-/// Write `.nanny/app.toml` directly (bypassing `nanny init`, which also wants
+/// Write `.nanny/app.json` directly (bypassing `nanny init`, which also wants
 /// to write nanny.toml, tests that need an app id but already have their own
 /// nanny.toml call this instead). Returns the id.
 fn write_app_identity(dir: &Path) -> String {
@@ -69,7 +69,11 @@ fn write_app_identity(dir: &Path) -> String {
     let id = format!("app_test_{ts}_{seq}");
     let dot_nanny = dir.join(".nanny");
     fs::create_dir_all(&dot_nanny).unwrap();
-    fs::write(dot_nanny.join("app.toml"), format!("app_id = \"{id}\"\nname = \"test-app\"\n")).unwrap();
+    fs::write(
+        dot_nanny.join("app.json"),
+        format!("{{\"app_id\": \"{id}\", \"name\": \"test-app\"}}\n"),
+    )
+    .unwrap();
     id
 }
 

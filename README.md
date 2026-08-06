@@ -164,7 +164,7 @@ pip install nanny-sdk
 ## 60-second quickstart
 
 ```sh
-# 1. Scaffold a nanny.toml (and a permanent .nanny/app.toml identity) in your project root
+# 1. Scaffold a nanny.toml (and a permanent .nanny/app.json identity) in your project root
 nanny init
 
 # 2. Run your agent

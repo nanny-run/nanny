@@ -28,7 +28,7 @@ nanny run --limits=researcher
 | Flag              | Type   | Default        | Description                                                                                                              |
 | ----------------- | ------ | -------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | `--limits=<name>` | string | —              | Activate a named limit set from `nanny.toml`. Inherits from `[limits]`.                                                 |
-| `--join=<appId>`  | string | —              | Join an existing governance server by app id (from that server's `.nanny/app.toml`), instead of enforcing locally. Explicit and app-id-only: never a name, never auto-detected. Not compatible with `--serve`. |
+| `--join=<appId>`  | string | —              | Join an existing governance server by app id (from that server's `.nanny/app.json`), instead of enforcing locally. Explicit and app-id-only: never a name, never auto-detected. Not compatible with `--serve`. |
 | `--serve`         | flag   | —              | Run as the governance server that other processes and machines join, instead of launching a command. See [Governance server](#governance-server) below. |
 | `--no-sync`       | flag   | —              | Do not forward events to Nanny Cloud for this run, even if the machine is logged in. Enforcement is unaffected. See [Connect to Nanny Cloud](/v0.5/guides/managed-mode). |
 | `--config=<path>` | path   | `./nanny.toml` | Path to config file.                                                                                                   |
@@ -105,7 +105,7 @@ The bind address sets the security posture: **loopback** (`127.0.0.1`) is plain 
 ### Manage a running server
 
 ```bash
-nanny status                  # current directory's own app, by .nanny/app.toml
+nanny status                  # current directory's own app, by .nanny/app.json
 nanny status --app=<appId>    # or target a specific app explicitly
 
 nanny stop                    # SIGTERM, then a 10-second graceful drain

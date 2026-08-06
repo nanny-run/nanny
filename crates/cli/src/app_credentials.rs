@@ -1,10 +1,10 @@
-//! `.nanny/credentials.local.toml`, one app's own Cloud ingest credential.
+//! `.nanny/credentials.local.json`, one app's own Cloud ingest credential.
 //!
-//! Unlike `.nanny/app.toml` (permanent identity, committed), this is a real
+//! Unlike `.nanny/app.json` (permanent identity, committed), this is a real
 //! secret and must never be committed, gitignored, one file per app checkout.
 //! This is what makes app isolation real: two unrelated apps on one machine no
 //! longer share a single Cloud identity the way the old machine-wide
-//! `~/.nanny/credentials.toml` did.
+//! `~/.nanny/credentials.json` did.
 //!
 //! Not minted by `nanny init` (that runs once, ever, on one machine, a VPS
 //! that never runs `init` would never get a credential if minting lived there).
@@ -20,8 +20,8 @@ use crate::cloud::CloudEnv;
 use crate::credentials::Credentials;
 
 const DIR_NAME: &str = ".nanny";
-const FILE_NAME: &str = "credentials.local.toml";
-const GITIGNORE_LINE: &str = ".nanny/credentials.local.toml";
+const FILE_NAME: &str = "credentials.local.json";
+const GITIGNORE_LINE: &str = ".nanny/credentials.local.json";
 
 /// One app's own ingest credential, scoped to a single app id on the cloud
 /// side (once Cloud understands `app_id`; until then this degrades gracefully
@@ -49,7 +49,7 @@ impl AppCredentials {
         }
         let contents = std::fs::read_to_string(&path)
             .with_context(|| format!("failed to read {}", path.display()))?;
-        let creds = toml::from_str(&contents)
+        let creds = serde_json::from_str(&contents)
             .with_context(|| format!("failed to parse {}", path.display()))?;
         Ok(Some(creds))
     }
@@ -59,8 +59,10 @@ impl AppCredentials {
         std::fs::create_dir_all(&dot_nanny)
             .with_context(|| format!("failed to create {}", dot_nanny.display()))?;
         let path = creds_path(dir);
-        let body = toml::to_string_pretty(self).context("failed to serialize app credentials")?;
-        std::fs::write(&path, body).with_context(|| format!("failed to write {}", path.display()))?;
+        let body =
+            serde_json::to_string_pretty(self).context("failed to serialize app credentials")?;
+        std::fs::write(&path, format!("{body}\n"))
+            .with_context(|| format!("failed to write {}", path.display()))?;
         harden_file(&path);
         ensure_gitignored(dir);
         Ok(())
@@ -77,7 +79,7 @@ fn creds_path(dir: &Path) -> PathBuf {
 fn ensure_gitignored(dir: &Path) {
     let path = dir.join(".gitignore");
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
-    if existing.lines().any(|l| l.trim() == GITIGNORE_LINE || l.trim() == ".nanny/credentials.local.toml") {
+    if existing.lines().any(|l| l.trim() == GITIGNORE_LINE) {
         return;
     }
     let mut updated = existing;
@@ -100,7 +102,7 @@ fn harden_file(_: &Path) {}
 // ── Self-minting ────────────────────────────────────────────────────────────
 
 /// If no app-scoped credential exists locally yet, and this machine has a
-/// login credential (`~/.nanny/credentials.toml`, from `nanny auth login`),
+/// login credential (`~/.nanny/credentials.json`, from `nanny auth login`),
 /// silently mint an app-scoped key using it and save it here, no browser, no
 /// manual step, so there is never a window where a run syncs under an
 /// unscoped, ambiguous-provenance credential once an app has identity.
