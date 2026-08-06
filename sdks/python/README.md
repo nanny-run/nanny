@@ -102,9 +102,23 @@ def run_research_loop(query: str) -> str:
     ...
 ```
 
-Activates `[limits.researcher]` from `nanny.toml` for the duration of the function. Limits revert on exit, including on exception. Each role runs under its own budget and tool allowlist — hitting the analysis ceiling does not affect the reporter, and the analysis agent cannot call the reporter's tools.
+Activates `[limits.researcher]` from `nanny.toml` for the duration of the function. Limits revert on exit, including on exception. Each role gets its own tool allowlist — the analysis agent cannot call the reporter's tools. Budgets are a different story: tokens spent and steps taken are one running total for the *whole run*, not a separate pool per role, so hitting the analysis ceiling stops the run there, the reporter never gets to run at all. Want each role to genuinely start from a clean budget instead? See `fresh_run` below.
 
 ![metrics_crew — ingestion, analysis, visualization, and reporter agent scopes entering and exiting](https://raw.githubusercontent.com/nanny-run/nanny/main/assets/demo/metrics-crew-agent-scopes.gif)
+
+---
+
+## `fresh_run` — starting a genuinely independent budget
+
+`@agent` changes which ceiling the run's *one* running total is checked against; it does not give a role its own budget (see above). If your process runs multiple independent phases back to back and want each one to start from zero instead, that's a new **run**:
+
+```python
+import nanny_sdk
+
+nanny_sdk.fresh_run()   # everything governed after this point is a fresh run
+```
+
+Only meaningful under a network server (`nanny run --serve` / `--join`), which tracks each run's budget independently. Under local `nanny run`, one process is already always exactly one run, so it's a safe no-op there.
 
 ---
 
@@ -144,7 +158,7 @@ When a limit is exceeded, a `NannyStop` exception is raised with one of these re
 | `RuleDenied`        | A rule returned `False`                                                      |
 | `AgentCompleted`    | Clean exit                                                                   |
 | `AgentNotFound`     | Named limit set in `@agent` does not exist in `nanny.toml`                   |
-| `BridgeUnavailable` | Bridge was active but unreachable — fails closed, never continues ungoverned |
+| `BridgeUnavailable` | Enforcement was active but became unreachable — fails closed, never continues ungoverned |
 
 ---
 

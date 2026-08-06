@@ -541,11 +541,25 @@ async fn handle_connect(req: hyper::Request<Incoming>, app: AppState) -> Respons
     }
 
     // ── Allowed — emit ToolAllowed before tunneling ───────────────────────────
+    // Also counts as a real step, same as an ordinary allowed tool call
+    // (handle_tool_call, lib.rs): a proxied HTTP call is real governed work,
+    // there's no reason it shouldn't move the same step counter. Previously
+    // didn't — confirmed directly: this was the only one of the three
+    // ToolAllowed call sites in the whole codebase that never touched
+    // step_count or emitted StepCompleted, which is exactly why an agent
+    // whose only governed action is proxied LLM calls (no `@tool` at all)
+    // showed zero steps regardless of how much real work it did.
     {
         let mut guard = shared.lock().unwrap();
+        guard.step_count += 1;
+        let step_now = guard.step_count;
         append_event(&mut guard, ExecutionEvent::ToolAllowed {
             ts:   now_ms(),
             tool: format!("http_proxy:{host}"),
+        });
+        append_event(&mut guard, ExecutionEvent::StepCompleted {
+            ts:   now_ms(),
+            step: step_now,
         });
     }
 
@@ -2157,6 +2171,16 @@ mod tests {
                 .unwrap_or(false)
         });
         assert!(has_tool_allowed, "ToolAllowed event must appear after allowed CONNECT\ngot: {body}");
+
+        // A proxied call is real governed work — it must move the step
+        // counter and emit StepCompleted the same as an ordinary tool call
+        // does, not silently skip both the way this path used to.
+        let has_step_completed = body.lines().any(|l| {
+            serde_json::from_str::<serde_json::Value>(l)
+                .map(|v| v["event"] == "StepCompleted")
+                .unwrap_or(false)
+        });
+        assert!(has_step_completed, "StepCompleted event must appear after allowed CONNECT\ngot: {body}");
     }
 
     #[test]

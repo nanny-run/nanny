@@ -5,7 +5,7 @@ description: Run Nanny enforcement across multiple processes and machines using 
 
 ## When to use the governance server
 
-For most projects, `nanny run` is all you need. It starts a local enforcement bridge inside the same process group as your agent, governs it, and exits when the agent exits. No server. No cert setup. No network.
+For most projects, `nanny run` is all you need. It enforces locally, inside the same process group as your agent, governs it, and exits when the agent exits. No server. No cert setup. No network.
 
 Use the governance server when agents run in **separate processes or on separate machines** and you need a shared enforcement boundary across all of them. Common scenarios:
 
@@ -47,7 +47,7 @@ This requires the directory to have run `nanny init` first: the server's state i
 nanny run --join=<appId>
 ```
 
-`--join` reads the address and tokens from `~/.nanny/servers/<appId>/`, then injects `NANNY_BRIDGE_ADDR` and `NANNY_SESSION_TOKEN` into the agent process (and, if `[proxy]` is configured, an authenticated proxy URL: see [HTTP proxy mode](/v0.5/guides/http-proxy-mode)). There's no auto-detection: if the target app id isn't reachable, `--join` fails loudly rather than silently falling back to a local bridge.
+`--join` reads the address and tokens from `~/.nanny/servers/<appId>/`, then injects `NANNY_BRIDGE_ADDR` and `NANNY_SESSION_TOKEN` into the agent process (and, if `[proxy]` is configured, an authenticated proxy URL: see [HTTP proxy mode](/v0.5/guides/http-proxy-mode)). There's no auto-detection: if the target app id isn't reachable, `--join` fails loudly rather than silently falling back to local enforcement.
 
 A confirmation message appears before your agent starts:
 

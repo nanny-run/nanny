@@ -28,6 +28,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Narrower blast radius if it ever ends up in a client's own verbose HTTP
   logs, which is the one place a CONNECT credential can leak given zero
   required app-side code changes.
+- **`fresh_run()`** in both SDKs (`nanny::fresh_run()` / `nanny_sdk.fresh_run()`),
+  starts a new governed run in the current process, its own independent
+  token/step counter, unrelated to whatever a prior phase in the same
+  process already spent. Replaces directly setting the internal
+  `NANNY_RUN_ID` environment variable, previously the only way to do this,
+  and never documented as safe to rely on.
 
 ### Changed
 
@@ -65,13 +71,30 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
-- **Python SDK: an unreachable bridge now raises `BridgeUnavailable`, not a
+- **Python SDK: unreachable enforcement now raises `BridgeUnavailable`, not a
   raw httpx traceback.** `agent_enter`, `call_tool`, `health`, and
   `get_status` previously let a connection failure (governor not running,
   wrong address) propagate as an unhandled `httpx.ConnectError` through
-  `@agent`/`@tool`. Every other bridge failure mode already gets a typed
-  exception; this makes the "bridge simply isn't there" case consistent
+  `@agent`/`@tool`. Every other failure mode already gets a typed
+  exception; this makes the "nothing to connect to" case consistent
   with the rest, matching how `@rule`'s own status check already handled it.
+- **`StepCompleted` now actually fires.** Every allowed tool call already
+  incremented the real step counter, but the matching event was only ever
+  emitted by a separate `POST /step` endpoint that nothing in either SDK
+  called — confirmed by a repo-wide search, the only caller left was the
+  bridge's own tests. Steps were being enforced correctly the whole time;
+  only the audit trail was silently incomplete, `StepCompleted` simply
+  never appeared, no error, no warning. It now fires alongside `ToolAllowed`
+  on every real step, matching what the docs already claimed.
+- **Proxied HTTP CONNECT calls now count as steps too.** The fix above
+  covered `handle_tool_call`'s two `ToolAllowed` sites; a third one, the
+  CONNECT-tunnel proxy path in `handle_connect`, was a separate gap the
+  same audit missed: it emitted `ToolAllowed` but never incremented
+  `step_count` or emitted `StepCompleted` at all, the only one of the three
+  real `ToolAllowed` call sites in the codebase that didn't. Invisible
+  unless an agent's only governed actions are proxied LLM calls with no
+  `@tool` calls at all — exactly that case showed a real run doing real,
+  budget-consuming work with its step count stuck at zero the whole time.
 
 ### Removed
 
@@ -82,6 +105,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **Blind auto-join.** Bare `nanny run` no longer silently joins whatever
   governance server it happens to detect on the machine; `--join=<appId>`
   is now required and explicit.
+- **`POST /step`**, entirely. Dead code with no real caller (see the
+  `StepCompleted` fix above) that was also a live footgun: it incremented
+  the same step counter an ordinary tool call already does, so anything
+  that had called both would have silently double-counted steps.
 
 ## [0.4.2] — 2026-07-27
 

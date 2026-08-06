@@ -78,7 +78,7 @@ Always the last event in any log.
 | `RuleDenied` | A tool call was blocked by a custom rule or a per-tool `max_calls` limit. |
 | `ManualStop` | Execution was stopped programmatically. |
 | `ProcessCrashed` | The child process exited with a non-zero code unexpectedly. |
-| `BridgeUnavailable` | The bridge was active but unreachable during rule evaluation or a tool call. Nanny fails closed — silently continuing with ungoverned execution is never allowed. |
+| `BridgeUnavailable` | Enforcement was active but became unreachable during rule evaluation or a tool call. Nanny fails closed — silently continuing with ungoverned execution is never allowed. |
 
 ---
 
