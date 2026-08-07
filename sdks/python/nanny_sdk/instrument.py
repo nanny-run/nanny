@@ -194,8 +194,9 @@ def _patch_client(client: Any) -> None:
             pass
 
     # Detection order matters — see module docstring for rationale.
-    _try_patch_openai(client)      # client.chat.completions.create
-    _try_patch_anthropic(client)   # client.messages.create
+    _try_patch_openai(client)            # client.chat.completions.create
+    _try_patch_openai_responses(client)  # client.responses.create
+    _try_patch_anthropic(client)         # client.messages.create
     _try_patch_mistral(client)     # client.chat.complete (no .completions)
     _try_patch_gemini(client)      # client.models.generate_content
     _try_patch_cohere(client)      # callable(client.chat) — fallback, runs last
@@ -213,6 +214,27 @@ def _try_patch_openai(client: Any) -> None:
     except AttributeError:
         return
     _wrap_method(completions, "create", _openai_provider(client))
+
+
+def _try_patch_openai_responses(client: Any) -> None:
+    """Patch ``client.responses.create`` — OpenAI's Responses API, the
+    endpoint required for combining tool calls with real reasoning_effort
+    on GPT-5.x reasoning models (confirmed live: /v1/chat/completions
+    rejects that combination outright). A separate top-level attribute from
+    ``client.chat.completions``, not a variant of it, so this is a second,
+    independent patch, not a branch inside ``_try_patch_openai``. Only
+    OpenAI itself exposes this endpoint (no Groq/Together/DeepSeek
+    equivalent), but reuses ``_openai_provider`` for the same base_url-based
+    attribution the chat.completions patch already uses, in case a future
+    OpenAI-compatible host adds its own Responses-shaped endpoint.
+    """
+    try:
+        responses = client.responses
+    except AttributeError:
+        return
+    if not hasattr(responses, "create"):
+        return
+    _wrap_method(responses, "create", _openai_provider(client))
 
 
 def _try_patch_anthropic(client: Any) -> None:
@@ -446,6 +468,23 @@ def _extract_cache_usage(usage: Any) -> tuple[int | None, int | None]:
         if hit is not None:
             return (int(hit), None)
 
+        # OpenAI Responses API (nested, but under input_tokens_details, not
+        # prompt_tokens_details — a real, different attribute name from
+        # Chat Completions despite being the same provider). Confirmed live
+        # against a real gpt-5.6-terra call: ResponseUsage carries both
+        # cached_tokens and cache_write_tokens (unlike Chat Completions,
+        # which only ever reports the read side), so both are extracted
+        # here, not just cached_tokens.
+        details = getattr(usage, "input_tokens_details", None)
+        if details is not None:
+            cached = getattr(details, "cached_tokens", None)
+            written = getattr(details, "cache_write_tokens", None)
+            if cached is not None or written is not None:
+                return (
+                    int(cached) if cached is not None else None,
+                    int(written) if written is not None else None,
+                )
+
     except Exception:  # noqa: BLE001 — never crash the agent for telemetry
         pass
 
@@ -469,6 +508,26 @@ def _extract_usage(response: Any) -> UsageRecord:
             if pt is not None and ct is not None:
                 cache_read, cache_write = _extract_cache_usage(usage)
                 return (int(pt) or 0, int(ct) or 0, model, cache_read, cache_write)
+
+            # OpenAI Responses API. Shares the input_tokens/output_tokens
+            # field names with Anthropic below (real, separate provider,
+            # coincidentally same names), so this must be checked first and
+            # disambiguated by input_tokens_details — a marker Anthropic's
+            # own Usage object never has (see _extract_cache_usage) — not
+            # by field name alone, or a Responses-API call would silently
+            # fall into Anthropic's ADDITIVE total-input formula below and
+            # double-count cached tokens, over-debiting the budget for
+            # every cache-heavy Responses call. Confirmed live: like Chat
+            # Completions, input_tokens here is already INCLUSIVE of both
+            # cached_tokens and cache_write_tokens, so no addition needed —
+            # the same "count includes cache" convention OpenAI uses
+            # everywhere, unlike Anthropic's exclusive count.
+            if hasattr(usage, "input_tokens_details"):
+                it = getattr(usage, "input_tokens", None)
+                ot = getattr(usage, "output_tokens", None)
+                if it is not None and ot is not None:
+                    cache_read, cache_write = _extract_cache_usage(usage)
+                    return (int(it) or 0, int(ot) or 0, model, cache_read, cache_write)
 
             # Anthropic. Its own input_tokens is EXCLUSIVE of cache usage —
             # real total input = input_tokens + cache_read + cache_write
