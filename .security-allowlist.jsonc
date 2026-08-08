@@ -1,0 +1,27 @@
+// Allowlist for .github/workflows/security-audit.yml's shipped-code gate.
+//
+// This is a reviewed baseline, not a blanket suppression: every entry below
+// must carry a real expiry, so the gate starts failing on it again if it's
+// still unresolved by then — a conscious decision to fix it or extend the
+// expiry with a reason, not a silent, permanent exemption. A NEW open
+// critical/high alert on shipped code (root Cargo.lock, sdks/python/uv.lock)
+// that isn't listed here still fails the build immediately.
+//
+// Before adding an entry: check whether `cargo update -p <pkg>` or
+// `uv lock --upgrade-package <pkg>` (sdks/python) already clears it — most
+// do, scoped narrowly, without a full workspace update. If it doesn't,
+// trace why (unreachable dependency? no fixed version published yet?) and
+// put that in "notes", not just the package name.
+//
+// `scripts/check_security_allowlist.py` (also run in CI) rejects any entry
+// with a missing/placeholder "notes", no "expiry", or an expired-but-active
+// entry.
+//
+// Keyed by the Dependabot alert's own number (stable, unique per repo,
+// visible at github.com/nanny-run/nanny/security/dependabot/<N>), not by
+// package name — so a second, distinct advisory against an already-listed
+// package is never silently covered by an old entry meant for a different
+// finding.
+{
+  "allowlist": []
+}

@@ -8,10 +8,13 @@ name: Security audit
 # that's the mechanism working, not a false alarm.
 #
 # Shipped code (root Cargo.lock, sdks/python) hard-fails on open
-# critical/high alerts. examples/** is reported, not blocking: nothing
-# under examples/ is installed by a real user, and gating a release on a
-# demo app's dependency tree would be disproportionate. Revisit this split
-# if examples/ is ever distributed rather than run-from-source.
+# critical/high alerts, UNLESS covered by an active, non-expired entry in
+# .security-allowlist.jsonc — see that file's header. examples/** is
+# reported, not blocking: nothing under examples/ is installed by a real
+# user, and gating a release on a demo app's dependency tree would be
+# disproportionate. See cloud/IMPLEMENTATION_PLAN.md's "Future: remove
+# examples/" note — that decision, once acted on, removes this split
+# entirely rather than needing the allowlist extended to cover it.
 
 on:
   push:
@@ -29,43 +32,27 @@ jobs:
     name: Shipped code — fail on open critical/high alerts
     runs-on: ubuntu-latest
     steps:
-      - name: Query open Dependabot alerts
+      - uses: actions/checkout@v7
+
+      - name: Validate .security-allowlist.jsonc
+        run: python3 scripts/check_security_allowlist.py
+
+      - name: Query open Dependabot alerts and gate on unallowlisted findings
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          ALERTS=$(gh api "repos/${{ github.repository }}/dependabot/alerts" --paginate \
-            -q '.[] | select(.state=="open")
-                 | select(.security_vulnerability.severity=="critical" or .security_vulnerability.severity=="high")
-                 | select(.dependency.manifest_path | startswith("examples/") | not)
-                 | "\(.security_vulnerability.severity)\t\(.dependency.manifest_path)\t\(.dependency.package.ecosystem)/\(.dependency.package.name)\t\(.html_url)"')
-          if [ -n "$ALERTS" ]; then
-            echo "Open critical/high alerts on shipped code:"
-            echo "$ALERTS" | column -t -s $'\t'
-            echo ""
-            echo "Fix (bump the dependency) or explicitly accept via 'dismiss' with a reason at:"
-            echo "https://github.com/${{ github.repository }}/security/dependabot"
-            exit 1
-          fi
-          echo "No open critical/high alerts on shipped code."
+          gh api "repos/${{ github.repository }}/dependabot/alerts" --paginate --slurp \
+            | python3 scripts/security_audit_gate.py --scope shipped
 
   audit-examples:
     name: Examples — report only, non-blocking
     runs-on: ubuntu-latest
     steps:
-      - name: Query open Dependabot alerts
+      - uses: actions/checkout@v7
+
+      - name: Query open Dependabot alerts (informational)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          ALERTS=$(gh api "repos/${{ github.repository }}/dependabot/alerts" --paginate \
-            -q '.[] | select(.state=="open")
-                 | select(.security_vulnerability.severity=="critical" or .security_vulnerability.severity=="high")
-                 | select(.dependency.manifest_path | startswith("examples/"))
-                 | "\(.security_vulnerability.severity)\t\(.dependency.manifest_path)\t\(.dependency.package.ecosystem)/\(.dependency.package.name)"')
-          if [ -n "$ALERTS" ]; then
-            echo "::warning::Open critical/high alerts in examples/ (not blocking):"
-            echo "$ALERTS" | column -t -s $'\t'
-          else
-            echo "No open critical/high alerts in examples/."
-          fi
+          gh api "repos/${{ github.repository }}/dependabot/alerts" --paginate --slurp \
+            | python3 scripts/security_audit_gate.py --scope examples
