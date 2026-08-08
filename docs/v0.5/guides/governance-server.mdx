@@ -146,6 +146,30 @@ The governance server is a **shared enforcement layer** for a team of agents wor
 
 ---
 
+## Long-lived processes and NannyStop
+
+If the thing you're wrapping with `--join` is a long-lived server of its own (a web app, a Discord bot, anything that keeps running and handles more than one request per process), read this before you deploy it.
+
+**`nanny run --join` never kills your process on a stop.** This is deliberate, and it's different from plain `nanny run`. Under plain `nanny run` (no `--serve`), the CLI actively watches your process and kills it when a limit is hit. That's the right behavior for a one-shot batch job. Under `--join`, there is no such watcher: the CLI injects the bridge address and token, starts your process, and waits for it to exit on its own. Enforcement happens entirely inside your process, at the specific call site that breaches a limit, as a `NannyStop` exception raised right there, not a kill signal from outside. This is what makes the governance server's core guarantee possible: **a stop ends one run, not the server.** The whole point of hosting a shared governor is that it keeps running and keeps serving other agents and requests after any one of them gets stopped.
+
+The consequence: if your server has its own request loop, you are responsible for containing that exception per request. Nanny does not do it for you, because from outside your process there is nothing to watch. The stop already happened inside a function call your own code made.
+
+```python
+from nanny_sdk import fresh_run, NannyStop
+
+def handle_request(payload: dict) -> dict:
+    fresh_run()  # this request gets a clean budget, independent of every other request
+    try:
+        return process(payload)
+    except NannyStop as e:
+        # Contained here: this request fails, the server keeps running.
+        return {"error": f"stopped: {type(e).__name__}"}
+```
+
+If you skip the `try`/`except` and let `NannyStop` propagate out of a request handler, what happens next depends entirely on your web framework's own exception handling. For many frameworks, an unhandled exception in a request handler brings down the whole process, which defeats the reason you reached for a governance server in the first place. Treat it the same way you'd treat any other exception a request handler can raise: catch it at the boundary. See [`fresh_run`](/v0.5/guides/python-sdk#fresh_run-starting-a-fresh-run-mid-process) for giving each request its own clean budget, and [What happens on stop](/v0.5/guides/python-sdk#what-happens-on-stop) for the full list of `NannyStop` subclasses to catch.
+
+---
+
 ## Server management
 
 ```bash

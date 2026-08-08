@@ -291,7 +291,22 @@ except NannyStop as e:
 
 `BridgeUnavailable` is raised when Nanny’s enforcement layer is active but unreachable during rule evaluation or a tool call. Nanny fails closed — the agent does not continue ungoverned. Like all `NannyStop` subclasses it extends `BaseException`, so it propagates through broad `except Exception` handlers in agent frameworks without being swallowed.
 
-You do not need to handle stop reasons in most agent code. They propagate up the call stack and terminate the process via `nanny run`. Catching them is useful in test code and at the CLI entry point.
+Under plain `nanny run` (single process, no `--serve`), you do not need to handle stop reasons in most agent code. They propagate up the call stack and terminate the process, since `nanny run` is watching that process and exits it for you. Catching them there is useful mainly in test code and at the CLI entry point.
+
+**This is not true once you're running under `nanny run --serve` / `--join`.** When your process joins a governance server, the wrapping `nanny run --join` command does not watch your process for stops at all: no polling loop, no kill on budget exhaustion, nothing. That's deliberate. [The stop guarantee](/v0.5/guides/governance-server#long-lived-processes-and-nannystop) is that a stop ends one *run*, not your whole process, so a long-lived server (a web app, a Discord bot, anything handling more than one request per process) has to keep running after another request's run gets stopped. Nothing does that for you. If a request handler lets `NannyStop` propagate uncaught, your framework's own crash behavior decides what happens next, which for many servers means the whole process going down over one governed request. Catch it at the boundary of whatever "one governed unit of work" means for your app, typically each request handler, and turn it into a failure response for that one request, not an unhandled exception:
+
+```python
+from nanny_sdk import fresh_run, NannyStop
+
+def handle_request(payload: dict) -> dict:
+    fresh_run()  # this request's budget starts clean, independent of others
+    try:
+        return process(payload)
+    except NannyStop as e:
+        return {"error": f"stopped: {type(e).__name__}"}
+```
+
+See [Long-lived processes and NannyStop](/v0.5/guides/governance-server#long-lived-processes-and-nannystop) for the full explanation of why this only applies under `--serve`/`--join`.
 
 <Frame>
   <img
