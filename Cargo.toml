@@ -33,7 +33,7 @@ anyhow       = "1"
 uuid         = { version = "1", features = ["v4", "serde"] }
 clap         = { version = "4", features = ["derive"] }
 rcgen        = "0.13"
-notify       = "6"
+notify       = "8"
 dirs         = "5"
 x509-parser  = { version = "0.18", features = ["verify"] }
 time         = { version = "0.3", features = ["formatting", "parsing", "macros"] }
