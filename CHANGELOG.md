@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.5.0] - 2026-08-04
+## [0.5.0] - 2026-08-08
 
 ### Added
 
@@ -34,6 +34,17 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   process already spent. Replaces directly setting the internal
   `NANNY_RUN_ID` environment variable, previously the only way to do this,
   and never documented as safe to rely on.
+- **`nanny_sdk.instrument()` now also patches OpenAI's Responses API**
+  (`client.responses.create`), not just Chat Completions. Chat Completions
+  rejects tool calls combined with real `reasoning_effort` on every current
+  OpenAI reasoning model, so any app that moves to the Responses API for
+  real reasoning plus tools previously had every OpenAI call go completely
+  unmeasured. Extracts usage from the Responses API's distinct
+  `ResponseUsage` shape (`input_tokens`/`output_tokens`,
+  `input_tokens_details` for cache), disambiguated from Anthropic's
+  coincidentally same-named fields so a Responses API call can never fall
+  into Anthropic's additive cache-total formula and silently over-debit
+  the budget.
 - **`cache_read`/`cache_write` on `LlmUsageRecorded`**, an optional finer
   split of `input` tokens for providers that report prompt-caching usage
   (OpenAI, Anthropic, DeepSeek, Gemini in this pass). Reporting only —
@@ -89,6 +100,20 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **`[proxy] allowed_hosts` now actually gets used.** Nothing injected
+  `HTTPS_PROXY`/`HTTP_PROXY` into a joined agent's environment, so the
+  allowlist silently did nothing unless a human remembered to set these by
+  hand: a fail-open gap the manifesto forbids. `nanny run --join=<appId>`
+  now injects them (plus lowercase variants and `NO_PROXY`) whenever the
+  server it's joining has `[proxy]` configured, read from the server's own
+  discovery file, not the joining client's `nanny.toml`, which may live in
+  an entirely different directory.
+- **A denied proxy request now actually stops the run.** A proxy denial
+  previously only failed that one CONNECT tunnel; the run itself was never
+  marked stopped, contradicting the docs and every other denial path
+  (`ToolDenied`, `RuleDenied`). The proxy path now marks the run stopped on
+  denial and refuses further tunnels once a run is already stopped, the
+  same way tool calls and rule evaluations already did.
 - **Python SDK: unreachable enforcement now raises `BridgeUnavailable`, not a
   raw httpx traceback.** `agent_enter`, `call_tool`, `health`, and
   `get_status` previously let a connection failure (governor not running,
