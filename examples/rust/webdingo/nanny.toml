@@ -1,9 +1,6 @@
 # nanny.toml — webdingo (multi-agent web research pipeline)
 # Run: nanny run -- "best Rust HTTP clients"
 
-[runtime]
-mode = "local"
-
 [start]
 # nanny run          → starts the pipeline (uses built-in default topic)
 # nanny run -- topic → passes the research topic as an argument

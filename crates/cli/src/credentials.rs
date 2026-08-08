@@ -1,4 +1,4 @@
-//! `~/.nanny/credentials.toml` — the local cloud credential written by
+//! `~/.nanny/credentials.json` — the local cloud credential written by
 //! `nanny auth login`.
 //!
 //! One credential per machine: `{ api_key, env }`. Never the repo `nanny.toml`
@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use crate::cloud::CloudEnv;
 
-const FILE_NAME: &str = "credentials.toml";
+const FILE_NAME: &str = "credentials.json";
 
 /// The whole credential file. One machine, one credential.
 #[derive(Clone, Serialize, Deserialize)]
@@ -37,13 +37,13 @@ impl std::fmt::Debug for Credentials {
 }
 
 impl Credentials {
-    /// Load `~/.nanny/credentials.toml`. `Ok(None)` means "not logged in" (the
+    /// Load `~/.nanny/credentials.json`. `Ok(None)` means "not logged in" (the
     /// file is absent), which is a normal state, not an error.
     pub fn load() -> Result<Option<Self>> {
         Self::load_from(&nanny_dir()?)
     }
 
-    /// Persist to `~/.nanny/credentials.toml` with `0600` permissions (dir `0700`).
+    /// Persist to `~/.nanny/credentials.json` with `0600` permissions (dir `0700`).
     pub fn save(&self) -> Result<()> {
         self.save_to(&nanny_dir()?)
     }
@@ -64,8 +64,8 @@ impl Credentials {
         }
         let contents = std::fs::read_to_string(&path)
             .with_context(|| format!("failed to read {}", path.display()))?;
-        let creds =
-            toml::from_str(&contents).with_context(|| format!("failed to parse {}", path.display()))?;
+        let creds = serde_json::from_str(&contents)
+            .with_context(|| format!("failed to parse {}", path.display()))?;
         Ok(Some(creds))
     }
 
@@ -74,8 +74,9 @@ impl Credentials {
             .with_context(|| format!("failed to create {}", dir.display()))?;
         harden_dir(dir);
         let path = dir.join(FILE_NAME);
-        let body = toml::to_string_pretty(self).context("failed to serialize credentials")?;
-        std::fs::write(&path, body).with_context(|| format!("failed to write {}", path.display()))?;
+        let body = serde_json::to_string_pretty(self).context("failed to serialize credentials")?;
+        std::fs::write(&path, format!("{body}\n"))
+            .with_context(|| format!("failed to write {}", path.display()))?;
         harden_file(&path);
         Ok(())
     }

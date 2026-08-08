@@ -5,7 +5,7 @@
 // ExecutionStopped is always the last event — every exit path must emit it.
 
 use anyhow::{Context, Result};
-use nanny_config::{LogTarget, ObservabilityConfig};
+use nanny_config::ObservabilityConfig;
 use nanny_core::events::event::ExecutionEvent;
 use std::fs::OpenOptions;
 use std::io::{self, BufWriter, Write};
@@ -25,17 +25,13 @@ impl EventWriter {
     /// Open a writer from observability config.
     ///
     /// stdout → writes to stdout.
-    /// file   → appends to `log_file`, creating it if it doesn't exist.
-    pub fn from_config(config: &ObservabilityConfig) -> Result<Self> {
-        match config.log {
-            LogTarget::Stdout => Ok(Self { out: Box::new(io::stdout()) }),
-            LogTarget::File => {
-                let path = config
-                    .log_file
-                    .as_deref()
-                    .context("observability.log = \"file\" requires log_file to be set")?;
-                Self::file(path)
-            }
+    /// file   → appends to `base_dir/.nanny/logs/<name>` (default filename
+    ///          "log.ndjson", auto-created directory), creating the file if
+    ///          it doesn't exist. See `ObservabilityConfig::resolve_log_path`.
+    pub fn from_config(config: &ObservabilityConfig, base_dir: &Path) -> Result<Self> {
+        match config.resolve_log_path(base_dir)? {
+            None => Ok(Self { out: Box::new(io::stdout()) }),
+            Some(path) => Self::file(&path),
         }
     }
 

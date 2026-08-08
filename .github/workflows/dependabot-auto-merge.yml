@@ -1,0 +1,61 @@
+name: Dependabot auto-merge
+
+# Scope, deliberately narrow: only Dependabot PRs, only patch-level semver
+# bumps, only ones driven by an actual security advisory (fetch-metadata's
+# `ghsas` output is non-empty). A routine, non-security patch bump still
+# gets a human. Patch is the one update-type semver itself promises is
+# backward compatible, which is the closest thing to "must not break
+# existing functionality" a version number alone can promise, not a
+# guarantee, a promise the ecosystem mostly keeps. Minor/major bumps, and
+# any security fix that needs more than a patch bump to reach the fixed
+# version, always fall through to requiring a human, on purpose, no
+# exceptions here.
+#
+# Does not rely on branch protection to enforce "wait for CI": this repo's
+# main had none configured when this was written, and GitHub's auto-merge
+# only waits for checks marked *required* in branch protection — with none
+# required, auto-merge can complete before CI even finishes. So this
+# explicitly blocks on `gh pr checks --watch` itself before ever merging,
+# correct with or without branch protection. Turning on branch protection
+# (require ci-rust / ci-python / dependency-review / security-audit as
+# required checks on main) is still recommended regardless, for every other
+# PR this doesn't cover.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Wait for CI, then auto-merge security patch-level bumps only
+        if: steps.metadata.outputs.update-type == 'version-update:semver-patch' && steps.metadata.outputs.ghsas != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          set -euo pipefail
+          echo "Security patch-level bump (${{ steps.metadata.outputs.ghsas }}) — waiting for all checks on $PR_URL"
+          # Blocks until every check on the PR finishes; exits non-zero if
+          # any failed. Nothing below this line runs on a red build.
+          gh pr checks "$PR_URL" --watch
+          echo "All checks green — enabling auto-merge (squash)"
+          gh pr merge "$PR_URL" --auto --squash
+
+      - name: Leave everything else for manual review
+        if: steps.metadata.outputs.update-type != 'version-update:semver-patch' || steps.metadata.outputs.ghsas == ''
+        run: |
+          echo "update-type='${{ steps.metadata.outputs.update-type }}', ghsas='${{ steps.metadata.outputs.ghsas }}'"
+          echo "Not a patch-level security fix — leaving for manual review, not auto-merging."

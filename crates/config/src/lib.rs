@@ -12,7 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 // ── Error type ────────────────────────────────────────────────────────────────
@@ -38,10 +38,6 @@ pub enum ConfigError {
 /// The full contents of a nanny.toml file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NannyConfig {
-    /// Runtime mode and execution settings.
-    #[serde(default)]
-    pub runtime: RuntimeConfig,
-
     /// How to launch the project. `nanny run` always reads this — extra args
     /// passed after `--` are appended to `cmd`.
     #[serde(default)]
@@ -62,31 +58,6 @@ pub struct NannyConfig {
     /// Only active on `nanny run --serve` when `[proxy] allowed_hosts` is set.
     #[serde(default)]
     pub proxy: Option<ProxyConfig>,
-}
-
-// ── RuntimeConfig ─────────────────────────────────────────────────────────────
-
-/// Top-level runtime settings. Controls execution mode.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct RuntimeConfig {
-    /// Whether the runtime operates standalone or reports to an orchestrator.
-    /// "local" (default) or "managed".
-    #[serde(default)]
-    pub mode: Mode,
-}
-
-// ── Mode ──────────────────────────────────────────────────────────────────────
-
-/// Whether the runtime operates standalone or reports facts to a hosted orchestrator.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum Mode {
-    /// Local-only. No network calls. No external dependencies. Default.
-    #[default]
-    Local,
-
-    /// Managed mode. Runtime still enforces locally but sends facts to the orchestrator.
-    Managed,
 }
 
 // ── StartConfig ───────────────────────────────────────────────────────────────
@@ -188,26 +159,96 @@ pub struct ToolConfig {
 
 /// Controls where the structured event log is written.
 ///
-/// The event log is ephemeral in v0.1.0 — it lives only as long as the process.
-/// Pipe stdout to your own storage if persistence is required.
-/// Phase 2 cloud ingests this log and makes it durable and queryable.
+/// Pipe stdout to your own storage if persistence is required in "stdout" mode.
+/// Phase 2 cloud ingests this log and makes it durable and queryable — and can
+/// backfill from the local file below even for a run that happened before this
+/// machine was ever logged in, since the file always lives in the same place.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ObservabilityConfig {
     /// Where to write the NDJSON event log.
     #[serde(default)]
     pub log: LogTarget,
 
-    /// Log file path. Only used when log = "file".
-    pub log_file: Option<std::path::PathBuf>,
+    /// Optional override for the log's name when log = "file". Defaults to
+    /// "log" if not set. A bare name only — no extension, no path
+    /// separators: Nanny always appends `.ndjson` and always owns the
+    /// directory (`.nanny/logs/`, created automatically). See
+    /// `resolve_log_path`.
+    pub file: Option<String>,
 }
 
 impl Default for ObservabilityConfig {
     fn default() -> Self {
         Self {
             log: LogTarget::Stdout,
-            log_file: None,
+            file: None,
         }
     }
+}
+
+impl ObservabilityConfig {
+    /// The name used when `file` is not set, before `.ndjson` is appended.
+    pub const DEFAULT_NAME: &'static str = "log";
+
+    /// Resolve this config into an actual log file path, anchored under
+    /// `base_dir` (the directory nanny.toml lives in). Returns `None` for
+    /// `LogTarget::Stdout`.
+    ///
+    /// The directory is always `base_dir/.nanny/logs/` — never configurable,
+    /// created here if it doesn't exist yet, exactly like `.nanny/servers/`
+    /// already auto-creates itself for governor state. `file`, if set, must
+    /// be a bare name: no path separators (the directory isn't the
+    /// developer's to choose) and no `.` (the `.ndjson` extension is always
+    /// appended by Nanny, never spelled out in config).
+    pub fn resolve_log_path(&self, base_dir: &Path) -> Result<Option<PathBuf>, ConfigError> {
+        match self.log {
+            LogTarget::Stdout => Ok(None),
+            LogTarget::File => {
+                let name = self.file.as_deref().unwrap_or(Self::DEFAULT_NAME);
+                if name.contains('/') || name.contains('\\') {
+                    return Err(ConfigError::Parse(format!(
+                        "observability.file = '{name}' must be a bare name, not a path — \
+                         the directory is always .nanny/logs/, owned by nanny"
+                    )));
+                }
+                if name.contains('.') {
+                    return Err(ConfigError::Parse(format!(
+                        "observability.file = '{name}' must not include an extension — \
+                         nanny always appends .ndjson, e.g. file = \"events\""
+                    )));
+                }
+                let dir = base_dir.join(".nanny").join("logs");
+                std::fs::create_dir_all(&dir)?;
+                ensure_logs_gitignored(base_dir);
+                Ok(Some(dir.join(format!("{name}.ndjson"))))
+            }
+        }
+    }
+}
+
+/// Best-effort: append `.nanny/logs/` to `.gitignore` if it isn't already
+/// covered. Never fails the caller — a missed gitignore entry is a nudge,
+/// not a hard requirement. These are audit-trail logs, not source: they
+/// belong on disk (where a later `nanny auth login` can still back-sync
+/// their full history to Cloud) but never in git.
+fn ensure_logs_gitignored(base_dir: &Path) {
+    const GITIGNORE_LINE: &str = ".nanny/logs/";
+    let path = base_dir.join(".gitignore");
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let already_covered = existing.lines().any(|l| {
+        let t = l.trim();
+        t == GITIGNORE_LINE || t == ".nanny/logs" || t == ".nanny/" || t == ".nanny"
+    });
+    if already_covered {
+        return;
+    }
+    let mut updated = existing;
+    if !updated.is_empty() && !updated.ends_with('\n') {
+        updated.push('\n');
+    }
+    updated.push_str(GITIGNORE_LINE);
+    updated.push('\n');
+    let _ = std::fs::write(&path, updated);
 }
 
 /// Where the event log is written.
@@ -218,7 +259,8 @@ pub enum LogTarget {
     #[default]
     Stdout,
 
-    /// Write events to the file specified in log_file.
+    /// Write events to a file under `.nanny/logs/`. See
+    /// `ObservabilityConfig::resolve_log_path`.
     File,
 }
 
@@ -345,16 +387,19 @@ pub struct ResolvedLimits {
 /// and formatting are preserved exactly as the user will see them.
 pub fn default_toml() -> &'static str {
     r#"# Generated by `nanny init`. Edit to match your agent's requirements.
-# Full reference: https://docs.nanny.run/v0.4/reference/nanny-toml
-
-[runtime]
-# Execution mode: "local" (default) or "managed".
-#   local   — all enforcement happens on your machine, no network calls.
-#   managed — enforcement is still fully local, but if your machine is logged in
-#             (run `nanny auth login`) a copy of the event log is synced to Nanny
-#             Cloud. The cloud never gates a stop; it only adds dashboards and
-#             history. Skip a single run's sync with `nanny run --no-sync`.
-mode = "local"
+# Full reference: https://docs.nanny.run/v0.5/reference/nanny-toml
+#
+# There is no [runtime]/mode setting. Enforcement is always fully local.
+# Whether this app also syncs its event log to Nanny Cloud is decided per
+# machine, not here, and there is no config knob for it: log this machine
+# in and it starts syncing automatically; without that, it runs fully
+# offline. "Logged in" works two ways: `nanny auth login` (browser, for a
+# machine a human is sitting at) or `nanny auth login --token --env=<env>`
+# (reads NANNY_API_KEY, for a headless VPS/CI box with no browser). Either
+# way, `nanny run` then self-mints this app's own scoped credential the
+# first time it runs, no extra step. The cloud never gates a stop; it
+# only adds dashboards and history. Skip a single run's sync with
+# `nanny run --no-sync`.
 
 [start]
 # How to launch your agent. `nanny run` always reads this command.
@@ -405,17 +450,22 @@ allowed = ["http_get"]
 [observability]
 # Where to write the structured NDJSON event log.
 # "stdout" — stream events to the terminal in real time (default).
-# "file"   — write events to log_file instead.
+# "file"   — write events to .nanny/logs/log.ndjson (auto-created).
 log = "stdout"
+
+# Uncomment to write events to a file instead:
+# log = "file"
+
+# Optional — only set this if you want a name other than the default
+# ("log"). A bare name, no extension: nanny always appends .ndjson, and
+# the directory is always .nanny/logs/, owned by nanny, never
+# configurable here. file = "events" writes .nanny/logs/events.ndjson.
+# file = "events"
 
 [proxy]
 # HTTP CONNECT proxy allowlist for the network governance server.
 # Uncomment and add hosts to activate the proxy:
 # allowed_hosts = ["api.openai.com", "api.groq.com"]
-
-# Uncomment to write events to a file instead:
-# log      = "file"
-# log_file = "nanny.log"
 "#
 }
 
@@ -427,9 +477,6 @@ mod tests {
 
     fn full_config_toml() -> &'static str {
         r#"
-[runtime]
-mode = "local"
-
 [limits]
 steps   = 100
 tokens  = 50000
@@ -467,7 +514,6 @@ log = "stdout"
         assert_eq!(config.limits.max_steps, 100);
         assert_eq!(config.limits.max_tokens, 50000);
         assert_eq!(config.limits.timeout_ms, 30000);
-        assert_eq!(config.runtime.mode, Mode::Local);
         assert_eq!(config.tools.allowed, vec!["http_get"]);
         assert_eq!(config.observability.log, LogTarget::Stdout);
         assert!(
@@ -483,29 +529,12 @@ log = "stdout"
     #[test]
     fn missing_limits_is_rejected() {
         let bad = r#"
-[runtime]
-mode = "local"
+[start]
+cmd = "true"
 "#;
         assert!(
             toml::from_str::<NannyConfig>(bad).is_err(),
             "config without [limits] must be rejected"
-        );
-    }
-
-    #[test]
-    fn unknown_mode_is_rejected() {
-        let bad = r#"
-[runtime]
-mode = "cloud"
-
-[limits]
-steps   = 10
-tokens  = 5000
-timeout = 5000
-"#;
-        assert!(
-            toml::from_str::<NannyConfig>(bad).is_err(),
-            "unknown mode must be rejected"
         );
     }
 
@@ -588,7 +617,56 @@ timeout = 5000
         .expect("must parse");
 
         assert_eq!(config.observability.log, LogTarget::Stdout);
-        assert!(config.observability.log_file.is_none());
+        assert!(config.observability.file.is_none());
+    }
+
+    #[test]
+    fn resolve_log_path_defaults_to_log_ndjson_under_nanny_logs() {
+        let dir = std::env::temp_dir().join("nanny_test_resolve_default");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let config = ObservabilityConfig { log: LogTarget::File, file: None };
+        let path = config.resolve_log_path(&dir).unwrap().unwrap();
+        assert_eq!(path, dir.join(".nanny").join("logs").join("log.ndjson"));
+        assert!(dir.join(".nanny").join("logs").is_dir(), "directory must be auto-created");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_log_path_honors_name_override_and_appends_ndjson() {
+        let dir = std::env::temp_dir().join("nanny_test_resolve_override");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let config = ObservabilityConfig { log: LogTarget::File, file: Some("events".to_string()) };
+        let path = config.resolve_log_path(&dir).unwrap().unwrap();
+        assert_eq!(path, dir.join(".nanny").join("logs").join("events.ndjson"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_log_path_rejects_path_separators_in_name() {
+        let dir = std::env::temp_dir().join("nanny_test_resolve_reject_sep");
+        let config = ObservabilityConfig { log: LogTarget::File, file: Some("sub/dir".to_string()) };
+        assert!(config.resolve_log_path(&dir).is_err(), "a name with a separator must be rejected");
+    }
+
+    #[test]
+    fn resolve_log_path_rejects_an_extension_in_name() {
+        let dir = std::env::temp_dir().join("nanny_test_resolve_reject_ext");
+        let config = ObservabilityConfig { log: LogTarget::File, file: Some("events.ndjson".to_string()) };
+        assert!(
+            config.resolve_log_path(&dir).is_err(),
+            "a name with an extension must be rejected — nanny always appends .ndjson itself"
+        );
+    }
+
+    #[test]
+    fn resolve_log_path_is_none_for_stdout() {
+        let dir = std::env::temp_dir().join("nanny_test_resolve_stdout");
+        let config = ObservabilityConfig { log: LogTarget::Stdout, file: None };
+        assert_eq!(config.resolve_log_path(&dir).unwrap(), None);
     }
 
     #[test]
@@ -708,28 +786,12 @@ timeout = 5000
     }
 
     #[test]
-    fn managed_mode_parses_without_a_managed_section() {
-        // The [managed] block is retired; `mode = "managed"` alone is valid — the
-        // key now comes from `nanny auth login`, not the file.
-        let config: NannyConfig = toml::from_str(
-            r#"
-[runtime]
-mode = "managed"
-
-[limits]
-steps   = 10
-tokens  = 5000
-timeout = 5000
-"#,
-        )
-        .expect("must parse");
-        assert_eq!(config.runtime.mode, Mode::Managed);
-    }
-
-    #[test]
     fn legacy_managed_section_is_ignored_but_detectable() {
-        // A stale [managed] block no longer breaks parsing (serde ignores unknown
-        // keys), but has_managed_section flags it so the CLI can warn.
+        // A stale [managed] block no longer breaks parsing (serde ignores
+        // unknown keys), and has_managed_section flags it so the CLI can warn.
+        // The [runtime] table here is just arbitrary unknown TOML at this
+        // point (the field was removed outright, not deprecated), included
+        // only to confirm unrelated unknown tables don't break parsing either.
         let contents = r#"
 [runtime]
 mode = "managed"
@@ -742,10 +804,9 @@ timeout = 5000
 [managed]
 endpoint = "https://api.nanny.run/v1"
 "#;
-        let config: NannyConfig =
-            toml::from_str(contents).expect("legacy [managed] must not break parsing");
-        assert_eq!(config.runtime.mode, Mode::Managed);
-        assert!(has_managed_section(contents), "the stale section must be detectable");
+        let _config: NannyConfig =
+            toml::from_str(contents).expect("unknown tables must not break parsing");
+        assert!(has_managed_section(contents), "the stale [managed] section must be detectable");
     }
 
     #[test]

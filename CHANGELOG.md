@@ -5,6 +5,154 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-08-08
+
+### Added
+
+- **Per-app identity.** `nanny init` now writes a permanent `.nanny/app.json`
+  (an `app_id` plus a human-facing `name`) alongside `nanny.toml`, written
+  once, ever, per app, and meant to be committed (an app id is not a
+  secret). `nanny init` never regenerates an existing identity.
+- **`nanny run --join=<appId>`**, explicitly joins a specific governance
+  server by id, reading its state from `~/.nanny/servers/<appId>/`.
+- **`--app=<id>` on `nanny status` / `nanny stop`**, targets one app's
+  governor explicitly; both still default to the current directory's own
+  identity when omitted.
+- **Per-app Cloud credentials.** A gitignored `.nanny/credentials.local.json`
+  holds an app-scoped ingest credential, self-minted by `nanny run` on any
+  machine that's logged in (`nanny auth login`), independent of the app's
+  one-time `nanny init`.
+- **A separate CONNECT-tunnel credential.** The HTTP CONNECT proxy (`[proxy]
+  allowed_hosts`) now authenticates via its own `proxy_token`
+  (`Proxy-Authorization: Basic`), never the ordinary `session_token`.
+  Narrower blast radius if it ever ends up in a client's own verbose HTTP
+  logs, which is the one place a CONNECT credential can leak given zero
+  required app-side code changes.
+- **`fresh_run()`** in both SDKs (`nanny::fresh_run()` / `nanny_sdk.fresh_run()`),
+  starts a new governed run in the current process, its own independent
+  token/step counter, unrelated to whatever a prior phase in the same
+  process already spent. Replaces directly setting the internal
+  `NANNY_RUN_ID` environment variable, previously the only way to do this,
+  and never documented as safe to rely on.
+- **`nanny_sdk.instrument()` now also patches OpenAI's Responses API**
+  (`client.responses.create`), not just Chat Completions. Chat Completions
+  rejects tool calls combined with real `reasoning_effort` on every current
+  OpenAI reasoning model, so any app that moves to the Responses API for
+  real reasoning plus tools previously had every OpenAI call go completely
+  unmeasured. Extracts usage from the Responses API's distinct
+  `ResponseUsage` shape (`input_tokens`/`output_tokens`,
+  `input_tokens_details` for cache), disambiguated from Anthropic's
+  coincidentally same-named fields so a Responses API call can never fall
+  into Anthropic's additive cache-total formula and silently over-debit
+  the budget.
+- **`cache_read`/`cache_write` on `LlmUsageRecorded`**, an optional finer
+  split of `input` tokens for providers that report prompt-caching usage
+  (OpenAI, Anthropic, DeepSeek, Gemini in this pass). Reporting only —
+  enforcement still debits `input + output` exactly as before, unaffected
+  by whether either field is present. Every provider names and shapes this
+  data differently (unlike input/output tokens, cache accounting never
+  converged industry-wide); `nanny_sdk.instrument()` normalizes each
+  provider's own vocabulary into these two generic fields, and the Rust
+  SDK's `Usage` struct gained matching `cache_read`/`cache_write` fields
+  for explicit `report_usage()` calls. Exists so a downstream cost
+  calculator (Nanny Cloud) can price cache-hit tokens at their real, much
+  cheaper rate instead of treating all input as one undifferentiated price.
+
+### Changed
+
+- **`nanny auth login`'s local credential moved from `~/.nanny/credentials.toml`
+  (shipped in 0.4.2) to `~/.nanny/credentials.json`.** `nanny.toml` is the only
+  file meant to be hand-edited and commented, so it's the only one that
+  should ever be TOML; every other Nanny-owned data file has no reason to
+  carry TOML's comment syntax. No automatic migration: anyone who ran
+  `nanny auth login` under 0.4.x needs to run it again after upgrading.
+- **`[observability] log = "file"` now applies to `nanny run --serve`, not just
+  local `nanny run`.** Previously `--serve` silently ignored `[observability]`
+  entirely, so joined clients (`nanny run --join=<appId>`) never got a local
+  event log. Both paths now share one `EventWriter`/local-log destination.
+- **File logging no longer requires a path.** `[observability]`'s file-name
+  field is renamed `log_file` → `file`, and is now optional: unset, it
+  defaults to a filename of `log.ndjson`. The directory is no longer
+  developer-specified — it's always `.nanny/logs/`, owned by Nanny,
+  auto-created, and added to `.gitignore` automatically the first time it's
+  created (these are local audit-trail logs, not source). `file` is a bare
+  name only — no path separators, no extension, Nanny always appends
+  `.ndjson` itself (e.g. `file = "events"` writes
+  `.nanny/logs/events.ndjson`).
+- **`--serve` state is now keyed by app id**
+  (`~/.nanny/servers/<appId>/server.{addr,token,proxy_token,pid,proxy}`),
+  replacing the old global, unkeyed `~/.nanny/server.*` files. Two
+  unrelated apps' governors on one machine can no longer collide or
+  overwrite each other's state.
+- **CONNECT-request auth and rate limiting moved off axum's router layers**
+  and into a single dispatch checkpoint (`GovernorService`) that every
+  request passes through before reaching a handler, CONNECT included.
+  Routing a CONNECT request through axum's `Router::call()` was silently
+  breaking hyper's server-side upgrade handoff; this also closes the gap
+  where a future protective check added only as a router layer would never
+  have covered CONNECT.
+- **Token comparisons are constant-time** (`session_token`, `proxy_token`),
+  closing a timing side-channel in the equality check.
+- **The injected `HTTPS_PROXY` URL always carries an explicit empty
+  password** (`http://<token>:@host`). Some HTTP clients (Python's
+  `requests`/urllib3) silently drop the username too when the password is
+  merely absent rather than present-and-empty.
+
+### Fixed
+
+- **`[proxy] allowed_hosts` now actually gets used.** Nothing injected
+  `HTTPS_PROXY`/`HTTP_PROXY` into a joined agent's environment, so the
+  allowlist silently did nothing unless a human remembered to set these by
+  hand: a fail-open gap the manifesto forbids. `nanny run --join=<appId>`
+  now injects them (plus lowercase variants and `NO_PROXY`) whenever the
+  server it's joining has `[proxy]` configured, read from the server's own
+  discovery file, not the joining client's `nanny.toml`, which may live in
+  an entirely different directory.
+- **A denied proxy request now actually stops the run.** A proxy denial
+  previously only failed that one CONNECT tunnel; the run itself was never
+  marked stopped, contradicting the docs and every other denial path
+  (`ToolDenied`, `RuleDenied`). The proxy path now marks the run stopped on
+  denial and refuses further tunnels once a run is already stopped, the
+  same way tool calls and rule evaluations already did.
+- **Python SDK: unreachable enforcement now raises `BridgeUnavailable`, not a
+  raw httpx traceback.** `agent_enter`, `call_tool`, `health`, and
+  `get_status` previously let a connection failure (governor not running,
+  wrong address) propagate as an unhandled `httpx.ConnectError` through
+  `@agent`/`@tool`. Every other failure mode already gets a typed
+  exception; this makes the "nothing to connect to" case consistent
+  with the rest, matching how `@rule`'s own status check already handled it.
+- **`StepCompleted` now actually fires.** Every allowed tool call already
+  incremented the real step counter, but the matching event was only ever
+  emitted by a separate `POST /step` endpoint that nothing in either SDK
+  called — confirmed by a repo-wide search, the only caller left was the
+  bridge's own tests. Steps were being enforced correctly the whole time;
+  only the audit trail was silently incomplete, `StepCompleted` simply
+  never appeared, no error, no warning. It now fires alongside `ToolAllowed`
+  on every real step, matching what the docs already claimed.
+- **Proxied HTTP CONNECT calls now count as steps too.** The fix above
+  covered `handle_tool_call`'s two `ToolAllowed` sites; a third one, the
+  CONNECT-tunnel proxy path in `handle_connect`, was a separate gap the
+  same audit missed: it emitted `ToolAllowed` but never incremented
+  `step_count` or emitted `StepCompleted` at all, the only one of the three
+  real `ToolAllowed` call sites in the codebase that didn't. Invisible
+  unless an agent's only governed actions are proxied LLM calls with no
+  `@tool` calls at all — exactly that case showed a real run doing real,
+  budget-consuming work with its step count stuck at zero the whole time.
+
+### Removed
+
+- **`[runtime]` / `mode` in `nanny.toml`**, entirely. There is no config
+  field for local-vs-managed anymore. Whether a run syncs to Cloud is
+  decided purely by whether an app-scoped credential exists locally; no
+  credential, no sync, no config knob. `--no-sync` still overrides.
+- **Blind auto-join.** Bare `nanny run` no longer silently joins whatever
+  governance server it happens to detect on the machine; `--join=<appId>`
+  is now required and explicit.
+- **`POST /step`**, entirely. Dead code with no real caller (see the
+  `StepCompleted` fix above) that was also a live footgun: it incremented
+  the same step counter an ordinary tool call already does, so anything
+  that had called both would have silently double-counted steps.
+
 ## [0.4.2] — 2026-07-27
 
 ### Changed

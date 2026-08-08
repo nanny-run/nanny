@@ -3,7 +3,7 @@
 import pytest
 from pytest_httpserver import HTTPServer
 
-from nanny_sdk import AgentNotFound, agent
+from nanny_sdk import AgentNotFound, BridgeUnavailable, agent
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -107,6 +107,29 @@ def test_agent_not_found_body_never_runs(mock_bridge: HTTPServer) -> None:
     with pytest.raises(AgentNotFound):
         my_func()
     assert not executed
+
+
+# ---------------------------------------------------------------------------
+# Sync — bridge unreachable
+# ---------------------------------------------------------------------------
+
+
+def test_agent_bridge_unreachable_raises_bridge_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A governor that isn't running (connection refused) raises BridgeUnavailable,
+    not a raw httpx/httpcore traceback: @agent must fail closed the same way
+    @tool's rule evaluation already does when the bridge can't be reached.
+    """
+    monkeypatch.setenv("NANNY_BRIDGE_PORT", "19999")  # nothing listening here
+    monkeypatch.setenv("NANNY_SESSION_TOKEN", "test-token")
+
+    @agent("researcher")
+    def my_func() -> str:  # pragma: no cover
+        return "done"
+
+    with pytest.raises(BridgeUnavailable):
+        my_func()
 
 
 # ---------------------------------------------------------------------------

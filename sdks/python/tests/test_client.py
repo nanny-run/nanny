@@ -4,7 +4,7 @@ import pytest
 from pytest_httpserver import HTTPServer
 
 import nanny_sdk._client as client
-from nanny_sdk.exceptions import BudgetExhausted, ExecutionStopped
+from nanny_sdk.exceptions import BridgeUnavailable, BudgetExhausted, ExecutionStopped
 
 
 def test_passthrough_when_no_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -84,6 +84,49 @@ def test_report_stop_rule_ignores_bridge_errors(monkeypatch: pytest.MonkeyPatch)
 
 
 # ---------------------------------------------------------------------------
+# An unreachable bridge fails closed as BridgeUnavailable, never a raw httpx
+# traceback: the identical guarantee @rule's GET /status check already had,
+# now applied consistently to every bridge call.
+# ---------------------------------------------------------------------------
+
+
+def test_agent_enter_raises_bridge_unavailable_when_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NANNY_BRIDGE_PORT", "19999")  # nothing listening here
+    monkeypatch.setenv("NANNY_SESSION_TOKEN", "test-token")
+    with pytest.raises(BridgeUnavailable):
+        client.agent_enter("researcher")
+
+
+def test_call_tool_raises_bridge_unavailable_when_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NANNY_BRIDGE_PORT", "19999")
+    monkeypatch.setenv("NANNY_SESSION_TOKEN", "test-token")
+    with pytest.raises(BridgeUnavailable):
+        client.call_tool("search", 10, {})
+
+
+def test_health_raises_bridge_unavailable_when_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NANNY_BRIDGE_PORT", "19999")
+    monkeypatch.setenv("NANNY_SESSION_TOKEN", "test-token")
+    with pytest.raises(BridgeUnavailable):
+        client.health()
+
+
+def test_get_status_raises_bridge_unavailable_when_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NANNY_BRIDGE_PORT", "19999")
+    monkeypatch.setenv("NANNY_SESSION_TOKEN", "test-token")
+    with pytest.raises(BridgeUnavailable):
+        client.get_status()
+
+
+# ---------------------------------------------------------------------------
 # G7 — a 410 (this run already stopped) becomes a typed stop, not a raw HTTP error
 # ---------------------------------------------------------------------------
 
@@ -114,6 +157,22 @@ def test_agent_enter_410_raises_typed_stop(mock_bridge: HTTPServer) -> None:
     )
     with pytest.raises(BudgetExhausted):
         client.agent_enter("researcher")
+
+
+def test_call_tool_410_from_proxy_denial_raises_execution_stopped(mock_bridge: HTTPServer) -> None:
+    """A run stopped by an HTTP proxy denial reads 'ToolDenied' as the 410
+    reason — same body shape as any other denial, no separate handling needed
+    on the SDK side. ToolDenied isn't one of the known limit classes here (that
+    class needs a tool_name, which a proxy denial that happened on an earlier,
+    unrelated call doesn't carry), so it falls through to ExecutionStopped,
+    same as any other non-limit reason.
+    """
+    mock_bridge.expect_request("/tool/call", method="POST").respond_with_json(
+        {"error": "execution stopped", "reason": "ToolDenied"}, status=410
+    )
+    with pytest.raises(ExecutionStopped) as excinfo:
+        client.call_tool("search", 10, {})
+    assert excinfo.value.reason == "ToolDenied"
 
 
 # ---------------------------------------------------------------------------

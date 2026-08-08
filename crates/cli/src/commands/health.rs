@@ -31,13 +31,13 @@ pub fn cmd_health() -> Result<()> {
     let bridge_status = check_local_bridge();
     match &bridge_status {
         BridgeStatus::Running => {
-            println!("local bridge  : running");
+            println!("local enforcement: running");
         }
         BridgeStatus::NotRunning => {
-            println!("local bridge  : not running");
+            println!("local enforcement: not running");
         }
         BridgeStatus::Unreachable(detail) => {
-            println!("local bridge  : unreachable — {detail}");
+            println!("local enforcement: unreachable — {detail}");
             all_healthy = false;
         }
     }
@@ -48,13 +48,13 @@ pub fn cmd_health() -> Result<()> {
     let server_status = check_network_server();
     match &server_status {
         ServerStatus::NotConfigured => {
-            println!("network server: not running");
+            println!("network server   : not running");
         }
         ServerStatus::Reachable(addr, how) => {
-            println!("network server: running  ({addr})  [{how}]");
+            println!("network server   : running  ({addr})  [{how}]");
         }
         ServerStatus::Unreachable(addr, detail) => {
-            println!("network server: unreachable  ({addr}) — {detail}");
+            println!("network server   : unreachable  ({addr}) — {detail}");
             all_healthy = false;
         }
     }
@@ -64,11 +64,11 @@ pub fn cmd_health() -> Result<()> {
     let cert_status = check_certs(&cert_dir);
     match &cert_status {
         CertStatus::NotFound => {
-            println!("certs         : not found  (run `nanny certs generate`)");
+            println!("certs            : not found  (run `nanny certs generate`)");
         }
         CertStatus::Valid { expires } => {
             let formatted = expires.format(&Rfc3339).unwrap_or_else(|_| "?".to_string());
-            println!("certs         : valid  (expires {formatted})");
+            println!("certs            : valid  (expires {formatted})");
 
             // Warn 30 days before expiry — still healthy, but worth flagging.
             let days_left = (*expires - OffsetDateTime::now_utc()).whole_days();
@@ -81,11 +81,11 @@ pub fn cmd_health() -> Result<()> {
         }
         CertStatus::Expired { expires } => {
             let formatted = expires.format(&Rfc3339).unwrap_or_else(|_| "?".to_string());
-            println!("certs         : EXPIRED  (expired {formatted})");
+            println!("certs            : EXPIRED  (expired {formatted})");
             all_healthy = false;
         }
         CertStatus::Unreadable(detail) => {
-            println!("certs         : unreadable — {detail}");
+            println!("certs            : unreadable — {detail}");
             all_healthy = false;
         }
     }

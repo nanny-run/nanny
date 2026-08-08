@@ -78,7 +78,7 @@ Always the last event in any log.
 | `RuleDenied` | A tool call was blocked by a custom rule or a per-tool `max_calls` limit. |
 | `ManualStop` | Execution was stopped programmatically. |
 | `ProcessCrashed` | The child process exited with a non-zero code unexpectedly. |
-| `BridgeUnavailable` | The bridge was active but unreachable during rule evaluation or a tool call. Nanny fails closed — silently continuing with ungoverned execution is never allowed. |
+| `BridgeUnavailable` | Enforcement was active but became unreachable during rule evaluation or a tool call. Nanny fails closed — silently continuing with ungoverned execution is never allowed. |
 
 ---
 
@@ -226,7 +226,7 @@ Emitted when a permitted tool fails at runtime. Distinct from `ToolDenied` — t
 
 ## LlmUsageRecorded
 
-Emitted when LLM token usage is reported to Nanny — via the Python SDK's `instrument()` or the Rust SDK's `report_usage()`. Records the measured input and output tokens debited from the budget, plus optional model and provider labels.
+Emitted when LLM token usage is reported to Nanny — via the Python SDK's `instrument()` or the Rust SDK's `report_usage()`. Records the measured input and output tokens debited from the budget, plus optional model, provider, and cache-usage labels.
 
 ```json
 {
@@ -235,7 +235,8 @@ Emitted when LLM token usage is reported to Nanny — via the Python SDK's `inst
   "input": 1200,
   "output": 340,
   "model": "gpt-4o",
-  "provider": "openai"
+  "provider": "openai",
+  "cache_read": 900
 }
 ```
 
@@ -245,3 +246,7 @@ Emitted when LLM token usage is reported to Nanny — via the Python SDK's `inst
 | `output` | integer | Completion / output tokens produced by the LLM call. |
 | `model` | string | Optional. Model identifier reported by the SDK (e.g. `"gpt-4o"`). Omitted when not provided. |
 | `provider` | string | Optional. Provider identifier reported by the SDK (e.g. `"openai"`). Omitted when not provided. |
+| `cache_read` | integer | Optional. A finer split of `input` — never additional tokens beyond it — for providers that report prompt-cache reads (OpenAI, Anthropic, DeepSeek, Gemini). Omitted, not zero, for providers/responses that don't report cache usage. |
+| `cache_write` | integer | Optional. Same as `cache_read`, but for tokens written to cache (a real, separate cost for providers like Anthropic; most providers have no write-cost concept and never set this). |
+
+`cache_read`/`cache_write` are reporting-only, same as `model`/`provider`: enforcement always debits `input + output`, unaffected by whether either is present. They exist so a downstream cost calculator can price cache-hit tokens at their real, much cheaper rate instead of treating all input as one undifferentiated price. Every provider uses its own field name and shape for cache usage — there's no shared convention the way there is for input/output tokens — so the SDK normalizes each provider's own vocabulary into these two generic fields; see `nanny_sdk.instrument`'s module docs for the per-provider mapping.

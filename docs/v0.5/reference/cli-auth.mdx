@@ -3,9 +3,9 @@ title: nanny auth
 description: Log in to Nanny Cloud, or log out. Enforcement stays fully local either way.
 ---
 
-`nanny auth` logs you in to [Nanny Cloud](https://nanny.run) so `nanny run` can sync its event log to your dashboard. It's optional — enforcement is always local and never depends on it.
+`nanny auth` logs you in to [Nanny Cloud](https://nanny.run/cloud) so `nanny run` can sync its event log to your dashboard. It's optional — enforcement is always local and never depends on it.
 
-Sync runs only when **both** are true: the project sets `mode = "managed"` in `nanny.toml`, and you're logged in. See [Connect to Nanny Cloud](/v0.4/guides/managed-mode) for the full flow.
+Sync is automatic once a machine is logged in, no config field to set. See [Connect to Nanny Cloud](/v0.5/guides/managed-mode) for the full flow.
 
 ```bash
 nanny auth <COMMAND>
@@ -23,7 +23,7 @@ Log in by approving in your browser.
 nanny auth login [--env <env>]
 ```
 
-Approve in the browser and you're connected. Set `mode = "managed"` in `nanny.toml`, and `nanny run` starts syncing.
+Approve in the browser and you're connected. `nanny run` starts syncing automatically, no config change needed.
 
 #### Flags
 

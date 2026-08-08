@@ -130,7 +130,7 @@ report_usage(Usage {
 });
 ```
 
-Only `input` and `output` are required. You can optionally attach `model` and `provider` labels — identifiers only, never prompt or response content:
+Only `input` and `output` are required. You can optionally attach `model` and `provider` labels — identifiers only, never prompt or response content — and, if your provider's response reports it, `cache_read`/`cache_write` (a finer split of `input`, never additional tokens beyond it):
 
 ```rust
 report_usage(Usage {
@@ -138,6 +138,7 @@ report_usage(Usage {
     output: resp.usage.completion_tokens,
     model:    Some("gpt-4o".into()),
     provider: Some("openai".into()),
+    ..Default::default()
 });
 ```
 
@@ -223,6 +224,34 @@ Nesting `#[agent]` functions is supported — limits revert to the caller's set 
     alt="webdingo running under nanny run — planner, researcher, and synthesizer agent scopes entering and exiting with structured NDJSON events"
   />
 </Frame>
+
+---
+
+## `nanny::fresh_run` — starting a fresh run mid-process
+
+`#[agent(...)]` changes which ceiling the run's *one* running total is
+checked against; it does not give a scope its own budget (see
+[Named sets share one counter](/v0.5/concepts/limits#named-sets-share-one-counter-they-are-not-separate-budgets)).
+If your process runs multiple, independent phases back to back and you
+want each one to start from zero rather than inherit whatever an earlier
+phase already spent, that's a new **run**, Nanny's real unit of
+governance: one cumulative counter, one stop state, "a stop is final."
+
+```rust
+use nanny::fresh_run;
+
+fn handle_request(payload: Payload) -> Response {
+    fresh_run();   // this request's tokens/steps start from zero
+    process(payload)
+}
+```
+
+Only meaningful when governed through a network server (`nanny run
+--serve` / `--join`): the server keys independent state per run, so a stop
+in the run you just left has zero effect on the one you're starting. Under
+local `nanny run` (no `--serve`), one process is already always exactly
+one run, so this is a safe no-op there. Mirrors `nanny_sdk.fresh_run()` on
+the Python side.
 
 ---
 

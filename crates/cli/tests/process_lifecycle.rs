@@ -38,10 +38,7 @@ fn temp_dir() -> PathBuf {
 
 fn write_config(dir: &Path, timeout_ms: u64, cmd: &str) {
     let toml = format!(
-        r#"[runtime]
-mode = "local"
-
-[start]
+        r#"[start]
 cmd = "{cmd}"
 
 [limits]
@@ -61,6 +58,23 @@ log = "stdout"
 
 fn config_arg(dir: &Path) -> String {
     dir.join("nanny.toml").to_string_lossy().into_owned()
+}
+
+/// Write `.nanny/app.json` directly (bypassing `nanny init`, which also wants
+/// to write nanny.toml, tests that need an app id but already have their own
+/// nanny.toml call this instead). Returns the id.
+fn write_app_identity(dir: &Path) -> String {
+    let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let id = format!("app_test_{ts}_{seq}");
+    let dot_nanny = dir.join(".nanny");
+    fs::create_dir_all(&dot_nanny).unwrap();
+    fs::write(
+        dot_nanny.join("app.json"),
+        format!("{{\"app_id\": \"{id}\", \"name\": \"test-app\"}}\n"),
+    )
+    .unwrap();
+    id
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -154,9 +168,6 @@ fn named_limits_timeout_is_enforced() {
     // Global limits have a generous timeout; the named set is tight.
     let toml = format!(
         "\
-[runtime]
-mode = \"local\"
-
 [start]
 cmd = \"{slow_cmd}\"
 
@@ -322,10 +333,7 @@ fn missing_start_section_exits_nonzero_with_message() {
     let dir = temp_dir();
     fs::write(
         dir.join("nanny.toml"),
-        r#"[runtime]
-mode = "local"
-
-[limits]
+        r#"[limits]
 steps   = 10
 tokens  = 100
 timeout = 5000
@@ -365,13 +373,11 @@ fn server_start_nonloopback_without_certs_exits_with_message() {
     let dir   = temp_dir();
     let home  = temp_dir(); // override HOME so no ~/.nanny/certs/ exists
 
-    // Write a minimal nanny.toml so the config load succeeds.
+    // Write a minimal nanny.toml so the config load succeeds, plus an app
+    // identity, `--serve` requires one to key its state.
     fs::write(
         dir.join("nanny.toml"),
-        r#"[runtime]
-mode = "local"
-
-[start]
+        r#"[start]
 cmd = "echo hello"
 
 [limits]
@@ -384,6 +390,7 @@ log = "stdout"
 "#,
     )
     .unwrap();
+    write_app_identity(&dir);
 
     // Use a high port to avoid conflicts. Non-loopback → cert check fires.
     let output = Command::new(nanny_bin())
@@ -414,28 +421,19 @@ log = "stdout"
 // Regression guard: if the cert check accidentally runs for loopback, the
 // server would fail to start and this test would catch it.
 //
-// Skipped on Windows: `dirs::home_dir()` ignores the `HOME` env override, so
-// `nanny run --serve` writes `server.addr` and `server.token` to the REAL
-// `~/.nanny/`. When the server is killed with TerminateProcess the cleanup
-// hook does not run, leaving stale files. Those stale files cause concurrent
-// tests (e.g. timeout_kills_process_and_exits_nonzero) to mistakenly route
-// through `cmd_run_via_network_server`, which has no timeout kill — the child
-// runs to completion and the timeout test fails. Skipping T7 on Windows
-// eliminates the contamination; the loopback-vs-mTLS branch is
-// platform-independent code covered by the Linux/macOS run.
+// Sandboxed via NANNY_HOME, not HOME: `dirs::home_dir()` ignores the `HOME`
+// env override on Windows, so `nanny_server_state_dir` reads `NANNY_HOME`
+// first (see `commands::server::nanny_home_dir`), which works identically on
+// every platform since it's a plain env var read, not an OS profile lookup.
 
-#[cfg(not(windows))]
 #[test]
 fn server_start_loopback_does_not_require_cert_files() {
     let dir  = temp_dir();
-    let home = temp_dir(); // fresh HOME — no certs directory
+    let home = temp_dir(); // fresh NANNY_HOME — no certs directory
 
     fs::write(
         dir.join("nanny.toml"),
-        r#"[runtime]
-mode = "local"
-
-[start]
+        r#"[start]
 cmd = "echo hello"
 
 [limits]
@@ -448,13 +446,14 @@ log = "stdout"
 "#,
     )
     .unwrap();
+    write_app_identity(&dir);
 
     // Pick a port for the server. We'll probe it then kill the process.
     let port = 15900u16; // static, unlikely to be in use during tests
 
     let mut child = Command::new(nanny_bin())
         .current_dir(&dir)
-        .env("HOME", &home)
+        .env("NANNY_HOME", &home)
         .args(["run", "--serve", "--addr", &format!("127.0.0.1:{port}")])
         .spawn()
         .expect("nanny run --serve must spawn");
@@ -481,32 +480,25 @@ log = "stdout"
     );
 }
 
-// ── T8: nanny run auto-detects a running governance server ────────────────────
+// ── T8: nanny run --join=<id> joins an explicit governance server ────────────
 //
-// When ~/.nanny/server.addr and ~/.nanny/server.token exist and the server is
-// reachable, `nanny run` should detect it, print the confirmation message, and
-// route the child process through the network server instead of starting a
-// local bridge.
+// There is no auto-detection anymore, two unrelated apps' governors on one
+// machine must never collide by one silently absorbing the other's run. A
+// server started with `nanny run --serve` (which requires an app identity, to
+// key its state) is joined only by `nanny run --join=<that id>`.
 //
-// Skipped on Windows: `dirs::home_dir()` uses the Windows API
-// (`SHGetKnownFolderPath` / `USERPROFILE`) and ignores the `HOME` environment
-// variable entirely. Setting `env("HOME", &temp)` has no effect — nanny reads
-// from the real user home, never finds the test state files, and falls back to
-// a local bridge without printing the detection message.
+// Sandboxed via NANNY_HOME, not HOME (see T7's comment for why).
 
-#[cfg(not(windows))]
 #[test]
-fn nanny_run_detects_network_server_and_prints_message() {
+fn nanny_run_joins_explicit_server_and_prints_message() {
     let dir  = temp_dir();
     let home = temp_dir();
 
-    // Write nanny.toml.
+    // Write nanny.toml for the joining client, deliberately different from
+    // the server's, to prove the client's own config isn't what matters here.
     fs::write(
         dir.join("nanny.toml"),
-        r#"[runtime]
-mode = "local"
-
-[start]
+        r#"[start]
 cmd = "echo nanny-detection-test"
 
 [limits]
@@ -520,17 +512,13 @@ log = "stdout"
     )
     .unwrap();
 
-    // Start a plain-HTTP governance server on a loopback port.
-    // We do this by running `nanny run --serve` in a background process
-    // with HOME=home so it writes its state files there.
+    // Start a plain-HTTP governance server on a loopback port, with its own
+    // app identity, `--serve` requires one to key its state.
     let server_port = 15901u16;
     let server_toml_dir = temp_dir();
     fs::write(
         server_toml_dir.join("nanny.toml"),
-        r#"[runtime]
-mode = "local"
-
-[start]
+        r#"[start]
 cmd = "echo unused"
 
 [limits]
@@ -543,10 +531,11 @@ log = "stdout"
 "#,
     )
     .unwrap();
+    let app_id = write_app_identity(&server_toml_dir);
 
     let mut server = Command::new(nanny_bin())
         .current_dir(&server_toml_dir)
-        .env("HOME", &home)
+        .env("NANNY_HOME", &home)
         .args(["run", "--serve", "--addr", &format!("127.0.0.1:{server_port}")])
         .spawn()
         .expect("governance server must spawn");
@@ -562,14 +551,13 @@ log = "stdout"
     }
     assert!(ready, "governance server must become ready within 5 s");
 
-    // Run `nanny run` with HOME pointing to the same home directory.
-    // try_detect_network_server reads ~/.nanny/server.addr and ~/.nanny/server.token.
+    // Join it explicitly by id.
     let output = Command::new(nanny_bin())
         .current_dir(&dir)
-        .env("HOME", &home)
-        .args(["--config", &config_arg(&dir), "run"])
+        .env("NANNY_HOME", &home)
+        .args(["--config", &config_arg(&dir), "run", &format!("--join={app_id}")])
         .output()
-        .expect("nanny run must complete");
+        .expect("nanny run --join must complete");
 
     let _ = server.kill();
     let _ = server.wait();
@@ -579,7 +567,7 @@ log = "stdout"
 
     assert!(
         output.status.success(),
-        "nanny run must exit 0 when routing through network server\nstdout: {}\nstderr: {}",
+        "nanny run --join must exit 0 when routing through the joined server\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
@@ -587,33 +575,28 @@ log = "stdout"
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("network server detected at"),
-        "nanny run must print 'network server detected at' when server is reachable\ngot: {stdout}"
+        "nanny run --join must print 'network server detected at' when the server is reachable\ngot: {stdout}"
     );
 }
 
-// ── T9: Stale server.addr is cleaned up when TCP probe fails ─────────────────
+// ── T9: nanny run --join=<id> fails loudly when that server isn't reachable ──
 //
-// When ~/.nanny/server.addr points to a port with nothing listening,
-// try_detect_network_server must delete the stale files and fall back to
-// a local bridge. nanny run must exit 0 (not crash).
+// An explicit `--join` that doesn't find its target is a mistake worth
+// surfacing, not something to quietly fall back to a local bridge for, the
+// old auto-detect behavior silently cleaned up stale state and ran locally
+// instead; the new explicit-join behavior errors instead, since the caller
+// asked for a SPECIFIC governor by id.
 //
-// Skipped on Windows: same `dirs::home_dir()` / `HOME` env var limitation as T8.
-// Nanny reads from the real user home, never sees the stale test files, and
-// exits 0 without performing any cleanup — making the assertion vacuously false.
+// Sandboxed via NANNY_HOME, not HOME (see T7's comment for why).
 
-#[cfg(not(windows))]
 #[test]
-fn stale_server_addr_cleaned_up_on_probe_failure() {
+fn join_to_unreachable_server_fails_loudly() {
     let dir  = temp_dir();
     let home = temp_dir();
 
-    // Write nanny.toml.
     fs::write(
         dir.join("nanny.toml"),
-        r#"[runtime]
-mode = "local"
-
-[start]
+        r#"[start]
 cmd = "echo nanny-stale-test"
 
 [limits]
@@ -627,39 +610,266 @@ log = "stdout"
     )
     .unwrap();
 
-    // Write stale state files pointing to a port with nothing listening.
-    let nanny_state = home.join(".nanny");
-    fs::create_dir_all(&nanny_state).unwrap();
-    // Port 1 is typically reserved / always unreachable on localhost.
-    fs::write(nanny_state.join("server.addr"), "127.0.0.1:1").unwrap();
-    fs::write(nanny_state.join("server.token"), "stale-token").unwrap();
+    // Write server state for an app id, pointing at a port with nothing
+    // listening, port 1 is typically reserved / always unreachable locally.
+    let app_id = "app_test_unreachable";
+    let state_dir = home.join(".nanny").join("servers").join(app_id);
+    fs::create_dir_all(&state_dir).unwrap();
+    fs::write(state_dir.join("server.addr"), "127.0.0.1:1").unwrap();
+    fs::write(state_dir.join("server.token"), "stale-token").unwrap();
 
     let output = Command::new(nanny_bin())
         .current_dir(&dir)
-        .env("HOME", &home)
-        .args(["--config", &config_arg(&dir), "run"])
+        .env("NANNY_HOME", &home)
+        .args(["--config", &config_arg(&dir), "run", &format!("--join={app_id}")])
         .output()
-        .expect("nanny run must complete");
-
-    // Check whether stale files were removed.
-    let addr_exists  = nanny_state.join("server.addr").exists();
-    let token_exists = nanny_state.join("server.token").exists();
+        .expect("nanny run --join must complete");
 
     let _ = fs::remove_dir_all(&dir);
     let _ = fs::remove_dir_all(&home);
 
     assert!(
+        !output.status.success(),
+        "nanny run --join must exit non-zero when the target server isn't reachable"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("not reachable") || stderr.contains(app_id),
+        "stderr must explain the join failure by app id; got: {stderr}"
+    );
+}
+
+// ── T10: proxy env vars are auto-injected when the SERVER has [proxy] configured ─
+//
+// The server's own nanny.toml (not the client's) decides whether [proxy]
+// allowed_hosts is active. When it is, cmd_run_via_network_server must set
+// HTTPS_PROXY / HTTP_PROXY (and lowercase) on the child pointing at the
+// governor, plus NO_PROXY for the loopback address — without the dev setting
+// anything by hand. Uses a different directory/nanny.toml for the server vs.
+// the client on purpose, matching how these are used in practice.
+//
+// Sandboxed via NANNY_HOME, not HOME (see T7's comment for why).
+
+#[test]
+fn proxy_env_vars_injected_when_server_has_proxy_configured() {
+    let dir  = temp_dir();
+    let home = temp_dir();
+
+    // Client nanny.toml — deliberately has NO [proxy] section, to prove the
+    // decision comes from the server's config, not this one. [start].cmd is
+    // spawned directly (no shell), so "sh -c ..." only works where a real
+    // `sh` is on PATH — use cmd.exe's own syntax on Windows instead.
+    #[cfg(not(windows))]
+    let print_cmd = "sh -c 'echo GOT:HTTPS_PROXY=$HTTPS_PROXY:HTTP_PROXY=$HTTP_PROXY:NO_PROXY=$NO_PROXY'";
+    #[cfg(windows)]
+    let print_cmd = "cmd /c 'echo GOT:HTTPS_PROXY=%HTTPS_PROXY%:HTTP_PROXY=%HTTP_PROXY%:NO_PROXY=%NO_PROXY%'";
+
+    fs::write(
+        dir.join("nanny.toml"),
+        format!(
+            r#"[start]
+cmd = "{print_cmd}"
+
+[limits]
+steps   = 10
+tokens  = 100
+timeout = 10000
+
+[observability]
+log = "stdout"
+"#
+        ),
+    )
+    .unwrap();
+
+    // Server nanny.toml — [proxy] allowed_hosts is what should drive injection.
+    let server_toml_dir = temp_dir();
+    fs::write(
+        server_toml_dir.join("nanny.toml"),
+        r#"[start]
+cmd = "echo unused"
+
+[limits]
+steps   = 100
+tokens  = 1000
+timeout = 60000
+
+[proxy]
+allowed_hosts = ["api.openai.com"]
+
+[observability]
+log = "stdout"
+"#,
+    )
+    .unwrap();
+    let app_id = write_app_identity(&server_toml_dir);
+
+    let server_port = 15902u16;
+    let mut server = Command::new(nanny_bin())
+        .current_dir(&server_toml_dir)
+        .env("NANNY_HOME", &home)
+        .args(["run", "--serve", "--addr", &format!("127.0.0.1:{server_port}")])
+        .spawn()
+        .expect("governance server must spawn");
+
+    let mut ready = false;
+    for _ in 0..50 {
+        if std::net::TcpStream::connect(format!("127.0.0.1:{server_port}")).is_ok() {
+            ready = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(ready, "governance server must become ready within 5 s");
+
+    // proxy_token, a separate CONNECT-only credential from the session token,
+    // is embedded as userinfo in the injected proxy URL (so the child's HTTP
+    // client sends it as Proxy-Authorization on CONNECT). Read the real value
+    // the server wrote so the assertion below matches exactly.
+    let token = fs::read_to_string(
+        home.join(".nanny").join("servers").join(&app_id).join("server.proxy_token"),
+    )
+    .expect("server.proxy_token must exist")
+    .trim()
+    .to_string();
+
+    let output = Command::new(nanny_bin())
+        .current_dir(&dir)
+        .env("NANNY_HOME", &home)
+        .args(["--config", &config_arg(&dir), "run", &format!("--join={app_id}")])
+        .output()
+        .expect("nanny run must complete");
+
+    let _ = server.kill();
+    let _ = server.wait();
+    let _ = fs::remove_dir_all(&dir);
+    let _ = fs::remove_dir_all(&home);
+    let _ = fs::remove_dir_all(&server_toml_dir);
+
+    assert!(
         output.status.success(),
-        "nanny run must exit 0 when stale server.addr is cleaned up\nstdout: {}\nstderr: {}",
+        "nanny run must exit 0\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
-    assert!(
-        !addr_exists,
-        "stale server.addr must be deleted when TCP probe fails"
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let expected = format!(
+        "GOT:HTTPS_PROXY=http://{token}:@127.0.0.1:{server_port}:HTTP_PROXY=http://{token}:@127.0.0.1:{server_port}:NO_PROXY=127.0.0.1,localhost"
     );
     assert!(
-        !token_exists,
-        "stale server.token must be deleted when TCP probe fails"
+        stdout.contains(&expected),
+        "child must see HTTPS_PROXY/HTTP_PROXY/NO_PROXY pointed at the governor, \
+         with the session token embedded as Proxy-Authorization userinfo\n\
+         expected to find: {expected}\ngot stdout: {stdout}"
+    );
+}
+
+// ── T11: proxy env vars are NOT injected when the server has no [proxy] ──────
+//
+// Regression guard for the opposite case: a server with no [proxy] section
+// (or an empty allowed_hosts) must not cause the child to get HTTPS_PROXY/
+// HTTP_PROXY pointed at it — that would route all outbound traffic into a
+// proxy that immediately 404s every CONNECT ("proxy not configured"),
+// breaking legitimate calls.
+//
+// Sandboxed via NANNY_HOME, not HOME (see T7's comment for why).
+
+#[test]
+fn proxy_env_vars_not_injected_when_server_has_no_proxy_configured() {
+    let dir  = temp_dir();
+    let home = temp_dir();
+
+    // cmd.exe and sh disagree on how an UNSET variable prints: sh's $VAR
+    // expands to empty, cmd.exe's %VAR% is left as the literal text when the
+    // variable doesn't exist. The expected assertion below accounts for that.
+    #[cfg(not(windows))]
+    let print_cmd = "sh -c 'echo GOT:HTTPS_PROXY=[$HTTPS_PROXY]'";
+    #[cfg(windows)]
+    let print_cmd = "cmd /c 'echo GOT:HTTPS_PROXY=[%HTTPS_PROXY%]'";
+
+    fs::write(
+        dir.join("nanny.toml"),
+        format!(
+            r#"[start]
+cmd = "{print_cmd}"
+
+[limits]
+steps   = 10
+tokens  = 100
+timeout = 10000
+
+[observability]
+log = "stdout"
+"#
+        ),
+    )
+    .unwrap();
+
+    // Server nanny.toml — no [proxy] section at all.
+    let server_toml_dir = temp_dir();
+    fs::write(
+        server_toml_dir.join("nanny.toml"),
+        r#"[start]
+cmd = "echo unused"
+
+[limits]
+steps   = 100
+tokens  = 1000
+timeout = 60000
+
+[observability]
+log = "stdout"
+"#,
+    )
+    .unwrap();
+    let app_id = write_app_identity(&server_toml_dir);
+
+    let server_port = 15903u16;
+    let mut server = Command::new(nanny_bin())
+        .current_dir(&server_toml_dir)
+        .env("NANNY_HOME", &home)
+        .args(["run", "--serve", "--addr", &format!("127.0.0.1:{server_port}")])
+        .spawn()
+        .expect("governance server must spawn");
+
+    let mut ready = false;
+    for _ in 0..50 {
+        if std::net::TcpStream::connect(format!("127.0.0.1:{server_port}")).is_ok() {
+            ready = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(ready, "governance server must become ready within 5 s");
+
+    let output = Command::new(nanny_bin())
+        .current_dir(&dir)
+        .env("NANNY_HOME", &home)
+        .args(["--config", &config_arg(&dir), "run", &format!("--join={app_id}")])
+        .output()
+        .expect("nanny run must complete");
+
+    let _ = server.kill();
+    let _ = server.wait();
+    let _ = fs::remove_dir_all(&dir);
+    let _ = fs::remove_dir_all(&home);
+    let _ = fs::remove_dir_all(&server_toml_dir);
+
+    assert!(
+        output.status.success(),
+        "nanny run must exit 0\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    #[cfg(not(windows))]
+    let expected = "GOT:HTTPS_PROXY=[]";
+    #[cfg(windows)]
+    let expected = "GOT:HTTPS_PROXY=[%HTTPS_PROXY%]";
+    assert!(
+        stdout.contains(expected),
+        "HTTPS_PROXY must be unset when the server has no [proxy] configured\ngot stdout: {stdout}"
     );
 }

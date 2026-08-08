@@ -1,9 +1,6 @@
 # nanny.toml — qabud (code review agent)
 # Run: nanny run -- ./src
 
-[runtime]
-mode = "local"
-
 [start]
 cmd = "cargo run --release"
 

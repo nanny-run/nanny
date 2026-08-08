@@ -4,9 +4,14 @@
 // standalone governance server for cross-process or cross-machine enforcement.
 //
 // Implementation:
-//   start  — build BridgeComponents from nanny.toml, call NetworkServer::start_blocking
-//   stop   — send SIGTERM to PID in ~/.nanny/server.pid
-//   status — TCP-connect to address in ~/.nanny/server.addr and call /health
+//   start:  build BridgeComponents from nanny.toml, call NetworkServer::start_blocking
+//   stop:   send SIGTERM to PID in ~/.nanny/servers/<app_id>/server.pid
+//   status: TCP-connect to address in ~/.nanny/servers/<app_id>/server.addr and call /health
+//
+// State is keyed by app id, not global: two unrelated apps' governors on one
+// machine each get their own subdirectory under ~/.nanny/servers/ and can
+// never collide or overwrite each other's state files (the bug this whole
+// keying scheme exists to fix).
 
 use anyhow::{Context, Result};
 use std::net::SocketAddr;
@@ -16,6 +21,7 @@ use nanny_bridge::network::NetworkServer;
 use nanny_config;
 use nanny_core::agent::limits::Limits;
 
+use crate::identity::AppIdentity;
 use crate::runtime::build_bridge_components;
 
 use super::certs::default_certs_dir;
@@ -26,13 +32,40 @@ use super::certs::default_certs_dir;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Path to ~/.nanny — created on demand.
-fn nanny_state_dir() -> Result<PathBuf> {
-    let dir = dirs::home_dir()
-        .context("cannot determine home directory")?
-        .join(".nanny");
-    std::fs::create_dir_all(&dir).context("failed to create ~/.nanny")?;
+/// The directory `.nanny/servers/<app_id>` is nested under. `NANNY_HOME`
+/// overrides it when set (a real, always-available override, not just for
+/// tests); otherwise falls back to the OS home directory. Reading an env var
+/// is portable, unlike overriding `HOME` directly: `dirs::home_dir()` ignores
+/// `HOME` on Windows, so it's the only override that works identically
+/// everywhere `nanny` runs.
+fn nanny_home_dir() -> Result<PathBuf> {
+    if let Ok(dir) = std::env::var("NANNY_HOME") {
+        if !dir.is_empty() {
+            return Ok(PathBuf::from(dir));
+        }
+    }
+    dirs::home_dir().context("cannot determine home directory")
+}
+
+/// Path to ~/.nanny/servers/<app_id>, created on demand. Public so `main.rs`
+/// can resolve the same path for `nanny run --join=<appId>`.
+pub fn nanny_server_state_dir(app_id: &str) -> Result<PathBuf> {
+    let dir = nanny_home_dir()?.join(".nanny").join("servers").join(app_id);
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("failed to create {}", dir.display()))?;
     Ok(dir)
+}
+
+/// Resolve which app's governor a command should act on: the explicit
+/// `--app=<appId>` flag if given, else the identity of the app in the current
+/// directory. No further fallback, a missing id either way is a loud error,
+/// never a silent guess at "the" server.
+fn resolve_app_id(explicit: Option<String>) -> Result<String> {
+    if let Some(id) = explicit {
+        return Ok(id);
+    }
+    let cwd = std::env::current_dir().context("cannot determine current directory")?;
+    Ok(AppIdentity::load_required(&cwd)?.app_id)
 }
 
 // ── nanny run --serve (governance server start) ───────────────────────────────
@@ -50,13 +83,18 @@ pub fn cmd_server_start(
     ca: Option<PathBuf>,
     no_sync: bool,
 ) -> Result<()> {
+    let cwd = std::env::current_dir().context("cannot determine current directory")?;
+
     // Load nanny.toml from CWD.
-    let toml_path = std::env::current_dir()
-        .context("cannot determine current directory")?
-        .join("nanny.toml");
+    let toml_path = cwd.join("nanny.toml");
     let config = nanny_config::load(&toml_path).map_err(|e| {
         anyhow::anyhow!("failed to load nanny.toml: {e}\n\nRun `nanny init` to create one.")
     })?;
+
+    // An app identity is required to key this governor's state, without it
+    // two unrelated `--serve` instances on one machine would collide again,
+    // exactly the bug this keying exists to fix.
+    let app = AppIdentity::load_required(&cwd)?;
 
     // Proxy mode is opt-in.
     // If [proxy] exists but allowed_hosts is empty or omitted, proxy is treated as not configured.
@@ -103,19 +141,32 @@ pub fn cmd_server_start(
         }
     }
 
-    // Write the listen address to ~/.nanny/server.addr so `nanny status`
-    // and `nanny run` can discover the server without config.
-    let state_dir = nanny_state_dir()?;
+    // Write the listen address to ~/.nanny/servers/<app_id>/server.addr so
+    // `nanny status --app=<appId>` and `nanny run --join=<appId>` can discover this
+    // exact server without config, and never collide with a different app's
+    // governor on the same machine.
+    let state_dir = nanny_server_state_dir(&app.app_id)?;
     std::fs::write(state_dir.join("server.addr"), addr.to_string())
-        .context("failed to write ~/.nanny/server.addr")?;
+        .with_context(|| format!("failed to write {}", state_dir.join("server.addr").display()))?;
 
-    // Cloud forwarding (auth-free, cli-side): the same gate as `nanny run` —
-    // mode = "managed" AND logged in, and not --no-sync. The engine only exposes
-    // events; the forwarder that talks to the cloud lives here. `resolve_sync`
-    // prints the "managed but not logged in" nudge itself.
+    // Record whether this server has [proxy] allowed_hosts active, so a
+    // joining `nanny run --join=<appId>` (possibly in a different directory with
+    // its own, irrelevant nanny.toml) knows whether to inject
+    // HTTPS_PROXY/HTTP_PROXY, the proxy is configured on the SERVER's config,
+    // not the client's.
+    std::fs::write(
+        state_dir.join("server.proxy"),
+        if proxy_allowed_hosts.is_some() { "1" } else { "0" },
+    )
+    .with_context(|| format!("failed to write {}", state_dir.join("server.proxy").display()))?;
+
+    // Cloud forwarding: sync happens exactly when an app-scoped credential is
+    // present (self-minted here if this machine is logged in but this app
+    // isn't yet), and --no-sync didn't turn it off. The engine only exposes
+    // events; the forwarder that talks to the cloud lives here.
     let session_token = uuid::Uuid::new_v4().to_string();
-    let credentials = crate::credentials::Credentials::load().ok().flatten();
-    let event_sink = match crate::sync::resolve_sync(&config, credentials.as_ref(), no_sync) {
+    let credentials = crate::app_credentials::maybe_self_mint(&cwd, &app.app_id);
+    let event_sink = match crate::sync::resolve_sync(credentials.as_ref(), no_sync) {
         Some(target) => {
             println!(
                 "nanny: syncing fleet events to {} (enforcement stays local)",
@@ -128,6 +179,19 @@ pub fn cmd_server_start(
         None => None,
     };
 
+    // [observability] applies to --serve exactly the same way it applies to
+    // local `nanny run`: the config makes the same promise either way ("here's
+    // where your event log goes"), so it must be honored the same way either
+    // way. `log = "stdout"` stays a no-op here on purpose: a long-lived
+    // server continuously mixing NDJSON events into its own startup/status
+    // stdout output would be noisy and wrong, unlike a short-lived local run
+    // where that's the whole point. Uses the same resolution logic as local
+    // `nanny run` (`ObservabilityConfig::resolve_log_path`), so both paths
+    // land on the same `.nanny/logs/<name>` file.
+    let local_log_path = config.observability.resolve_log_path(&cwd)?;
+
+    println!("nanny: name ({}), appId ({})", app.name, app.app_id);
+
     // Blocking — returns only when the server shuts down (CTRL-C / SIGTERM).
     NetworkServer::start_blocking_synced(
         addr,
@@ -139,6 +203,8 @@ pub fn cmd_server_start(
         Some(session_token),
         RATE_LIMIT_RPS,
         event_sink,
+        nanny_server_state_dir(&app.app_id)?,
+        local_log_path,
     )?;
 
     Ok(())
@@ -146,14 +212,15 @@ pub fn cmd_server_start(
 
 // ── nanny stop (governance server stop) ───────────────────────────────────────
 
-pub fn cmd_server_stop() -> Result<()> {
-    let state_dir = nanny_state_dir()?;
+pub fn cmd_server_stop(app: Option<String>) -> Result<()> {
+    let app_id = resolve_app_id(app)?;
+    let state_dir = nanny_server_state_dir(&app_id)?;
     let pid_file = state_dir.join("server.pid");
 
     let raw = std::fs::read_to_string(&pid_file).with_context(|| {
         format!(
-            "no running server found (PID file not present at {})\n\
-             Start the server with: nanny run --serve",
+            "no running server found for app '{app_id}' (PID file not present at {})\n\
+             Start it with: nanny run --serve  (from that app's directory)",
             pid_file.display()
         )
     })?;
@@ -171,10 +238,10 @@ pub fn cmd_server_stop() -> Result<()> {
         if !status.success() {
             anyhow::bail!(
                 "failed to stop server (PID {pid}) — it may have already exited.\n\
-                 Check with: nanny status"
+                 Check with: nanny status --app={app_id}"
             );
         }
-        println!("nanny: governance server stopped (PID {pid})");
+        println!("nanny: governance server stopped (PID {pid}, app {app_id})");
     }
 
     #[cfg(windows)]
@@ -186,10 +253,10 @@ pub fn cmd_server_stop() -> Result<()> {
         if !status.success() {
             anyhow::bail!(
                 "failed to stop server (PID {pid}) — it may have already exited.\n\
-                 Check with: nanny status"
+                 Check with: nanny status --app={app_id}"
             );
         }
-        println!("nanny: governance server stopped (PID {pid})");
+        println!("nanny: governance server stopped (PID {pid}, app {app_id})");
     }
 
     Ok(())
@@ -197,15 +264,16 @@ pub fn cmd_server_stop() -> Result<()> {
 
 // ── nanny status (governance server status) ───────────────────────────────────
 
-pub fn cmd_server_status() -> Result<()> {
-    let state_dir = nanny_state_dir()?;
+pub fn cmd_server_status(app: Option<String>) -> Result<()> {
+    let app_id = resolve_app_id(app)?;
+    let state_dir = nanny_server_state_dir(&app_id)?;
     let addr_file = state_dir.join("server.addr");
 
     // Read the stored listen address.
     let addr_str = std::fs::read_to_string(&addr_file).with_context(|| {
         format!(
-            "no server address found (file not present at {})\n\
-             Start the server with: nanny run --serve",
+            "no server address found for app '{app_id}' (file not present at {})\n\
+             Start it with: nanny run --serve  (from that app's directory)",
             addr_file.display()
         )
     })?;
@@ -215,6 +283,7 @@ pub fn cmd_server_status() -> Result<()> {
     match std::net::TcpStream::connect(addr) {
         Ok(_) => {
             println!("nanny: governance server running");
+            println!("  appId  : {app_id}");
             println!("  address: {addr}");
 
             // Read PID if available.
@@ -236,4 +305,47 @@ pub fn cmd_server_status() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Regression coverage for the bug this whole per-app keying scheme exists
+    // to fix: two unrelated apps' governor state must never collide, and the
+    // same app id must always resolve to the same directory.
+
+    #[test]
+    fn different_app_ids_get_different_state_dirs() {
+        let a = nanny_server_state_dir("app_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+        let b = nanny_server_state_dir("app_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap();
+        assert_ne!(a, b, "two different app ids must never resolve to the same state dir");
+    }
+
+    #[test]
+    fn same_app_id_is_stable_across_calls() {
+        let a1 = nanny_server_state_dir("app_cccccccccccccccccccccccccccccc").unwrap();
+        let a2 = nanny_server_state_dir("app_cccccccccccccccccccccccccccccc").unwrap();
+        assert_eq!(a1, a2, "the same app id must always resolve to the same state dir");
+    }
+
+    #[test]
+    fn state_dir_is_scoped_under_servers_by_app_id() {
+        let id = "app_dddddddddddddddddddddddddddddd";
+        let dir = nanny_server_state_dir(id).unwrap();
+        assert!(
+            dir.ends_with(format!("servers/{id}")),
+            "state dir must be nested under .nanny/servers/<app_id>, got {}",
+            dir.display()
+        );
+    }
+
+    #[test]
+    fn resolve_app_id_prefers_explicit_over_cwd() {
+        // The explicit --app=<id> flag must win outright, with no fallback to
+        // the current directory's own identity, no ambiguity about which
+        // governor a command targets when both are available.
+        let id = resolve_app_id(Some("app_explicit_wins".to_string())).unwrap();
+        assert_eq!(id, "app_explicit_wins");
+    }
 }

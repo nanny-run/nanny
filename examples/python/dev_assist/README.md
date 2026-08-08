@@ -107,7 +107,7 @@ nanny-sdk = { path = "../../../sdks/python" }   # instead of nanny-sdk==<version
 
 Then run `uv sync` to install from the local source.
 
-The `[tool.uv.sources]` override wires this example to the local SDK. The `nanny` CLI binary (which contains the bridge) is separate — reinstall it from local source so both are in sync:
+The `[tool.uv.sources]` override wires this example to the local SDK. The `nanny` CLI binary is a separate build — reinstall it from local source so both are in sync:
 
 ```sh
 # from the workspace root (nanny/)

@@ -6,11 +6,6 @@ description: Complete schema for the nanny.toml configuration file.
 ## Full schema
 
 ```toml
-# ── Runtime ─────────────────────────────────────────────────────────────────────────────
-
-[runtime]
-mode = "local"   # "local" | "managed"
-
 # ── Start ─────────────────────────────────────────────────────────────────────
 
 [start]
@@ -42,25 +37,17 @@ tokens_per_call = 20    # overrides the decorator/macro default if set
 # ── Observability ─────────────────────────────────────────────────────────────
 
 [observability]
-log      = "stdout"          # "stdout" | "file"
-log_file = "nanny.log"       # Required when log = "file"
+log  = "stdout"   # "stdout" | "file" — "file" writes to .nanny/logs/log.ndjson
+# file = "events"   # optional, bare name only, no extension — see below
 
 # ── Proxy ─────────────────────────────────────────────────────────────────────
 
 [proxy]
 allowed_hosts = ["api.openai.com", "*.anthropic.com"]   # required when proxy mode is used
 
-# Cloud sync is turned on by `mode = "managed"` above plus `nanny auth login`.
-# There is no endpoint or key in this file — see [runtime].mode below.
+# Cloud sync isn't a config field. It turns on for any machine that's run
+# `nanny auth login`. There is no endpoint or key in this file.
 ```
-
----
-
-## [runtime]
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `mode` | `"local"` \| `"managed"` | `"local"` | `"local"` enforces locally with no network calls. `"managed"` additionally syncs the event log to Nanny Cloud **when you're logged in** (`nanny auth login`). Enforcement stays local either way. See [Connect to Nanny Cloud](/v0.4/guides/managed-mode). |
 
 ---
 
@@ -137,7 +124,7 @@ The tool name in `[tools.<name>]` must exactly match the function name used in t
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `log` | `"stdout"` \| `"file"` | `"stdout"` | Destination for the NDJSON event stream. |
-| `log_file` | string | — | Required when `log = "file"`. Path to the output file. |
+| `file` | string | `"log"` | Optional. A bare name, no extension and no path separators — Nanny always appends `.ndjson`. The directory is always `.nanny/logs/`, owned by Nanny, auto-created and gitignored — not configurable. |
 
 ---
 
@@ -151,13 +138,15 @@ Proxy mode is active only when `allowed_hosts` is present and non-empty. An empt
 |-------|------|---------|-------------|
 | `allowed_hosts` | string array | `[]` | Hostnames the proxy may forward to. Supports exact names (`api.openai.com`) and `*.suffix` wildcard patterns. Loopback, link-local, and RFC-1918 ranges are always blocked regardless of this list. |
 
-See [HTTP proxy mode](/v0.4/guides/http-proxy-mode) for full details.
+The CONNECT tunnel authenticates with its own `proxy_token`, separate from the ordinary session token. `nanny run --serve`/`--join` inject it automatically, so nothing in this section needs a credential.
+
+See [HTTP proxy mode](/v0.5/guides/http-proxy-mode) for full details.
 
 ---
 
 ## Cloud sync
 
-Cloud sync has no config block. It turns on when **both** are true: `[runtime] mode = "managed"` above, and you're logged in via `nanny auth login`. No key, endpoint, or org lives in `nanny.toml` — login handles the credential, so your committed config never holds a secret.
+Cloud sync has no config block. It turns on for any machine that's logged in via `nanny auth login`, no separate field to flip. No key, endpoint, or org lives in `nanny.toml`: login handles the credential, so your committed config never holds a secret.
 
-See [Connect to Nanny Cloud](/v0.4/guides/managed-mode) for the full flow, including the `--token` path for CI and headless machines.
+See [Connect to Nanny Cloud](/v0.5/guides/managed-mode) for the full flow, including the `--token` path for CI and headless machines.
 

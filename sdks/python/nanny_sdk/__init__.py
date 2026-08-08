@@ -21,6 +21,7 @@ from nanny_sdk.exceptions import (
     ToolDenied,
 )
 from nanny_sdk.instrument import instrument
+from nanny_sdk.run import fresh_run
 
 __all__ = [
     # Decorators
@@ -29,6 +30,8 @@ __all__ = [
     "agent",
     # LLM instrumentation
     "instrument",
+    # Run control
+    "fresh_run",
     # Exceptions
     "NannyStop",
     "MaxStepsReached",

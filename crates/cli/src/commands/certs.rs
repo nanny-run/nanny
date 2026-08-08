@@ -673,30 +673,41 @@ fn check_git_warning(dir: &Path) {
     }
 }
 
-/// Check whether the governance server is running (TCP connectivity check).
-/// Used to hint that hot-reload will happen after import or rotate.
+/// Check whether any governance server is running (TCP connectivity check).
+/// Used to hint that hot-reload will happen after import or rotate. Certs are
+/// shared, global material (`~/.nanny/certs/`); governors are per-app
+/// (`~/.nanny/servers/<app_id>/`), so there's no single app id to check here;
+/// this reports true if at least one is reachable.
 fn nanny_server_is_running() -> bool {
-    // Prefer the injected env var; fall back to ~/.nanny/server.addr written
-    // by `nanny run --serve` so this works from any terminal, not just a
-    // governed child process.
-    let addr = std::env::var("NANNY_BRIDGE_ADDR").ok().or_else(|| {
-        dirs::home_dir()
-            .map(|h| h.join(".nanny").join("server.addr"))
-            .and_then(|p| std::fs::read_to_string(p).ok())
-            .map(|s| s.trim().to_string())
-    });
-
-    match addr {
-        Some(a) => {
-            if let Some((host, port_str)) = a.rsplit_once(':') {
-                if let Ok(port) = port_str.parse::<u16>() {
-                    return std::net::TcpStream::connect((host, port)).is_ok();
-                }
-            }
-            false
+    // Prefer the injected env var: cheap, and correct for a governed child
+    // process without needing to scan anything.
+    if let Ok(addr) = std::env::var("NANNY_BRIDGE_ADDR") {
+        if addr_is_reachable(&addr) {
+            return true;
         }
-        None => false,
     }
+
+    // Otherwise scan every app's server state dir for a reachable server.addr.
+    let Some(servers_dir) = dirs::home_dir().map(|h| h.join(".nanny").join("servers")) else {
+        return false;
+    };
+    let Ok(entries) = std::fs::read_dir(&servers_dir) else {
+        return false;
+    };
+    entries
+        .filter_map(|e| e.ok())
+        .filter_map(|e| std::fs::read_to_string(e.path().join("server.addr")).ok())
+        .any(|addr| addr_is_reachable(addr.trim()))
+}
+
+fn addr_is_reachable(addr: &str) -> bool {
+    let Some((host, port_str)) = addr.rsplit_once(':') else {
+        return false;
+    };
+    let Ok(port) = port_str.parse::<u16>() else {
+        return false;
+    };
+    std::net::TcpStream::connect((host, port)).is_ok()
 }
 
 /// Validate that a string looks like PEM (starts with -----BEGIN).

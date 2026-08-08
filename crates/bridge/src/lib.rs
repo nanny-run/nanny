@@ -392,7 +392,6 @@ fn dispatch(
         ("POST", "/rule/evaluate") => handle_rule_evaluate(&req.body, shared),
         ("POST", "/agent/enter")   => handle_agent_enter(&req.body, shared),
         ("POST", "/agent/exit")    => handle_agent_exit(shared),
-        ("POST", "/step")          => handle_step(shared),
         ("POST", "/llm/usage")     => handle_llm_usage(&req.body, shared),
         ("POST", "/harness")       => handle_harness(&req.body, shared),
         _                          => BridgeResp::json(404, r#"{"error":"Not Found"}"#),
@@ -526,6 +525,11 @@ pub(crate) fn handle_tool_call(
                             ts: now_ms(),
                             tool: call.tool.clone(),
                         });
+                        let step_now = guard.step_count;
+                        append_event(&mut guard, ExecutionEvent::StepCompleted {
+                            ts: now_ms(),
+                            step: step_now,
+                        });
                         if guard.tokens_spent >= guard.current_limits.max_tokens {
                             mark_stopped(&mut guard, "BudgetExhausted");
                         }
@@ -559,6 +563,11 @@ pub(crate) fn handle_tool_call(
                         append_event(&mut guard, ExecutionEvent::ToolAllowed {
                             ts: now_ms(),
                             tool: call.tool.clone(),
+                        });
+                        let step_now = guard.step_count;
+                        append_event(&mut guard, ExecutionEvent::StepCompleted {
+                            ts: now_ms(),
+                            step: step_now,
                         });
                         if guard.tokens_spent >= guard.current_limits.max_tokens {
                             mark_stopped(&mut guard, "BudgetExhausted");
@@ -666,50 +675,15 @@ pub(crate) fn handle_agent_exit(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp 
     BridgeResp::json(200, r#"{"status":"ok"}"#)
 }
 
-pub(crate) fn handle_step(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
-    let mut guard = shared.lock().unwrap();
-    guard.step_count += 1;
-
-    let elapsed_ms = guard.start_time.elapsed().as_millis() as u64;
-    let ctx = PolicyContext {
-        step_count: guard.step_count,
-        elapsed_ms,
-        requested_tool: None,
-        tokens_spent: guard.tokens_spent,
-        next_tool_tokens: 0,
-        tool_call_counts: guard.tool_call_counts.clone(),
-        tool_call_history: guard.tool_call_history.clone(),
-        last_tool_args: HashMap::new(),
-    };
-
-    let step_now = guard.step_count;
-    append_event(&mut guard, ExecutionEvent::StepCompleted {
-        ts: now_ms(),
-        step: step_now,
-    });
-
-    match guard.limits_policy.evaluate(&ctx) {
-        PolicyDecision::Deny { reason } => {
-            let name = stop_reason_name(&reason).to_string();
-            mark_stopped(&mut guard, &name);
-            BridgeResp::json(200, format!(
-                r#"{{"status":"stopped","reason":"{}","step":{}}}"#,
-                name, guard.step_count
-            ))
-        }
-        PolicyDecision::Allow => BridgeResp::json(
-            200,
-            format!(r#"{{"status":"running","step":{}}}"#, guard.step_count),
-        ),
-    }
-}
-
 /// POST /llm/usage {"input": N, "output": N, "model"?: "...", "provider"?: "..."}
 ///
 /// Submits LLM token usage from `nanny::report_usage` (Rust) or a
 /// nanny.instrument()-wrapped client (Python). Debits `input + output` tokens
 /// from the shared ledger and emits an `LlmUsageRecorded` audit event. The
 /// optional `model`/`provider` are recorded as labels only — no pricing.
+/// The optional `cache_read`/`cache_write` are a finer split of `input` for
+/// providers that report prompt-caching usage — reporting only, never
+/// debited separately from `input`.
 ///
 /// Returns `{"status":"ok"}` if accepted.
 /// Returns `{"status":"denied","reason":"BudgetExhausted"}` if the submission
@@ -734,6 +708,14 @@ pub(crate) fn handle_llm_usage(body: &[u8], shared: &Arc<Mutex<BridgeState>>) ->
         model: Option<String>,
         #[serde(default)]
         provider: Option<String>,
+        // Optional finer split of `input` (never additional tokens beyond
+        // it), present only for providers that report prompt-caching usage.
+        // Reporting only, same as model/provider — never debited separately,
+        // `total` below still just sums input + output regardless.
+        #[serde(default)]
+        cache_read: Option<u64>,
+        #[serde(default)]
+        cache_write: Option<u64>,
         // Optional harness, auto-detected by the SDK and (re)sent on every call.
         // Deduped by `record_harness`, so resending it is cheap.
         #[serde(default)]
@@ -766,6 +748,8 @@ pub(crate) fn handle_llm_usage(body: &[u8], shared: &Arc<Mutex<BridgeState>>) ->
         output: req.output,
         model: req.model,
         provider: req.provider,
+        cache_read: req.cache_read,
+        cache_write: req.cache_write,
     });
 
     let max_tokens = guard.current_limits.max_tokens;
@@ -1040,7 +1024,7 @@ pub(crate) fn handle_stop(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> Brid
 /// Mark execution as stopped.
 /// Idempotent — does nothing if already stopped.
 /// ExecutionStopped is emitted by the CLI, not the bridge.
-fn mark_stopped(state: &mut BridgeState, reason: &str) {
+pub(crate) fn mark_stopped(state: &mut BridgeState, reason: &str) {
     if matches!(state.execution, ExecutionState::Stopped { .. }) {
         return;
     }
@@ -1673,30 +1657,41 @@ mod tests {
     // ── Day 5 tests ───────────────────────────────────────────────────────────
 
     #[test]
-    fn step_increments_count_and_returns_running() {
+    fn tool_call_increments_step_and_status_reports_running() {
         let b = started(1000);
-        let (s, body) = post(&b, "/step", "{}");
+        let (s, body) = post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);
         assert_eq!(s, 200);
-        let v = json_val(&body);
-        assert_eq!(v["status"], "running");
+        assert_eq!(json_val(&body)["status"], "allowed");
+
+        let (_, status) = get(&b, "/status");
+        let v = json_val(&status);
+        assert_eq!(v["state"], "running");
         assert_eq!(v["step"], 1);
     }
 
     #[test]
-    fn step_stops_at_max_steps() {
+    fn tool_call_stops_at_max_steps() {
+        // max_steps is evaluated against the step count *before* the current
+        // call (see handle_tool_call: ctx.step_count = guard.step_count,
+        // read prior to that call's own increment), so with max_steps=1 the
+        // first call is allowed (0 >= 1 is false) and the second is denied
+        // (1 >= 1 is true) — not denied on the very first call.
         let b = Bridge::start(BridgeComponents {
-            registry: ToolRegistry::new(),
             limits: Limits { max_steps: 1, max_tokens: 1000, timeout_ms: 30_000 },
-            named_limits: Default::default(),
-            allowed_tools: vec![],
-            per_tool_max_calls: Default::default(),
+            ..echo_components(1000)
         }).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
-        let (_, body) = post(&b, "/step", "{}");
-        let v = json_val(&body);
-        assert_eq!(v["status"], "stopped");
-        assert_eq!(v["reason"], "MaxStepsReached");
+
+        let (_, first) = post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);
+        assert_eq!(json_val(&first)["status"], "allowed");
+        assert!(matches!(b.execution_state(), ExecutionState::Running));
+
+        let (_, second) = post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);
+        assert_eq!(json_val(&second)["status"], "denied");
         assert!(matches!(b.execution_state(), ExecutionState::Stopped { .. }));
+
+        let (_, status) = get(&b, "/status");
+        assert_eq!(json_val(&status)["reason"], "MaxStepsReached");
     }
 
     #[test]
@@ -1740,6 +1735,35 @@ mod tests {
         // Absent labels are skipped, not serialized as null.
         assert!(usage.get("model").is_none());
         assert!(usage.get("provider").is_none());
+        assert!(usage.get("cache_read").is_none());
+        assert!(usage.get("cache_write").is_none());
+    }
+
+    #[test]
+    fn llm_usage_carries_cache_read_and_write() {
+        let b = started(1000);
+        let (s, body) = post(
+            &b,
+            "/llm/usage",
+            r#"{"input":30,"output":12,"provider":"anthropic","cache_read":5,"cache_write":10}"#,
+        );
+        assert_eq!(s, 200);
+        assert_eq!(json_val(&body)["status"], "ok");
+
+        // Debited exactly input+output — cache_read/cache_write never change
+        // the debit, they're a reporting-only split of input already
+        // included in it, never additional tokens.
+        let (_, status) = get(&b, "/status");
+        assert_eq!(json_val(&status)["tokens_spent"], 42);
+
+        let (_, events) = get(&b, "/events");
+        let usage = events
+            .lines()
+            .map(json_val)
+            .find(|e| e["event"] == "LlmUsageRecorded")
+            .expect("LlmUsageRecorded event must appear in /events");
+        assert_eq!(usage["cache_read"], 5);
+        assert_eq!(usage["cache_write"], 10);
     }
 
     #[test]
@@ -1836,14 +1860,14 @@ mod tests {
     #[test]
     fn status_returns_running_with_counters() {
         let b = started(1000);
-        post(&b, "/step", "{}");                                    // step → 1
-        post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);     // step → 2 (tool call also ticks)
+        post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);
+        post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);
         let (s, body) = get(&b, "/status");
         assert_eq!(s, 200);
         let v = json_val(&body);
         assert_eq!(v["state"], "running");
         assert_eq!(v["step"], 2);
-        assert_eq!(v["tokens_spent"], 10);
+        assert_eq!(v["tokens_spent"], 20);
     }
 
     #[test]
@@ -1855,9 +1879,9 @@ mod tests {
     }
 
     #[test]
-    fn events_contains_step_completed_after_step() {
+    fn events_contains_step_completed_after_tool_call() {
         let b = started(1000);
-        post(&b, "/step", "{}");
+        post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);
         let (_, body) = get(&b, "/events");
         let events: Vec<serde_json::Value> = body.lines()
             .filter_map(|l| serde_json::from_str(l).ok())
@@ -1990,7 +2014,7 @@ mod tests {
             ("/rule/evaluate", "{}"),
             ("/agent/enter",   r#"{"name":"researcher"}"#),
             ("/agent/exit",    "{}"),
-            ("/step",          "{}"),
+            ("/llm/usage",     r#"{"input":1,"output":1}"#),
         ] {
             let (status, _) = post(&b, path, body);
             assert_eq!(status, 410, "POST {path} must return 410 when stopped");
@@ -2023,8 +2047,8 @@ mod tests {
     fn drain_events_returns_and_clears_events() {
         let b = started(1000);
 
-        // Trigger a step to produce a StepCompleted event.
-        post(&b, "/step", "{}");
+        // Trigger a step (a real tool call) to produce a StepCompleted event.
+        post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);
         std::thread::sleep(std::time::Duration::from_millis(10));
 
         let lines = b.drain_events();

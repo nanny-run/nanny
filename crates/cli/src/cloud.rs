@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// clap accepts both `--env staging` and `--env=staging`, and rejects any value
 /// outside this set with the allowed list. Serializes lowercase (`dev`/`staging`/
-/// `prod`) so it round-trips through `~/.nanny/credentials.toml`.
+/// `prod`) so it round-trips through `~/.nanny/credentials.json`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CloudEnv {

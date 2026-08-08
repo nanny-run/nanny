@@ -108,6 +108,16 @@ pub struct Usage {
     pub model: Option<String>,
     /// Optional provider identifier (e.g. `"openai"`). Label only — no pricing.
     pub provider: Option<String>,
+    /// Optional finer split of `input` (never additional tokens beyond it) —
+    /// set these only if the provider's response reports prompt-caching
+    /// usage (e.g. OpenAI's `usage.prompt_tokens_details.cached_tokens`,
+    /// Anthropic's `cache_read_input_tokens`/`cache_creation_input_tokens`).
+    /// Reporting only, same as `model`/`provider`: never debited separately
+    /// from `input`, and no pricing logic reads these in the engine — they
+    /// exist so a downstream cost calculator can price cache-hit tokens at
+    /// their real, much cheaper rate.
+    pub cache_read: Option<u64>,
+    pub cache_write: Option<u64>,
     /// Optional harness attribution reported alongside this call — the "on every
     /// request" path (parity with the Python SDK). Deduped bridge-side, so it is
     /// safe to set on every report. Prefer [`set_harness`] for a one-shot declare.
@@ -145,17 +155,14 @@ pub struct Usage {
 /// });
 /// ```
 pub fn report_usage(usage: Usage) {
-    let (harness_name, harness_version) = match usage.harness {
-        Some(h) => (Some(h.name), h.version),
-        None => (None, None),
-    };
     runtime::report_usage(
         usage.input,
         usage.output,
         usage.model,
         usage.provider,
-        harness_name,
-        harness_version,
+        usage.cache_read,
+        usage.cache_write,
+        usage.harness,
     );
 }
 
@@ -194,6 +201,44 @@ pub struct Harness {
 /// same passthrough contract as `report_usage`. An empty `name` is ignored.
 pub fn set_harness(harness: Harness) {
     runtime::set_harness(harness.name, harness.version);
+}
+
+// ── Run control ─────────────────────────────────────────────────────────────
+
+/// Start a new governed run in the current process. Returns the new run id.
+///
+/// A run is Nanny's real unit of governance: one cumulative token/step
+/// counter, one stop state, "a stop is final." A `#[nanny::agent(...)]`
+/// scope does *not* give you a second one of these — it only changes which
+/// ceiling that same, single, ever-growing counter is compared against
+/// while active. If your process runs several logically independent
+/// phases back to back (a research phase handing off to a drafting phase,
+/// one long-lived server giving each incoming request its own clean
+/// slate) and you want each one to start from a genuinely fresh budget
+/// rather than inherit whatever an earlier phase already spent, this is
+/// how you say that.
+///
+/// ```rust,ignore
+/// nanny::fresh_run();   // everything governed after this point is a fresh run
+/// ```
+///
+/// Only meaningful when governed through a network server (`nanny run
+/// --serve` / `--join`): the server keys independent state per run id, so
+/// a stop in the run you just left has zero effect on the one you're
+/// starting. Under local `nanny run` (no `--serve`), one process is
+/// already always exactly one run, so this is a safe no-op there — code
+/// that might run under either mode doesn't need to branch on which one
+/// it's in.
+///
+/// Before this existed, the only way to do this was setting the
+/// `NANNY_RUN_ID` environment variable directly, an internal detail the
+/// client happens to read fresh on every call, never documented as
+/// something to rely on. This is that same mechanism, given a real,
+/// public name — mirrors `nanny_sdk.fresh_run()` on the Python side.
+pub fn fresh_run() -> String {
+    let id = uuid::Uuid::new_v4().to_string();
+    std::env::set_var("NANNY_RUN_ID", &id);
+    id
 }
 
 // ── Private runtime — for generated code only ─────────────────────────────────
@@ -754,8 +799,9 @@ mod runtime {
         output: u64,
         model: Option<String>,
         provider: Option<String>,
-        harness_name: Option<String>,
-        harness_version: Option<String>,
+        cache_read: Option<u64>,
+        cache_write: Option<u64>,
+        harness: Option<super::Harness>,
     ) {
         if !is_active() || input + output == 0 {
             return;
@@ -767,9 +813,15 @@ mod runtime {
         if let Some(p) = provider {
             body["provider"] = serde_json::Value::String(p);
         }
-        if let Some(name) = harness_name {
-            let mut h = serde_json::json!({ "name": name });
-            if let Some(v) = harness_version {
+        if let Some(cr) = cache_read {
+            body["cache_read"] = serde_json::Value::from(cr);
+        }
+        if let Some(cw) = cache_write {
+            body["cache_write"] = serde_json::Value::from(cw);
+        }
+        if let Some(harness) = harness {
+            let mut h = serde_json::json!({ "name": harness.name });
+            if let Some(v) = harness.version {
                 h["version"] = serde_json::Value::String(v);
             }
             body["harness"] = h;
@@ -888,5 +940,37 @@ mod tests {
         });
         // Empty name is ignored even if a bridge were active.
         crate::set_harness(crate::Harness::default());
+    }
+
+    // NANNY_RUN_ID is process-wide state, and cargo test runs tests in
+    // parallel by default — the other env-var tests in this module avoid
+    // reading state back after mutating it for exactly this reason (see the
+    // comment above `inactive_when_no_env_vars`). fresh_run() has to both set
+    // and be verifiable, so its tests are combined under one shared lock
+    // instead, guaranteeing no other fresh_run test can interleave.
+    static NEW_RUN_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn fresh_run_behaves_correctly() {
+        let _guard = NEW_RUN_TEST_LOCK.lock().unwrap();
+
+        // Sets NANNY_RUN_ID to exactly its own return value.
+        let first = crate::fresh_run();
+        assert_eq!(std::env::var("NANNY_RUN_ID").unwrap(), first);
+
+        // A second call replaces it with a genuinely different id.
+        let second = crate::fresh_run();
+        assert_ne!(first, second);
+        assert_eq!(std::env::var("NANNY_RUN_ID").unwrap(), second);
+
+        // Replaces a run id that was already set by something else, too.
+        // SAFETY: guarded by NEW_RUN_TEST_LOCK, no other fresh_run test can
+        // observe or mutate NANNY_RUN_ID concurrently with this one.
+        unsafe {
+            std::env::set_var("NANNY_RUN_ID", "old-run");
+        }
+        let third = crate::fresh_run();
+        assert_ne!(third, "old-run");
+        assert_eq!(std::env::var("NANNY_RUN_ID").unwrap(), third);
     }
 }

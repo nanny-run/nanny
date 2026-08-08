@@ -109,9 +109,13 @@ A denial exits the process immediately. The denied tool never runs.
 
 An **agent scope** is a named limits context. When a function is declared as an agent, the scope's limits become active for the duration of that function and revert when it returns.
 
-Scopes inherit from the base `[limits]` and override only the fields they declare. A tight inner scope cannot exceed the outer scope's budget — the lowest limit always wins.
+Scopes inherit from the base `[limits]` and override only the fields they declare. Be precise about what this changes and what it doesn't: entering a scope swaps which ceiling is checked, it does **not** give the scope its own budget. Tokens spent and steps taken are one running total for the entire run, from start to finish — a named scope never resets it, only changes what it's compared against. Nothing prevents a scope from declaring a *higher* ceiling than an outer one; if it does, and the run has already spent more than the outer scope's number by the time you return to it, the very next governed call there stops the run, since the shared total now exceeds that scope's own check. Size named-scope ceilings expecting to inherit whatever earlier scopes already spent, not in isolation — see [Named sets share one counter](https://docs.nanny.run/v0.5/concepts/limits#named-sets-share-one-counter-they-are-not-separate-budgets) for the full mechanics, and `fresh_run()` if you actually want a scope to start from a clean, independent budget.
 
 Scopes are designed for multi-agent pipelines where each stage has different resource requirements: a planner that makes no tool calls gets a tight budget; a researcher that fetches many URLs gets a larger one.
+
+### Starting a genuinely fresh run
+
+A **run**, not a scope, is Nanny's actual unit of governance: one cumulative counter, one stop state, final once stopped. If your process does several logically independent phases back to back, a research phase handing off to a drafting phase, a long-lived server giving each incoming request its own clean slate, and you want each one to start from zero rather than inherit whatever an earlier phase already spent, call `nanny::fresh_run()` (Rust) / `nanny_sdk.fresh_run()` (Python) at the phase boundary. It mints a new run id and, when governed through a network server (`nanny run --serve` / `--join`), the server tracks that new run's budget completely independently of the one you left. Under local `nanny run`, one process is already always exactly one run, so it's a safe no-op there.
 
 ---
 
@@ -219,9 +223,9 @@ tokens  = 200
 timeout = 30000
 ```
 
-The base `[limits]` is the outer budget for the entire run. Named scopes are inner budgets for each stage. A stage cannot exceed the outer budget — if the global token limit is reached mid-pipeline, the run stops regardless of the active scope.
+The base `[limits]` is the ceiling checked whenever no named scope is active. Tokens spent and steps taken are one running total for the whole run — a named scope only changes which ceiling that total is checked against, it is never its own independent budget, and nothing validates that a scope's own number is smaller than any other scope's. If the global token limit is reached mid-pipeline, the run stops regardless of the active scope, because the same shared total is what every scope's check reads from.
 
-Design your limits so the sum of all stage budgets is comfortably within the global budget, with headroom for overhead between stages.
+Design your limits with that shared total in mind: size each stage's ceiling expecting to inherit whatever earlier stages already spent, and keep the sum of all stage budgets comfortably within the global budget, with headroom for overhead between stages.
 
 ---
 

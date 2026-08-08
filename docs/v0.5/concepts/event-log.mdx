@@ -16,9 +16,23 @@ To separate them, configure file output:
 
 ```toml
 [observability]
-log      = "file"
-log_file = "nanny.log"
+log = "file"
 ```
+
+This writes to `.nanny/logs/log.ndjson`, a location Nanny always owns and auto-creates,
+never something you point at a path yourself. Only set `file` if you want a different
+name — a bare name, no extension, Nanny always appends `.ndjson` itself:
+
+```toml
+[observability]
+log  = "file"
+file = "events"   # writes .nanny/logs/events.ndjson
+```
+
+`.nanny/logs/` is meant to stay out of git (Nanny adds it to `.gitignore` automatically
+the first time it's created): it's a local audit trail, not source. If you later log this
+machine in (`nanny auth login`), Cloud sync can back-fill from whatever accumulated in
+that folder before sync was ever turned on, not just events going forward.
 
 Or pipe stdout to a file at the shell level:
 
@@ -64,7 +78,7 @@ Always the last event. Emitted on every exit path — clean exit, timeout, error
 ```
 
 If the process was killed, `reason` will be one of the stop reasons listed in
-[Limits & Enforcement](/v0.4/concepts/limits).
+[Limits & Enforcement](/v0.5/concepts/limits).
 
 ## SDK events
 
@@ -72,7 +86,7 @@ When the Rust SDK macros or Python SDK decorators are active, additional events 
 
 | Event | When emitted |
 |-------|-------------|
-| `StepCompleted` | After each agent step |
+| `StepCompleted` | After each allowed tool call, immediately following its `ToolAllowed` event |
 | `ToolAllowed` | When Nanny permits a tool call |
 | `ToolDenied` | When a tool call is blocked because the tool is not in the allowlist |
 | `RuleDenied` | When a tool call is blocked by a custom rule or a per-tool `max_calls` limit |
@@ -88,7 +102,7 @@ When the Rust SDK macros or Python SDK decorators are active, additional events 
 The event log is designed to be piped into standard tools:
 
 ```bash
-# Count total steps
+# Count total steps (every allowed tool call is one step)
 cat nanny.log | grep StepCompleted | wc -l
 
 # Find all denied tool calls (allowlist blocks and rule denials)

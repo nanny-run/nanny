@@ -17,13 +17,13 @@ nanny health
 
 | Component | Active when | What "healthy" means |
 |-----------|------------|----------------------|
-| Local bridge | `NANNY_BRIDGE_SOCKET` or `NANNY_BRIDGE_PORT` is set | A TCP connection to the bridge succeeds |
+| Local enforcement | `NANNY_BRIDGE_SOCKET` or `NANNY_BRIDGE_PORT` is set | A TCP connection succeeds |
 | Network server | `NANNY_BRIDGE_ADDR` is set | A TCP connection to the server address succeeds |
 | Certificates | `~/.nanny/certs/` exists | Cert files are present and not expired |
 
 A component that was never started is **not checked** and does not cause a non-zero exit. `nanny health` only reports on what is active.
 
-This means `nanny health` run from a regular terminal (outside `nanny run`) will typically show `local bridge: not running` — that's expected. The bridge env vars are injected by `nanny run` into the child process, not into the terminal that launched it.
+This means `nanny health` run from a regular terminal (outside `nanny run`) will typically show `local enforcement: not running` — that's expected. These env vars are injected by `nanny run` into the child process, not into the terminal that launched it.
 
 ---
 
@@ -32,25 +32,25 @@ This means `nanny health` run from a regular terminal (outside `nanny run`) will
 **Server running, certs valid:**
 
 ```
-local bridge  : not running
-network server: running  (0.0.0.0:62669)  [plain HTTP]
-certs         : valid  (expires 2027-05-01T09:00:00Z)
+local enforcement: not running
+network server   : running  (0.0.0.0:62669)  [plain HTTP]
+certs            : valid  (expires 2027-05-01T09:00:00Z)
 ```
 
 **All components active and healthy (within a governed process):**
 
 ```
-local bridge  : running
-network server: not running
-certs         : not found  (run `nanny certs generate`)
+local enforcement: running
+network server   : not running
+certs            : not found  (run `nanny certs generate`)
 ```
 
 **Server unreachable:**
 
 ```
-local bridge  : not running
-network server: unreachable  (server.example.com:62669) — connection refused
-certs         : valid  (expires 2027-05-01T09:00:00Z)
+local enforcement: not running
+network server   : unreachable  (server.example.com:62669) — connection refused
+certs            : valid  (expires 2027-05-01T09:00:00Z)
 ```
 
 Exit code is `1` when any active component is unreachable.
@@ -103,5 +103,5 @@ livenessProbe:
 
 ## See also
 
-- [`nanny status`](/v0.4/run#governance-server) — focused status view for the governance server
-- [`nanny certs show`](/v0.4/reference/cli-certs) — cert expiry and file inventory
+- [`nanny status`](/v0.5/run#governance-server), focused status view for the governance server
+- [`nanny certs show`](/v0.5/reference/cli-certs), cert expiry and file inventory

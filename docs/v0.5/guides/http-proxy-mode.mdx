@@ -32,19 +32,16 @@ The governance server validates this list at startup. If `--proxy` is passed but
 
 ## Configure your agent
 
-Add the standard proxy variables to your agent project's `.env` file:
+Don't set `HTTP_PROXY`/`HTTPS_PROXY` by hand. The CONNECT tunnel authenticates with its own credential (`proxy_token`, separate from the ordinary `session_token`), so a bare proxy URL with no credential gets a `407` from the governance server.
 
-```ini
-# .env
-HTTP_PROXY=http://127.0.0.1:62669
-HTTPS_PROXY=http://127.0.0.1:62669
-```
-
-Most HTTP client libraries — Python's `httpx`, `requests`, `aiohttp`; Node's `fetch`; curl — respect these variables automatically. No code changes needed. Most agent frameworks load `.env` on startup; if yours doesn't, pass the variables inline:
+`nanny run` sets this up for you automatically whenever it starts or joins a governance server that has `[proxy]` configured:
 
 ```bash
-HTTP_PROXY=http://127.0.0.1:62669 HTTPS_PROXY=http://127.0.0.1:62669 nanny run
+nanny run --serve          # local: proxy vars injected into the agent's own process
+nanny run --join=<appId>   # remote: proxy vars injected the same way
 ```
+
+Under the hood, the injected URL embeds the proxy token as userinfo (`http://<proxyToken>:@host:port`), so the child process's own HTTP client sends it as a standard `Proxy-Authorization: Basic ...` header on the CONNECT handshake, with no code changes required. Most HTTP client libraries (Python's `httpx`, `requests`, `aiohttp`; Node's `fetch`; curl) respect `HTTP_PROXY`/`HTTPS_PROXY` automatically once it's set.
 
 For HTTPS traffic, the proxy uses HTTP CONNECT tunneling: the client sends a `CONNECT` request to the proxy, the proxy opens a TCP tunnel to the target, and the TLS handshake happens inside the tunnel between the client and the target server. The proxy sees the hostname and port but not the decrypted content of HTTPS requests.
 
