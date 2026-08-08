@@ -1,0 +1,29 @@
+name: Dependency review
+
+# Blocks a PR from introducing a NEW dependency with a known critical/high
+# vulnerability. This is a diff check only — it compares what a PR changes
+# against what's already on main, so it can't see or flag a vulnerability in
+# a dependency nobody touched. That's what security-audit.yml (scheduled,
+# full-state) is for; the two are complementary, not redundant.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Dependency review
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          # This only evaluates dependencies a PR actually changes, so a PR
+          # that doesn't touch examples/**'s lockfiles never sees their
+          # existing, pre-known alerts. It does apply the same threshold if a
+          # PR bumps something inside examples/** to a version with its own
+          # new high/critical issue — no manifest is exempted outright.
