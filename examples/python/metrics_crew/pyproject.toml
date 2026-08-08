@@ -12,7 +12,7 @@ dependencies = [
     "typer>=0.12",
     "rich>=13",
     "python-dotenv>=1.0",
-    "nanny-sdk==0.4.1",
+    "nanny-sdk==0.4.2",
 ]
 
 # ── Local development override ────────────────────────────────────────────────
