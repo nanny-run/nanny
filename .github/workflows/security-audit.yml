@@ -35,7 +35,17 @@ on:
 
 permissions:
   contents: read
-  security-events: read
+
+# GITHUB_TOKEN (github.token) cannot read /dependabot/alerts under any grant
+# in the `permissions:` block above — that endpoint isn't available to the
+# Actions-generated token at all, regardless of scope requested.
+# `security-events` (which used to be here) is for the Code Scanning API,
+# a different endpoint; it never actually granted this. A fine-grained PAT
+# with the repo's "Dependabot alerts: Read-only" permission, stored as the
+# DEPENDABOT_ALERTS_TOKEN secret, is required instead. Confirmed the hard
+# way: this workflow ran green locally under a personal `gh auth` session
+# throughout development, then failed with "Resource not accessible by
+# integration" the first time it actually ran in Actions.
 
 jobs:
   audit-shipped:
@@ -47,9 +57,18 @@ jobs:
       - name: Validate .security-allowlist.jsonc
         run: python3 scripts/check_security_allowlist.py
 
+      - name: Check DEPENDABOT_ALERTS_TOKEN is configured
+        run: |
+          if [ -z "${{ secrets.DEPENDABOT_ALERTS_TOKEN }}" ]; then
+            echo "::error::DEPENDABOT_ALERTS_TOKEN secret is not set. This workflow needs a" \
+                 "fine-grained PAT with 'Dependabot alerts: Read-only' on this repo — GITHUB_TOKEN" \
+                 "cannot read that API under any permission grant. See this workflow's own header."
+            exit 1
+          fi
+
       - name: Query open Dependabot alerts and gate on unallowlisted findings
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.DEPENDABOT_ALERTS_TOKEN }}
         run: |
           set -euo pipefail
           attempts=4
@@ -78,7 +97,11 @@ jobs:
 
       - name: Query open Dependabot alerts (informational)
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.DEPENDABOT_ALERTS_TOKEN }}
         run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::DEPENDABOT_ALERTS_TOKEN secret is not set — skipping (see audit-shipped job)."
+            exit 0
+          fi
           gh api "repos/${{ github.repository }}/dependabot/alerts" --paginate --slurp \
             | python3 scripts/security_audit_gate.py --scope examples
