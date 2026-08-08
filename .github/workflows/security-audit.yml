@@ -48,6 +48,18 @@ permissions:
 # integration" the first time it actually ran in Actions.
 
 jobs:
+  TEMP-diagnostic-does-homebrew-tap-token-work:
+    name: "TEMP: test whether HOMEBREW_TAP_TOKEN can read Dependabot alerts"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Try it
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          gh api "repos/${{ github.repository }}/dependabot/alerts" --paginate > /dev/null \
+            && echo "WORKS: HOMEBREW_TAP_TOKEN can read Dependabot alerts" \
+            || echo "DOES NOT WORK: same 403 as GITHUB_TOKEN"
+
   audit-shipped:
     name: Shipped code — fail on open critical/high alerts
     runs-on: ubuntu-latest
