@@ -155,10 +155,6 @@ pub struct Usage {
 /// });
 /// ```
 pub fn report_usage(usage: Usage) {
-    let (harness_name, harness_version) = match usage.harness {
-        Some(h) => (Some(h.name), h.version),
-        None => (None, None),
-    };
     runtime::report_usage(
         usage.input,
         usage.output,
@@ -166,8 +162,7 @@ pub fn report_usage(usage: Usage) {
         usage.provider,
         usage.cache_read,
         usage.cache_write,
-        harness_name,
-        harness_version,
+        usage.harness,
     );
 }
 
@@ -806,8 +801,7 @@ mod runtime {
         provider: Option<String>,
         cache_read: Option<u64>,
         cache_write: Option<u64>,
-        harness_name: Option<String>,
-        harness_version: Option<String>,
+        harness: Option<super::Harness>,
     ) {
         if !is_active() || input + output == 0 {
             return;
@@ -825,9 +819,9 @@ mod runtime {
         if let Some(cw) = cache_write {
             body["cache_write"] = serde_json::Value::from(cw);
         }
-        if let Some(name) = harness_name {
-            let mut h = serde_json::json!({ "name": name });
-            if let Some(v) = harness_version {
+        if let Some(harness) = harness {
+            let mut h = serde_json::json!({ "name": harness.name });
+            if let Some(v) = harness.version {
                 h["version"] = serde_json::Value::String(v);
             }
             body["harness"] = h;
