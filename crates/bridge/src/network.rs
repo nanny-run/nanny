@@ -2257,7 +2257,7 @@ mod tests {
         token: String,
         dir: &Path,
         rps: u32,
-    ) -> axum_server::Handle {
+    ) -> axum_server::Handle<SocketAddr> {
         let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
         let cert = dir.join("server.crt");
         let key  = dir.join("server.key");
