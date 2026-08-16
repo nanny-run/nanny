@@ -49,7 +49,7 @@ use nanny_runtime::ToolRegistry;
 use super::{
     append_event, mark_stopped, now_ms,
     BridgeComponents, BridgeResp, BridgeState, ContentType,
-    handle_agent_enter, handle_agent_exit, handle_events, handle_harness, handle_health,
+    handle_agent_enter, handle_agent_exit, handle_app, handle_events, handle_harness, handle_health,
     handle_llm_usage, handle_rule_evaluate, handle_status, handle_stop,
     handle_tool_call, init_run_template, stopped_reason, take_run_events, RunTemplate,
 };
@@ -285,6 +285,14 @@ async fn route_harness(State(app): State<AppState>, headers: HeaderMap, body: By
         return stopped_gone(&reason);
     }
     to_response(handle_harness(&body, &shared))
+}
+
+async fn route_app(State(app): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+    let shared = app.run_state(&headers);
+    if let Some(reason) = stopped_reason(&shared) {
+        return stopped_gone(&reason);
+    }
+    to_response(handle_app(&body, &shared))
 }
 
 // ── IP / host SSRF guard ──────────────────────────────────────────────────────
@@ -729,6 +737,7 @@ fn build_router(app: AppState) -> Router {
         .route("/agent/exit",    post(route_agent_exit))
         .route("/llm/usage",     post(route_llm_usage))
         .route("/harness",       post(route_harness))
+        .route("/app",           post(route_app))
         // Fallback for genuinely unmatched requests. CONNECT never reaches this;
         // GovernorService (see above) intercepts it before the router at all.
         .fallback(route_not_found)
