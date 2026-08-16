@@ -142,13 +142,11 @@ pub fn cmd_server_start(
         }
     }
 
-    // Write the listen address to ~/.nanny/servers/<app_id>/server.addr so
-    // `nanny status --app=<appId>` and `nanny run --join=<appId>` can discover this
-    // exact server without config, and never collide with a different app's
-    // governor on the same machine.
+    // NOTE: server.addr is written by the server itself, not here. The
+    // requested port is not necessarily the one it ends up on — an occupied
+    // default steps forward — and `--join`/`--app` must discover the real one.
+    // Only the code that owns the bound socket knows it.
     let state_dir = nanny_server_state_dir(&app.app_id)?;
-    std::fs::write(state_dir.join("server.addr"), addr.to_string())
-        .with_context(|| format!("failed to write {}", state_dir.join("server.addr").display()))?;
 
     // Record whether this server has [proxy] allowed_hosts active, so a
     // joining `nanny run --join=<appId>` (possibly in a different directory with

@@ -94,7 +94,11 @@ enum Command {
 
         /// (with --serve) Listen address; governance API and proxy share this port.
         /// Loopback is plain HTTP; a non-loopback address makes mTLS mandatory.
-        #[arg(long, default_value = "127.0.0.1:62669")]
+        ///
+        /// Left at the default, a busy port steps forward to the next free one
+        /// and the real address is recorded for `--join`/`--app` to find.
+        /// Named explicitly, a busy port is an error rather than a silent move.
+        #[arg(long, default_value_t = nanny_bridge::network::default_governor_addr())]
         addr: SocketAddr,
 
         /// (with --serve) Server certificate PEM. Defaults to ~/.nanny/certs/server.crt.

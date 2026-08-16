@@ -62,6 +62,95 @@ use std::sync::mpsc::Sender;
 /// budgets and stop independently (G3 — "Nanny stops the run, not the host").
 const DEFAULT_RUN_ID: &str = "default";
 
+/// The governor's default port. 62669 spells NANNY on a phone keypad.
+pub const DEFAULT_GOVERNOR_PORT: u16 = 62669;
+
+/// How many ports to try past the requested one before giving up. Generous
+/// enough that a developer with a handful of governors never notices, bounded
+/// so a pathological box errors instead of scanning 64k ports.
+const PORT_FALLFORWARD_ATTEMPTS: u16 = 64;
+
+/// The governor's default listen address: loopback on the well-known port.
+///
+/// Exported so the CLI's `--addr` default and the fall-forward check here can
+/// never drift apart. Fall-forward fires only on an exact match with this
+/// address, so it must be one definition, not two literals.
+pub fn default_governor_addr() -> SocketAddr {
+    SocketAddr::from(([127, 0, 0, 1], DEFAULT_GOVERNOR_PORT))
+}
+
+/// Bind `addr`, stepping to the next port if it is already taken.
+///
+/// Bind-then-retry, never check-then-bind: probing whether a port is free and
+/// *then* binding it leaves a window where two governors starting together
+/// both see it free and one dies. Only the kernel can answer "is this port
+/// mine" without a race, so we let it.
+///
+/// Fall-forward fires **only** for the exact default address
+/// (127.0.0.1:62669), where several governors on one dev machine is the normal
+/// case and stepping to the next port is what the operator wants.
+///
+/// Every other address is exact-or-error, and the comparison is on the whole
+/// address rather than just the port for a specific reason:
+/// `--addr 0.0.0.0:62669` is a deliberate choice to be reachable from the
+/// network, usually paired with a firewall rule or a reverse proxy pinned to
+/// that port. Quietly moving it to 62670 would leave a governor running that
+/// nothing can reach, which is worse than refusing to start.
+///
+/// Port 0 is honoured as "any free port", the standard meaning, and needs no
+/// retry loop since the kernel picks.
+fn bind_with_fallforward(requested: SocketAddr) -> Result<std::net::TcpListener> {
+    let explicit = requested != default_governor_addr();
+    let mut addr = requested;
+
+    for attempt in 0..PORT_FALLFORWARD_ATTEMPTS {
+        match std::net::TcpListener::bind(addr) {
+            Ok(listener) => {
+                // `std::net` hands back a blocking socket, and tokio refuses to
+                // register one ("Registering a blocking socket with the tokio
+                // runtime is unsupported"). axum_server::from_tcp panics rather
+                // than erroring, so this must be set before it sees the socket.
+                listener
+                    .set_nonblocking(true)
+                    .context("failed to set the listener non-blocking")?;
+                if attempt > 0 {
+                    println!(
+                        "nanny: port {} was in use — listening on {} instead",
+                        requested.port(),
+                        addr.port()
+                    );
+                }
+                return Ok(listener);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse && !explicit => {
+                let Some(next) = addr.port().checked_add(1) else {
+                    break;
+                };
+                addr.set_port(next);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                anyhow::bail!(
+                    "address {addr} is already in use\n\n\
+                     Another process is listening there. Either stop it, or pick a \
+                     different address with --addr.\n\
+                     If it's another nanny governor, `nanny status --app=<appId>` \
+                     will tell you which app owns it."
+                );
+            }
+            Err(e) => {
+                return Err(anyhow::Error::new(e).context(format!("failed to bind {addr}")));
+            }
+        }
+    }
+
+    anyhow::bail!(
+        "no free port found in {PORT_FALLFORWARD_ATTEMPTS} attempts from {}\n\n\
+         That many consecutive ports being busy usually means something else is \
+         wrong on this machine. Pick an explicit address with --addr.",
+        requested.port()
+    )
+}
+
 // ── Per-IP rate limiter ───────────────────────────────────────────────────────
 
 /// Sliding-window per-IP rate limiter.  DoS protection only — never a
@@ -883,6 +972,14 @@ impl NetworkServer {
             validate_allowed_hosts(hosts)?;
         }
 
+        // Bind before writing any state, so the files record the port actually
+        // in use rather than the one that was requested — an occupied default
+        // steps forward, and `--join`/`--app` must find the real one.
+        let listener = bind_with_fallforward(addr)?;
+        let addr = listener
+            .local_addr()
+            .context("bound listener has no local address")?;
+
         let token = session_token.unwrap_or_else(|| Uuid::new_v4().to_string());
         // A separate, freshly generated credential for the CONNECT tunnel only.
         // See AppState::proxy_token for why it's never the same value as
@@ -967,6 +1064,16 @@ impl NetworkServer {
         std::fs::create_dir_all(&state_dir)
             .with_context(|| format!("failed to create {}", state_dir.display()))?;
 
+        // The address actually bound, which is not necessarily the one
+        // requested. `nanny status --app` and `nanny run --join` read this file
+        // to find the real server, so it has to be written here, after the
+        // bind, by the code that owns the socket. Writing the *requested*
+        // address (as the CLI used to) would point every joiner at a port
+        // nothing is listening on.
+        let addr_file = state_dir.join("server.addr");
+        std::fs::write(&addr_file, addr.to_string())
+            .with_context(|| format!("failed to write {}", addr_file.display()))?;
+
         let token_file = state_dir.join("server.token");
         std::fs::write(&token_file, &token)
             .with_context(|| format!("failed to write {}", token_file.display()))?;
@@ -1048,7 +1155,11 @@ impl NetworkServer {
                 // ── Plain HTTP (loopback) ─────────────────────────────────────
                 // Loopback is OS-enforced — only processes on this machine can
                 // connect. No TLS needed; session token is the auth layer.
-                axum_server::bind(addr)
+                // `from_tcp` rather than `bind`: the socket is already bound
+                // (see bind_with_fallforward), so re-binding here would fail and
+                // discard the port we resolved.
+                axum_server::from_tcp(listener)
+                    .context("failed to adopt the bound listener")?
                     .handle(server_handle)
                     .serve(make_service)
                     .await
@@ -1120,7 +1231,8 @@ impl NetworkServer {
                     }
                 }
 
-                axum_server::bind_rustls(addr, rustls_config)
+                axum_server::from_tcp_rustls(listener, rustls_config)
+                    .context("failed to adopt the bound listener")?
                     .handle(server_handle)
                     .serve(make_service)
                     .await
@@ -1870,6 +1982,93 @@ mod tests {
         panic!("server on port {port} never became ready within 10 s");
     }
 
+    /// Poll until `path` exists (up to 10 s).
+    ///
+    /// The server binds its listener *before* writing state files, so it can
+    /// fall forward off a busy port and record the address it actually got.
+    /// That means a TCP probe no longer implies the files are on disk, and a
+    /// test that reads one has to wait for the file itself.
+    ///
+    /// Harmless in production: a joiner discovers a server by reading
+    /// server.addr, so "not written yet" surfaces as a clean "no server address
+    /// found" rather than a half-initialised connection.
+    fn wait_for_file(path: &Path) {
+        for _ in 0..200 {
+            if path.exists() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        panic!("{} never appeared within 10 s", path.display());
+    }
+
+    // ── Port fall-forward ─────────────────────────────────────────────────────
+
+    #[test]
+    fn fallforward_steps_past_a_busy_default_port() {
+        // Occupy the default, then prove a second governor lands next door
+        // rather than failing. Several governors on one dev box is normal.
+        let Ok(held) = std::net::TcpListener::bind(default_governor_addr()) else {
+            // A real governor already owns the default on this machine; the
+            // behaviour under test is still covered by the cases below.
+            return;
+        };
+
+        let listener = bind_with_fallforward(default_governor_addr())
+            .expect("a busy default must fall forward, not fail");
+        let got = listener.local_addr().unwrap();
+
+        assert_ne!(got.port(), DEFAULT_GOVERNOR_PORT, "must not claim the held port");
+        assert!(got.port() > DEFAULT_GOVERNOR_PORT, "must step forward, not backward");
+        drop(held);
+    }
+
+    #[test]
+    fn an_explicit_busy_address_is_an_error_not_a_silent_move() {
+        // The important half. An explicitly named port is usually paired with a
+        // firewall rule or reverse proxy pinned to it, so moving would leave a
+        // governor running that nothing can reach.
+        let port = next_port();
+        let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+        let _held = std::net::TcpListener::bind(addr).expect("must hold the port");
+
+        let err = bind_with_fallforward(addr).expect_err("an explicit busy address must fail");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("already in use"), "must say why: {msg}");
+        assert!(msg.contains("--addr"), "must point at the fix: {msg}");
+    }
+
+    #[test]
+    fn a_free_address_binds_exactly_where_asked() {
+        let port = next_port();
+        let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+        let listener = bind_with_fallforward(addr).expect("a free port must bind");
+        assert_eq!(listener.local_addr().unwrap(), addr, "no drift when the port is free");
+    }
+
+    #[test]
+    fn port_zero_lets_the_kernel_choose() {
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let listener = bind_with_fallforward(addr).expect("port 0 must bind");
+        assert_ne!(listener.local_addr().unwrap().port(), 0, "kernel must assign a real port");
+    }
+
+    #[test]
+    fn the_bound_listener_is_non_blocking() {
+        // tokio refuses to register a blocking socket, and axum_server::from_tcp
+        // *panics* rather than returning an error, so this is worth pinning.
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let listener = bind_with_fallforward(addr).unwrap();
+        match listener.accept() {
+            Err(e) => assert_eq!(
+                e.kind(),
+                std::io::ErrorKind::WouldBlock,
+                "a non-blocking listener must not park the thread"
+            ),
+            Ok(_) => panic!("nothing should have connected to a just-bound test port"),
+        }
+    }
+
     /// Start a proxy-enabled network server in a background thread.
     /// Two distinct credentials, matching production: `session_token` guards
     /// ordinary requests (e.g. GET /events), `proxy_token` guards CONNECT
@@ -2170,10 +2369,6 @@ mod tests {
             });
         }
 
-        // Give the background thread time to send the request and the server
-        // time to process it and write the event.
-        std::thread::sleep(Duration::from_millis(250));
-
         let ca_pem   = std::fs::read(s.cert_dir.join("ca.crt")).unwrap();
         let cert_pem = std::fs::read(s.cert_dir.join("client.crt")).unwrap();
         let key_pem  = std::fs::read(s.cert_dir.join("client.key")).unwrap();
@@ -2189,18 +2384,38 @@ mod tests {
             .build()
             .unwrap();
 
-        let resp = client
-            .get(format!("https://127.0.0.1:{}/events", s.port))
-            .header("X-Nanny-Session-Token", &s.session_token)
-            .send()
-            .unwrap();
+        // Poll /events rather than sleeping a fixed 250 ms first. The CONNECT is
+        // sent from a background thread, so "has the server processed it yet" is
+        // a race against machine load — the same lesson `wait_for_port` already
+        // learned in this file. A single fixed sleep made this test fail roughly
+        // one run in six under a parallel suite while always passing alone.
+        let fetch_events = || -> String {
+            client
+                .get(format!("https://127.0.0.1:{}/events", s.port))
+                .header("X-Nanny-Session-Token", &s.session_token)
+                .send()
+                .expect("GET /events must succeed")
+                .text()
+                .expect("events body must read")
+        };
+        let has_event = |body: &str, name: &str| -> bool {
+            body.lines().any(|l| {
+                serde_json::from_str::<serde_json::Value>(l)
+                    .map(|v| v["event"] == name)
+                    .unwrap_or(false)
+            })
+        };
 
-        let body = resp.text().unwrap();
-        let has_tool_allowed = body.lines().any(|l| {
-            serde_json::from_str::<serde_json::Value>(l)
-                .map(|v| v["event"] == "ToolAllowed")
-                .unwrap_or(false)
-        });
+        let mut body = String::new();
+        for _ in 0..200 {
+            body = fetch_events();
+            if has_event(&body, "ToolAllowed") {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        let has_tool_allowed = has_event(&body, "ToolAllowed");
         assert!(has_tool_allowed, "ToolAllowed event must appear after allowed CONNECT\ngot: {body}");
 
         // A proxied call is real governed work — it must move the step
@@ -2832,6 +3047,10 @@ mod tests {
             .ok();
         });
         wait_for_port(port);
+        // The listener binds before the state files are written (so the server
+        // can fall forward and record the port it actually got), so a TCP probe
+        // alone races them. Wait for the file callers actually read.
+        wait_for_file(&state_dir.join("server.token"));
         (port, state_dir)
     }
 
