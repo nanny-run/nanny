@@ -144,8 +144,8 @@ pub fn cmd_server_start(
     }
 
     // NOTE: server.addr is written by the server itself, not here. The
-    // requested port is not necessarily the one it ends up on — an occupied
-    // default steps forward — and `--join`/`--app` must discover the real one.
+    // requested port is not necessarily the one it ends up on. An occupied
+    // default steps forward, and `--join`/`--app` must discover the real one.
     // Only the code that owns the bound socket knows it.
     let state_dir = nanny_server_state_dir(&app.app_id)?;
 
@@ -163,7 +163,7 @@ pub fn cmd_server_start(
     // Cloud forwarding: sync happens exactly when NANNY_API_KEY is set and
     // --no-sync didn't turn it off. The engine only exposes events; the
     // forwarder that talks to the cloud lives here. The status line prints
-    // either way — a governor that silently stops reporting for a whole fleet
+    // either way, because a governor that silently stops reporting for a whole fleet
     // is the worst version of the failure v0.5.0 shipped.
     let session_token = uuid::Uuid::new_v4().to_string();
     let target = crate::sync::resolve_sync(env, no_sync);
@@ -209,8 +209,8 @@ pub fn cmd_server_start(
 
     // Does this governor also have an app of its own to run?
     //
-    // `[start]` already means "here is the app" everywhere else — plain
-    // `nanny run` requires it — so `--serve` honouring it is the consistent
+    // `[start]` already means "here is the app" everywhere else. Plain
+    // `nanny run` requires it, so `--serve` honouring it is the consistent
     // reading, not a new convention. Present: governor plus that app, one
     // command, no launcher script. Absent: headless governor, the shared-
     // governor case where the apps live elsewhere and arrive via `--join`.
@@ -249,9 +249,9 @@ pub fn cmd_server_start(
 
     match child_command {
         // ── Headless governor ────────────────────────────────────────────────
-        // Blocking — returns only when the server shuts down (CTRL-C/SIGTERM).
+        // Blocking: returns only when the server shuts down (CTRL-C/SIGTERM).
         None => {
-            println!("nanny: no [start] in nanny.toml — running headless, join it with --join");
+            println!("nanny: no [start] in nanny.toml, running headless. Join it with --join");
             NetworkServer::start_blocking_synced(
                 addr,
                 cert_path,
@@ -361,7 +361,7 @@ struct GovernorSetup {
 ///
 /// The governor runs on a background thread and the app on this one. That
 /// ordering matters: the app is only spawned once the governor's listener is
-/// bound, so there is no readiness race to poll around — the gap a launcher
+/// bound, so there is no readiness race to poll around. That is the gap a launcher
 /// script has to paper over with `until nanny status`.
 ///
 /// Being one process also fixes what a two-command shell launcher cannot:
@@ -409,7 +409,7 @@ fn run_governor_with_app(setup: GovernorSetup, command: Vec<String>, app_id: &st
 
     // Wait for the listener before spawning the app. The governor writes
     // server.addr only after a successful bind, so its appearance is the
-    // readiness signal — and it carries the port actually bound, which may not
+    // readiness signal, and it carries the port actually bound, which may not
     // be the one requested if the default fell forward.
     let addr_file = state_dir.join("server.addr");
     let server = wait_for_governor(&addr_file, &governor_finished, app_id)?;
@@ -438,7 +438,7 @@ fn run_governor_with_app(setup: GovernorSetup, command: Vec<String>, app_id: &st
             Some(status) => break status,
             None => {
                 if governor_finished.load(Ordering::SeqCst) {
-                    eprintln!("nanny: governor stopped — stopping the app it was governing");
+                    eprintln!("nanny: governor stopped, stopping the app it was governing");
                     let _ = child.kill();
                     let _ = child.wait();
                     break std::process::ExitStatus::default();

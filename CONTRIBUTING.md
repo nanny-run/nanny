@@ -223,12 +223,12 @@ There are no external service dependencies. The bridge runs in-process during te
 
 Cloud sync is controlled by one environment variable, `NANNY_API_KEY`. Set it and a run forwards its event log; leave it unset and the run is local-only. Every run prints which it is doing, so sync can never fail silently.
 
-App developers never choose a destination — there is exactly one Nanny Cloud, `api.nanny.run`, and it is compiled in. But *we* need to test against a local or staging cloud, so `nanny run` carries a hidden `--env` flag:
+App developers never choose a destination. There is exactly one Nanny Cloud, `api.nanny.run`, and it is compiled in. But *we* need to test against a local or staging cloud, so `nanny run` carries a hidden `--env` flag:
 
 ```bash
-nanny run --env=dev        # http://localhost:3000     — your local cloud
-nanny run --env=staging    # sandbox-api.nanny.run     — our QA deployment
-nanny run                  # api.nanny.run             — the default, and what everyone else gets
+nanny run --env=dev        # http://localhost:3000     : your local cloud
+nanny run --env=staging    # sandbox-api.nanny.run     : our QA deployment
+nanny run                  # api.nanny.run             : the default, and what everyone else gets
 ```
 
 It takes a **name, never a URL**, so no other endpoint is expressible and there is no exfiltration surface. It is `hide = true`, so it does not appear in `--help`, and it is absent from all user-facing docs. An unrecognised value is a hard error rather than a silent fall back to production.
@@ -237,7 +237,7 @@ A full local end-to-end check:
 
 ```bash
 NANNY_API_KEY=nny_yourdevkey nanny run --env=dev
-# → nanny: mode managed — syncing to http://localhost:3000 (app: your-app)
+# → nanny: mode managed, syncing to http://localhost:3000 (app: your-app)
 ```
 
 **Keeping your fork up to date:**

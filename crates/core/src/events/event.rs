@@ -159,7 +159,7 @@ pub enum ExecutionEvent {
     ///
     /// This rides in the payload rather than being derived from the API key,
     /// which is what lets one governor holding one credential serve many apps
-    /// and still have each attributed separately — the same reason OpenTelemetry
+    /// and still have each attributed separately, the same reason OpenTelemetry
     /// makes `service.name` a resource attribute instead of a transport concern.
     /// A process joining a governor declares its own identity here; one that has
     /// none inherits the governor's.

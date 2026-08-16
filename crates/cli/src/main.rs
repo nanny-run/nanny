@@ -72,7 +72,7 @@ enum Command {
         no_sync: bool,
 
         /// Which Nanny Cloud to forward to. Hidden: this exists for people
-        /// *building* Nanny, not people building apps with it — everyone else
+        /// *building* Nanny, not people building apps with it. Everyone else
         /// has exactly one cloud and never chooses. Takes a name, never a URL,
         /// so no other endpoint is expressible. See CONTRIBUTING.md.
         #[arg(long, value_enum, default_value_t = cloud::CloudEnv::Prod, hide = true)]
@@ -618,7 +618,7 @@ fn declare_app_to_governor(server: &NetworkServerInfo, dir: &Path, run_id: &str)
     };
     // SAFETY: called before the child is spawned, with nothing else in this
     // process reading the environment concurrently. These are the same values
-    // already staged onto the child's command — the run id especially, since
+    // already staged onto the child's command, the run id especially, since
     // declaring against a different run would file the identity under a run
     // that never does any work.
     unsafe {
@@ -669,7 +669,7 @@ fn cmd_run(
     if let Ok(raw) = std::fs::read_to_string(config_path) {
         if nanny_config::has_managed_section(&raw) {
             eprintln!(
-                "nanny: [managed] in nanny.toml is deprecated and ignored — set the \
+                "nanny: [managed] in nanny.toml is deprecated and ignored. Set the \
                  NANNY_API_KEY environment variable and Cloud sync happens \
                  automatically, no config needed."
             );
@@ -706,7 +706,7 @@ fn cmd_run(
     // no CONNECT proxy: it listens on a Unix socket (a TCP loopback port on
     // Windows) and is deliberately not a network server. `HTTPS_PROXY` can only
     // name a host:port, so no mainstream HTTP client can route through a Unix
-    // socket — a proxy allowlist is not something this path can ever honor.
+    // socket, and a proxy allowlist is not something this path can ever honor.
     //
     // Without this check, `[proxy] allowed_hosts` is silently inert here: no
     // injection, no enforcement, no warning, and traffic leaves ungoverned
@@ -773,7 +773,7 @@ fn cmd_run(
     // Forwards a copy of the NDJSON event log to the cloud; enforcement stays
     // fully local. Fire-and-forget, never blocks or fails the run. The key is
     // the only input: no config field, no credential file, nothing written to
-    // disk. The status line prints on every run either way — a run that stops
+    // disk. The status line prints on every run either way, because a run that stops
     // reporting must never do so silently.
     // Declare which app this is, before anything else can be attributed to it.
     // Identity rides in the event stream rather than being derived from the API

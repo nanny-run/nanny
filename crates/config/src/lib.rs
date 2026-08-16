@@ -295,7 +295,7 @@ pub struct ProxyConfig {
 
 /// Environment variable holding the cloud API key. **The single input that
 /// decides whether a run syncs**: set it and events forward, leave it unset and
-/// the run is local-only. Nothing else turns sync on — no config field, no
+/// the run is local-only. Nothing else turns sync on: no config field, no
 /// credential file, no login command.
 ///
 /// A secret must never live in the committable nanny.toml, so it is injected
@@ -309,7 +309,7 @@ pub const API_KEY_ENV: &str = "NANNY_API_KEY";
 /// Whether a nanny.toml still carries a `[managed]` section. That block
 /// (endpoint / api_key) was retired in favor of the `NANNY_API_KEY` environment
 /// variable; it is now ignored, so the CLI warns rather than silently doing
-/// nothing. A plain line scan is enough — the section is a top-level
+/// nothing. A plain line scan is enough, because the section is a top-level
 /// `[managed]` or `[managed.*]` table.
 pub fn has_managed_section(contents: &str) -> bool {
     contents.lines().any(|line| {

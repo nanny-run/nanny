@@ -85,12 +85,12 @@ nanny run > nanny.log
 
 Whether it also runs an app of its own is decided by `nanny.toml`:
 
-- **`[start]` present** — the governor launches that command underneath itself, in one process. One container, one command, no launcher script. Trailing arguments append to it, as with plain `nanny run`.
-- **`[start]` absent** — a headless governor, for the case where the apps live elsewhere and arrive via `--join`.
+- **`[start]` present.** The governor launches that command underneath itself, in one process. One container, one command, no launcher script. Trailing arguments append to it, as with plain `nanny run`.
+- **`[start]` absent.** A headless governor, for the case where the apps live elsewhere and arrive via `--join`.
 
 Launching an app does not make the governor exclusive: it is still a server, and other processes can still join it, each with its own run id and budget.
 
-For a single-process agent with no `[proxy]` allowlist you don't need any of this — plain `nanny run` is enough. You *do* need it if `nanny.toml` declares `[proxy] allowed_hosts`, because the egress allowlist is enforced by the governance server and not by the in-process bridge.
+For a single-process agent with no `[proxy]` allowlist you don't need any of this; plain `nanny run` is enough. You *do* need it if `nanny.toml` declares `[proxy] allowed_hosts`, because the egress allowlist is enforced by the governance server and not by the in-process bridge.
 
 Starting a server requires `nanny init` to have already run in that directory: the server's state is keyed by the app's permanent `app_id`, not a global path, so two unrelated apps' servers on one machine never collide.
 

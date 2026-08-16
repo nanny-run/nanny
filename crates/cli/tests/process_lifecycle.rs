@@ -772,7 +772,7 @@ log = "stdout"
 // in-process removes all three.
 //
 // Also pins that launching an app of its own does NOT make the governor
-// exclusive — it is still a server, and other processes can still join it.
+// exclusive: it is still a server, and other processes can still join it.
 
 #[test]
 fn serve_runs_the_start_command_and_remains_joinable() {
@@ -816,7 +816,7 @@ log = "file"
     assert!(ready, "governor must become ready within 10 s");
 
     // While the governor's own app is still running, a separate process must
-    // still be able to join — launching an app does not close the door.
+    // still be able to join. Launching an app does not close the door.
     let client_dir = temp_dir();
     fs::write(
         client_dir.join("nanny.toml"),
@@ -918,7 +918,7 @@ timeout = 60000
 // HTTPS_PROXY can only name a host:port, so this path can never honor
 // [proxy] allowed_hosts. Before this guard the section was silently inert:
 // no injection, no enforcement, no warning, traffic leaving ungoverned while
-// nanny.toml said otherwise — the same fail-open G8 fixed on the --join path
+// nanny.toml said otherwise, the same fail-open G8 fixed on the --join path
 // while leaving it open on this one.
 
 #[test]

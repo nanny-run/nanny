@@ -146,7 +146,7 @@ See [HTTP proxy mode](/v0.5/guides/http-proxy-mode) for full details.
 
 ## Cloud sync
 
-Cloud sync has no config block. It turns on wherever the `NANNY_API_KEY` environment variable is set, and there is no field to flip. No key, endpoint, or org lives in `nanny.toml` — it is committed, and a committed file must never hold a secret or differ between your staging and production deploys.
+Cloud sync has no config block. It turns on wherever the `NANNY_API_KEY` environment variable is set, and there is no field to flip. No key, endpoint, or org lives in `nanny.toml`, because it is committed, and a committed file must never hold a secret or differ between your staging and production deploys.
 
 See [Connect to Nanny Cloud](/v0.5/guides/managed-mode) for the full flow, and [Deploying a governed app](/v0.5/guides/deploying) for containers and CI.
 

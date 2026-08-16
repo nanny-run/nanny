@@ -17,7 +17,7 @@
 //!
 //! Design guarantees:
 //! - **Local-first.** With no key, nothing starts and the engine runs offline
-//!   with no dependency. The API key buys cloud sync and nothing else — every
+//!   with no dependency. The API key buys cloud sync and nothing else. Every
 //!   enforcement guarantee holds identically without it.
 //! - **Non-blocking.** `enqueue` just pushes onto a channel; a background thread
 //!   batches and POSTs, so the run's poll loop never waits on the network.
@@ -27,8 +27,8 @@
 //!   that silently stops reporting is the failure mode a compliance product can
 //!   least afford, and it is exactly what v0.5.0 shipped.
 //!
-//! The organization and the app are derived on the cloud side — the org from the
-//! API key, the app from the `AppIdentified` event in the payload — so the
+//! The organization and the app are derived on the cloud side: the org from the
+//! API key, the app from the `AppIdentified` event in the payload, so the
 //! request carries only the key (`X-Nanny-Key`) and a per-run session id
 //! (`X-Nanny-Session`).
 
@@ -125,18 +125,18 @@ pub fn sync_status_line(target: Result<&SyncTarget, NoSyncReason>, app_name: Opt
         Ok(t) => {
             let host = t.endpoint.strip_suffix("/v1/ingest").unwrap_or(&t.endpoint);
             match app_name {
-                Some(name) => format!("nanny: mode managed — syncing to {host} (app: {name})"),
-                None => format!("nanny: mode managed — syncing to {host}"),
+                Some(name) => format!("nanny: mode managed, syncing to {host} (app: {name})"),
+                None => format!("nanny: mode managed, syncing to {host}"),
             }
         }
         Err(NoSyncReason::Flag) => {
-            "nanny: mode local — not syncing (--no-sync). Enforcing locally.".to_string()
+            "nanny: mode local, not syncing (--no-sync). Enforcing locally.".to_string()
         }
         Err(NoSyncReason::EnvOverride) => {
-            format!("nanny: mode local — not syncing ({NO_SYNC_ENV} is set). Enforcing locally.")
+            format!("nanny: mode local, not syncing ({NO_SYNC_ENV} is set). Enforcing locally.")
         }
         Err(NoSyncReason::NoApiKey) => format!(
-            "nanny: mode local — not syncing ({API_KEY_ENV} is not set). Enforcing locally."
+            "nanny: mode local, not syncing ({API_KEY_ENV} is not set). Enforcing locally."
         ),
     }
 }
@@ -147,8 +147,8 @@ pub fn sync_status_line(target: Result<&SyncTarget, NoSyncReason>, app_name: Opt
 const SEND_ATTEMPTS: u32 = 4;
 /// First backoff step; doubles each attempt (250ms, 500ms, 1s, 2s).
 const BACKOFF_BASE: Duration = Duration::from_millis(250);
-/// Ceiling on the durable outbox. Generous — a month of a busy app's events is
-/// far smaller — but finite, so a permanently unreachable cloud cannot fill a
+/// Ceiling on the durable outbox. Generous (a month of a busy app's events is
+/// far smaller) but finite, so a permanently unreachable cloud cannot fill a
 /// disk. Exceeding it drops the oldest spooled batch and says so.
 const MAX_SPOOL_BYTES: u64 = 64 * 1024 * 1024;
 
@@ -172,7 +172,7 @@ enum Delivery {
 /// slow the agent down.
 ///
 /// This is also where the runtime starts reading the response status at all.
-/// Previously any outcome — 200, 401, 500 — was indistinguishable, and every
+/// Previously any outcome (200, 401, 500) was indistinguishable, and every
 /// batch was dropped either way, so a rejected key looked exactly like success.
 fn send_batch(
     client: &reqwest::blocking::Client,
@@ -219,7 +219,7 @@ fn send_batch(
 /// *every* run the app has ever done, and the events in it carry no session:
 /// `X-Nanny-Session` is a per-run header, not a field. Replaying a byte range
 /// of that file would have to pick one session for events that belonged to
-/// many, and the cloud keys an execution off exactly that value — so a whole
+/// many, and the cloud keys an execution off exactly that value, so a whole
 /// history would be merged into one bogus run. A high-water mark over the log
 /// is the obvious design and it is wrong for that reason.
 ///
@@ -269,7 +269,7 @@ impl Spool {
 
     /// Best-effort `.gitignore` entry for the outbox, mirroring what the config
     /// crate already does for `.nanny/logs/`. A missed entry is a nudge, not a
-    /// failure — but committed event data would be a real leak.
+    /// failure, but committed event data would be a real leak.
     fn ensure_gitignored(&self) {
         const LINE: &str = ".nanny/spool/";
         let Some(base) = self.dir.parent().and_then(|p| p.parent()) else {
@@ -300,7 +300,7 @@ impl Spool {
         while total + incoming > MAX_SPOOL_BYTES && !entries.is_empty() {
             let (path, size) = entries.remove(0);
             eprintln!(
-                "nanny: sync — outbox is full ({MAX_SPOOL_BYTES} bytes); dropping the oldest \
+                "nanny: sync: outbox is full ({MAX_SPOOL_BYTES} bytes); dropping the oldest \
                  unsent batch. Events in it are still in the local log."
             );
             let _ = std::fs::remove_file(&path);
@@ -347,7 +347,7 @@ impl Spool {
                 }
                 Delivery::Permanent(status) => {
                     eprintln!(
-                        "nanny: sync — the cloud refused a stored batch ({status}); discarding it. \
+                        "nanny: sync: the cloud refused a stored batch ({status}); discarding it. \
                          The events remain in the local log."
                     );
                     let _ = std::fs::remove_file(&path);
@@ -399,7 +399,7 @@ impl CloudSync {
             // down delays nothing the agent is doing.
             let recovered = spool.drain(&client, &endpoint, &api_key);
             if recovered > 0 {
-                eprintln!("nanny: sync — delivered {recovered} batch(es) held from an earlier run");
+                eprintln!("nanny: sync: delivered {recovered} batch(es) held from an earlier run");
             }
             worker(rx, client, endpoint, api_key, session, spool)
         });
@@ -451,7 +451,7 @@ impl ServerForwarder {
             // every joined process reports through here.
             let recovered = spool.drain(&client, &endpoint, &api_key);
             if recovered > 0 {
-                eprintln!("nanny: sync — delivered {recovered} batch(es) held from an earlier run");
+                eprintln!("nanny: sync: delivered {recovered} batch(es) held from an earlier run");
             }
 
             let mut warned = false;
@@ -467,7 +467,7 @@ impl ServerForwarder {
                         spool.store(&session, &body);
                         if !warned {
                             eprintln!(
-                                "nanny: sync — cloud unreachable; holding fleet events locally \
+                                "nanny: sync: cloud unreachable; holding fleet events locally \
                                  and retrying later (enforcement is unaffected)"
                             );
                             warned = true;
@@ -476,7 +476,7 @@ impl ServerForwarder {
                     Delivery::Permanent(status) => {
                         if !warned {
                             eprintln!(
-                                "nanny: sync — the cloud refused fleet events ({status}); not \
+                                "nanny: sync: the cloud refused fleet events ({status}); not \
                                  retrying. Enforcement is unaffected."
                             );
                             warned = true;
@@ -515,7 +515,7 @@ fn worker(
                 spool.store(&session, &body);
                 if !*warned {
                     eprintln!(
-                        "nanny: sync — cloud unreachable; holding events locally and \
+                        "nanny: sync: cloud unreachable; holding events locally and \
                          retrying on the next run (enforcement is unaffected)"
                     );
                     *warned = true;
@@ -524,7 +524,7 @@ fn worker(
             Delivery::Permanent(status) => {
                 if !*warned {
                     eprintln!(
-                        "nanny: sync — the cloud refused these events ({status}); not retrying. \
+                        "nanny: sync: the cloud refused these events ({status}); not retrying. \
                          They remain in the local log. Enforcement is unaffected."
                     );
                     *warned = true;
@@ -646,7 +646,7 @@ mod tests {
         });
     }
 
-    // ── the startup line — never silent ───────────────────────────────────
+    // ── the startup line, never silent ───────────────────────────────────
 
     #[test]
     fn the_status_line_names_the_host_and_app_when_syncing() {
@@ -780,7 +780,7 @@ mod tests {
     #[test]
     fn an_unreachable_cloud_holds_events_instead_of_dropping_them() {
         // The whole point of the outbox. Before this, a failed batch was
-        // clear()ed and the events were gone — a cloud blip cost real history
+        // clear()ed and the events were gone. A cloud blip cost real history
         // out of a log whose value is being complete.
         let dir = temp_app_dir();
         let sender =
@@ -797,7 +797,7 @@ mod tests {
         assert_eq!(session, "run-1", "the session must be stored with the batch");
         assert!(body.contains("ExecutionStarted"), "the events must be intact: {body}");
 
-        // Held batches are event data — on disk, never in git.
+        // Held batches are event data: on disk, never in git.
         let gitignore = std::fs::read_to_string(dir.join(".gitignore")).unwrap_or_default();
         assert!(gitignore.contains(".nanny/spool/"), "the outbox must be gitignored: {gitignore:?}");
     }
@@ -835,7 +835,7 @@ mod tests {
     #[test]
     fn a_held_batch_survives_until_it_is_delivered() {
         // Drain against a cloud that is still down must keep the batch, not
-        // consume it — otherwise the outbox loses exactly what it exists to keep.
+        // consume it, otherwise the outbox loses exactly what it exists to keep.
         let dir = temp_app_dir();
         Spool::new(&dir).store("s", r#"{"event":"X"}"#);
 

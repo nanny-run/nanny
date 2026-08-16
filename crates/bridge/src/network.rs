@@ -115,7 +115,7 @@ fn bind_with_fallforward(requested: SocketAddr) -> Result<std::net::TcpListener>
                     .context("failed to set the listener non-blocking")?;
                 if attempt > 0 {
                     println!(
-                        "nanny: port {} was in use — listening on {} instead",
+                        "nanny: port {} was in use, listening on {} instead",
                         requested.port(),
                         addr.port()
                     );
@@ -156,7 +156,7 @@ fn bind_with_fallforward(requested: SocketAddr) -> Result<std::net::TcpListener>
 ///
 /// The mode is set **as the file is created**, not applied afterwards. Writing
 /// first and calling `set_permissions` second (what this replaced) leaves the
-/// file at the process umask — commonly 0644 — for the moment in between, which
+/// file at the process umask (commonly 0644) for the moment in between, which
 /// on a multi-user box is long enough to read a token out of.
 fn write_secret_file(path: &Path, contents: &str) -> Result<()> {
     #[cfg(unix)]
@@ -1009,7 +1009,7 @@ impl NetworkServer {
         }
 
         // Bind before writing any state, so the files record the port actually
-        // in use rather than the one that was requested — an occupied default
+        // in use rather than the one that was requested, since an occupied default
         // steps forward, and `--join`/`--app` must find the real one.
         let listener = bind_with_fallforward(addr)?;
         let addr = listener
@@ -2413,7 +2413,7 @@ mod tests {
 
         // Poll /events rather than sleeping a fixed 250 ms first. The CONNECT is
         // sent from a background thread, so "has the server processed it yet" is
-        // a race against machine load — the same lesson `wait_for_port` already
+        // a race against machine load, the same lesson `wait_for_port` already
         // learned in this file. A single fixed sleep made this test fail roughly
         // one run in six under a parallel suite while always passing alone.
         let fetch_events = || -> String {

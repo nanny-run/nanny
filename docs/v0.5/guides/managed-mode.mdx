@@ -18,7 +18,7 @@ Enforcement never depends on the network. If the cloud is slow or unreachable yo
 
 <Note>
   Syncing is **additive**. It changes nothing about how limits and rules are
-  enforced — only whether a copy of the event log reaches your dashboard. The
+  enforced, only whether a copy of the event log reaches your dashboard. The
   API key buys cloud sync and nothing else.
 </Note>
 
@@ -31,7 +31,7 @@ export NANNY_API_KEY=nny_...
 nanny run
 ```
 
-That is the whole setup. There is no config field, no credential file, no login command, and nothing written to disk — which is what makes it behave identically on a laptop, in CI, on a read-only filesystem, and across twenty replicas sharing one key.
+That is the whole setup. There is no config field, no credential file, no login command, and nothing written to disk. That is what makes it behave identically on a laptop, in CI, on a read-only filesystem, and across twenty replicas sharing one key.
 
 In production, set it the way your platform sets any secret:
 
@@ -46,8 +46,8 @@ kubectl create secret generic nanny --from-literal=...     # Kubernetes
 Every run says so, on both paths:
 
 ```
-nanny: mode managed — syncing to https://api.nanny.run (app: gotm-nanny)
-nanny: mode local — not syncing (NANNY_API_KEY is not set). Enforcing locally.
+nanny: mode managed, syncing to https://api.nanny.run (app: gotm-nanny)
+nanny: mode local, not syncing (NANNY_API_KEY is not set). Enforcing locally.
 ```
 
 For a long-running governor, `nanny status` answers the same question later:
@@ -62,7 +62,7 @@ nanny: governance server running
 <Note>
   A run that quietly stops reporting is the worst failure a compliance tool can
   have, so Nanny never stays silent about it. If a key is rejected, that is
-  printed too — it is not treated as success.
+  printed too, and is not treated as success.
 </Note>
 
 ## When the cloud is unreachable
@@ -75,7 +75,7 @@ The outbox is capped (64 MB) and gitignored, like the logs beside it.
 
 ## Which app a run belongs to
 
-`nanny init` writes `.nanny/app.json` — a permanent id plus a human-facing name — and commits it. Every run declares that identity, so the dashboard groups runs by app without you doing anything.
+`nanny init` writes `.nanny/app.json`, a permanent id plus a human-facing name, and commits it. Every run declares that identity, so the dashboard groups runs by app without you doing anything.
 
 This matters most with a governance server: one governor holds one key but can serve many apps, and each is still attributed separately, because identity travels in the event stream rather than being derived from the key.
 
@@ -86,4 +86,4 @@ nanny run --no-sync      # this run only
 export NANNY_NO_SYNC=1   # this machine
 ```
 
-Or simply do not set `NANNY_API_KEY`. No key, no sync, no warning — that is the default state, not an error.
+Or simply do not set `NANNY_API_KEY`. No key, no sync, no warning: that is the default state, not an error.

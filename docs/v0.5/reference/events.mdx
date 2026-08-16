@@ -135,7 +135,7 @@ Emitted when a function annotated with `#[nanny::agent("name")]` returns, closin
 
 ## HarnessIdentified
 
-Emitted once when the agentic harness running the loop is identified — auto-detected by the Python SDK from imported frameworks, or declared explicitly with `nanny::set_harness` in Rust.
+Emitted once when the agentic harness running the loop is identified, either auto-detected by the Python SDK from imported frameworks or declared explicitly with `nanny::set_harness` in Rust.
 
 Attribution only: it never affects enforcement, never carries content, and never touches the ledger. De-duplicated, so an SDK may safely re-send it on every call.
 
@@ -159,7 +159,7 @@ Attribution only: it never affects enforcement, never carries content, and never
 
 Emitted once when a process declares which app it is, read from the committed `.nanny/app.json`. Same category as `HarnessIdentified`: attribution only, de-duplicated, safe to re-send.
 
-This is what lets one governance server — holding one API key — serve many apps and still have each attributed separately. Identity travels in the event stream rather than being derived from the credential, for the same reason OpenTelemetry makes `service.name` a resource attribute rather than a transport concern.
+This is what lets one governance server, holding one API key, serve many apps and still have each attributed separately. Identity travels in the event stream rather than being derived from the credential, for the same reason OpenTelemetry makes `service.name` a resource attribute rather than a transport concern.
 
 ```json
 {

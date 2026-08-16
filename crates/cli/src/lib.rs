@@ -213,7 +213,7 @@ pub fn set_harness(harness: Harness) {
 ///
 /// Identity travels in the event stream, not in the API key, which is what lets
 /// one governor holding one credential serve many apps and still attribute each
-/// separately — the same reason OpenTelemetry makes `service.name` a resource
+/// separately, the same reason OpenTelemetry makes `service.name` a resource
 /// attribute rather than a transport concern.
 ///
 /// # Passthrough mode
@@ -869,7 +869,7 @@ mod runtime {
         let _ = http_post("/harness", &body.to_string());
     }
 
-    /// POST /app — declare which app this process is.
+    /// POST /app: declare which app this process is.
     ///
     /// No-op in passthrough mode (no bridge) and for an empty `app_id`.
     /// Fire-and-forget on the same contract as `set_harness`: the response is
