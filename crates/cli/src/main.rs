@@ -553,6 +553,29 @@ fn cmd_run_via_network_server(command: Vec<String>, server: NetworkServerInfo) -
         cmd.env("no_proxy",  "127.0.0.1,localhost");
     }
 
+    // Declare this app to the governor for this run, before the child can do
+    // anything attributable. A governor holds one credential but serves many
+    // apps, so identity has to travel per run in the event stream; without
+    // this, everything a joined process does would be filed under the
+    // governor's own app.
+    //
+    // Done here rather than in the child because a black-box app governed only
+    // by the proxy has no SDK to declare with. We borrow the SDK's own client
+    // by setting the same env vars on this process that we just set on the
+    // child, so all three transports (socket, loopback TCP, mTLS) are handled
+    // by one implementation instead of a second copy of the logic here.
+    if let Ok(Some(app)) = identity::AppIdentity::load(Path::new(".")) {
+        // SAFETY: single-threaded at this point — the child has not been
+        // spawned and nothing else in this process reads the environment
+        // concurrently. These are the same values already staged onto `cmd`.
+        unsafe {
+            std::env::set_var("NANNY_BRIDGE_ADDR", &server.addr);
+            std::env::set_var("NANNY_SESSION_TOKEN", &server.token);
+            std::env::set_var("NANNY_RUN_ID", &run_id);
+        }
+        nanny::set_app(app.app_id, app.name);
+    }
+
     let status = cmd
         .status()
         .with_context(|| format!("failed to run '{program}'"))?;
@@ -680,7 +703,17 @@ fn cmd_run(
     // the only input: no config field, no credential file, nothing written to
     // disk. The status line prints on every run either way — a run that stops
     // reporting must never do so silently.
-    let app_name = identity::AppIdentity::load(config_dir).ok().flatten().map(|a| a.name);
+    // Declare which app this is, before anything else can be attributed to it.
+    // Identity rides in the event stream rather than being derived from the API
+    // key, so one credential can serve many apps and each still lands under its
+    // own name. An app with no `.nanny/app.json` simply doesn't declare, and
+    // Cloud groups its runs the way it always has.
+    let app = identity::AppIdentity::load(config_dir).ok().flatten();
+    if let Some(app) = &app {
+        bridge.declare_app(&app.app_id, &app.name);
+    }
+    let app_name = app.map(|a| a.name);
+
     let target = sync::resolve_sync(env, no_sync);
     println!("{}", sync::sync_status_line(target.as_ref().map_err(|e| *e), app_name.as_deref()));
     let managed = target

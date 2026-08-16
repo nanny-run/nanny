@@ -203,6 +203,28 @@ pub fn set_harness(harness: Harness) {
     runtime::set_harness(harness.name, harness.version);
 }
 
+/// Declare which app this process belongs to.
+///
+/// Records an `AppIdentified` attribution event so the cloud can group runs by
+/// app. Normally you never call this: `nanny run` reads the committed
+/// `.nanny/app.json` and declares it for you. It exists for the case where a
+/// process joins a governor and wants to report under its own identity rather
+/// than inheriting the governor's.
+///
+/// Identity travels in the event stream, not in the API key, which is what lets
+/// one governor holding one credential serve many apps and still attribute each
+/// separately — the same reason OpenTelemetry makes `service.name` a resource
+/// attribute rather than a transport concern.
+///
+/// # Passthrough mode
+///
+/// When running outside `nanny run` (no bridge active) this is a no-op. An
+/// empty `app_id` is ignored; an empty `name` is allowed, since the id is what
+/// identifies and the name is only a label.
+pub fn set_app(app_id: impl Into<String>, name: impl Into<String>) {
+    runtime::set_app(app_id.into(), name.into());
+}
+
 // ── Run control ─────────────────────────────────────────────────────────────
 
 /// Start a new governed run in the current process. Returns the new run id.
@@ -845,6 +867,20 @@ mod runtime {
             body["version"] = serde_json::Value::String(v);
         }
         let _ = http_post("/harness", &body.to_string());
+    }
+
+    /// POST /app — declare which app this process is.
+    ///
+    /// No-op in passthrough mode (no bridge) and for an empty `app_id`.
+    /// Fire-and-forget on the same contract as `set_harness`: the response is
+    /// ignored and transport errors are swallowed, so declaring identity can
+    /// never interrupt the agent.
+    pub fn set_app(app_id: String, name: String) {
+        if !is_active() || app_id.trim().is_empty() {
+            return;
+        }
+        let body = serde_json::json!({"app_id": app_id, "name": name});
+        let _ = http_post("/app", &body.to_string());
     }
 
     // ── Agent enter / exit ────────────────────────────────────────────────────
