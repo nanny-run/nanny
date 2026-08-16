@@ -579,6 +579,115 @@ log = "stdout"
     );
 }
 
+// ── T8b: a joined app is attributed to ITSELF, not to the governor ───────────
+//
+// The load-bearing property of the whole app-identity design: one governor
+// holds one credential and serves many apps, and each must still land under its
+// own name. If a joined app inherited the governor's identity, a fleet would
+// collapse into one row on the dashboard and per-app cost would be a fiction.
+//
+// Sandboxed via NANNY_HOME, not HOME (see T7's comment for why).
+
+#[test]
+fn joined_app_is_attributed_to_its_own_identity() {
+    let home = temp_dir();
+
+    // The governor, with its own identity and a file event log to read back.
+    let server_dir = temp_dir();
+    fs::write(
+        server_dir.join("nanny.toml"),
+        r#"[start]
+cmd = "echo unused"
+
+[limits]
+steps   = 100
+tokens  = 1000
+timeout = 60000
+
+[observability]
+log = "file"
+"#,
+    )
+    .unwrap();
+    let governor_id = write_app_identity(&server_dir);
+
+    // The joining app, with a DIFFERENT identity.
+    let client_dir = temp_dir();
+    fs::write(
+        client_dir.join("nanny.toml"),
+        r#"[start]
+cmd = "echo joined-work"
+
+[limits]
+steps   = 10
+tokens  = 100
+timeout = 10000
+"#,
+    )
+    .unwrap();
+    let joiner_id = write_app_identity(&client_dir);
+    assert_ne!(governor_id, joiner_id, "the two apps must be distinct for this test to mean anything");
+
+    // 15904: every port in this file must be unique — these tests run in
+    // parallel, and reusing one makes a test that passes alone fail in a suite.
+    let server_port = 15904u16;
+    let mut server = Command::new(nanny_bin())
+        .current_dir(&server_dir)
+        .env("NANNY_HOME", &home)
+        .args(["run", "--serve", "--addr", &format!("127.0.0.1:{server_port}")])
+        .spawn()
+        .expect("governance server must spawn");
+
+    let mut ready = false;
+    for _ in 0..50 {
+        if std::net::TcpStream::connect(format!("127.0.0.1:{server_port}")).is_ok() {
+            ready = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(ready, "governance server must become ready within 5 s");
+
+    let output = Command::new(nanny_bin())
+        .current_dir(&client_dir)
+        .env("NANNY_HOME", &home)
+        .args(["--config", &config_arg(&client_dir), "run", &format!("--join={governor_id}")])
+        .output()
+        .expect("nanny run --join must complete");
+
+    // The governor drains events on a 250 ms tick, so give it room to flush.
+    let log_path = server_dir.join(".nanny").join("logs").join("log.ndjson");
+    let mut events = String::new();
+    for _ in 0..40 {
+        events = fs::read_to_string(&log_path).unwrap_or_default();
+        if events.contains("AppIdentified") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    let _ = server.kill();
+    let _ = server.wait();
+    let _ = fs::remove_dir_all(&client_dir);
+    let _ = fs::remove_dir_all(&server_dir);
+    let _ = fs::remove_dir_all(&home);
+
+    assert!(
+        output.status.success(),
+        "nanny run --join must exit 0\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        events.contains(&joiner_id),
+        "the governor's log must attribute the run to the JOINING app ({joiner_id})\ngot: {events}"
+    );
+    assert!(
+        !events.contains(&governor_id),
+        "the joined run must not be filed under the governor's own id ({governor_id})\ngot: {events}"
+    );
+}
+
 // ── T9: nanny run --join=<id> fails loudly when that server isn't reachable ──
 //
 // An explicit `--join` that doesn't find its target is a mistake worth
