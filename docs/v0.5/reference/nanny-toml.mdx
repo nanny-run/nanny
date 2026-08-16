@@ -46,7 +46,7 @@ log  = "stdout"   # "stdout" | "file" — "file" writes to .nanny/logs/log.ndjso
 allowed_hosts = ["api.openai.com", "*.anthropic.com"]   # required when proxy mode is used
 
 # Cloud sync isn't a config field. It turns on for any machine that's run
-# `nanny auth login`. There is no endpoint or key in this file.
+# the NANNY_API_KEY environment variable. There is no endpoint or key here.
 ```
 
 ---
@@ -146,7 +146,7 @@ See [HTTP proxy mode](/v0.5/guides/http-proxy-mode) for full details.
 
 ## Cloud sync
 
-Cloud sync has no config block. It turns on for any machine that's logged in via `nanny auth login`, no separate field to flip. No key, endpoint, or org lives in `nanny.toml`: login handles the credential, so your committed config never holds a secret.
+Cloud sync has no config block. It turns on wherever the `NANNY_API_KEY` environment variable is set, and there is no field to flip. No key, endpoint, or org lives in `nanny.toml` — it is committed, and a committed file must never hold a secret or differ between your staging and production deploys.
 
-See [Connect to Nanny Cloud](/v0.5/guides/managed-mode) for the full flow, including the `--token` path for CI and headless machines.
+See [Connect to Nanny Cloud](/v0.5/guides/managed-mode) for the full flow, and [Deploying a governed app](/v0.5/guides/deploying) for containers and CI.
 

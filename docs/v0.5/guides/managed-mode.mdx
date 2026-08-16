@@ -1,77 +1,89 @@
 ---
 title: Connect to Nanny Cloud
-description: Log in once, and Nanny forwards your runs to Nanny Cloud (dashboards, cost, and a durable audit trail) while enforcement stays fully local.
+description: Set one environment variable and Nanny forwards your runs to Nanny Cloud (dashboards, cost, and a durable audit trail) while enforcement stays fully local.
 ---
 
 ## What syncing does
 
-By default, Nanny runs **local-only**: it enforces your limits and rules on your machine and writes an event log to stdout. Nothing leaves the box.
+By default, Nanny runs **local-only**: it enforces your limits and rules on your machine and writes an event log. Nothing leaves the box.
 
-Once a machine is **logged in**, `nanny run` additionally forwards a copy of your run's event log to [Nanny Cloud](https://nanny.run/cloud). In return you get, per organization:
+Set `NANNY_API_KEY` and `nanny run` additionally forwards a copy of the run's event log to [Nanny Cloud](https://nanny.run/cloud). In return you get, per organization:
 
-- A dashboard of every run: steps, tokens, stop reasons, models
-- Spend and usage trends across all your agents
+- A dashboard of every run: steps, tokens, stop reasons, models, and which app it came from
+- Real dollar cost, priced per model and per token type
 - Alerts when a run starts to spiral
 - A durable, exportable audit trail (compliance tiers)
 
-Enforcement never depends on the network. If the cloud is slow or unreachable, your agent runs exactly as it would locally. Forwarding is best-effort and never blocks or fails a run.
+Enforcement never depends on the network. If the cloud is slow or unreachable your agent runs exactly as it would locally, and the events are held and delivered later.
 
 <Note>
   Syncing is **additive**. It changes nothing about how limits and rules are
-  enforced, only whether a copy of the event log is sent to your dashboard.
+  enforced — only whether a copy of the event log reaches your dashboard. The
+  API key buys cloud sync and nothing else.
 </Note>
 
 ## Turn it on
 
-One step, no config to edit, no secret in `nanny.toml`:
+Create a key in the dashboard under **Settings → API Keys**, then set it wherever your app runs:
 
 ```bash
-nanny auth login
+export NANNY_API_KEY=nny_...
+nanny run
 ```
 
-This opens your browser to approve. Approve, and the machine is connected: `nanny run` self-mints an app-scoped credential the first time it runs in a given app directory, stored in a gitignored `.nanny/credentials.local.json` alongside your permanent `.nanny/app.json` identity. Now run as usual:
+That is the whole setup. There is no config field, no credential file, no login command, and nothing written to disk — which is what makes it behave identically on a laptop, in CI, on a read-only filesystem, and across twenty replicas sharing one key.
+
+In production, set it the way your platform sets any secret:
 
 ```bash
-nanny run python agent.py
+fly secrets set NANNY_API_KEY=nny_...                      # Fly
+kubectl create secret generic nanny --from-literal=...     # Kubernetes
+# Coolify / Render / Railway: add it as an environment variable
 ```
 
-Your run appears in the dashboard within a few seconds of finishing. No code changes, no per-call instrumentation.
+## Knowing whether it worked
+
+Every run says so, on both paths:
+
+```
+nanny: mode managed — syncing to https://api.nanny.run (app: gotm-nanny)
+nanny: mode local — not syncing (NANNY_API_KEY is not set). Enforcing locally.
+```
+
+For a long-running governor, `nanny status` answers the same question later:
+
+```
+nanny: governance server running
+  appId  : app_70c74914f3694d03a18c70dbca8fb8d8
+  address: 127.0.0.1:62669
+  sync   : https://api.nanny.run
+```
 
 <Note>
-  Syncing needs only one thing: being logged in on the machine (`nanny auth
-  login`). A machine that never logged in never syncs; there's no separate
-  project-level switch to flip.
+  A run that quietly stops reporting is the worst failure a compliance tool can
+  have, so Nanny never stays silent about it. If a key is rejected, that is
+  printed too — it is not treated as success.
 </Note>
 
-## CI and headless machines
+## When the cloud is unreachable
 
-A browser flow needs a person. For CI or a headless machine, log in with an API key instead, supplied through `NANNY_API_KEY` (a CI secret) or stdin, never a command argument:
+Nothing is lost and nothing blocks. A batch that cannot be delivered is retried with backoff, and if it still cannot be sent it is written to a durable outbox under `.nanny/spool/` and delivered on the next run, oldest first.
 
-```bash
-NANNY_API_KEY="nny_..." nanny auth login --token --env prod
-# or:  echo "$NANNY_API_KEY" | nanny auth login --token --env staging
-```
+Each held batch carries the session it belongs to, so replayed events land under the run that actually produced them rather than being merged into whichever run happens to deliver them. Cloud de-duplicates on content, so an overlapping replay is a no-op.
 
-This logs in without opening a browser. `--env` is required so it targets the right cloud.
+The outbox is capped (64 MB) and gitignored, like the logs beside it.
 
-## Skip a single run
+## Which app a run belongs to
 
-Forward nothing for one run, without logging out:
+`nanny init` writes `.nanny/app.json` — a permanent id plus a human-facing name — and commits it. Every run declares that identity, so the dashboard groups runs by app without you doing anything.
 
-```bash
-nanny run --no-sync python agent.py
-```
-
-## Local vs synced
-
-|                          | Not logged in (default) | Logged in                              |
-| ------------------------ | ------------------------ | --------------------------------------- |
-| Enforcement              | Local, deterministic     | Local, deterministic (unchanged)        |
-| Event log                | stdout / file             | stdout / file **+** forwarded to cloud  |
-| Network required to run  | No                        | No (forwarding is best-effort)          |
-| Dashboard & trends       | No                        | Yes                                     |
+This matters most with a governance server: one governor holds one key but can serve many apps, and each is still attributed separately, because identity travels in the event stream rather than being derived from the key.
 
 ## Turning it off
 
-- **One run:** `nanny run --no-sync`.
-- **Your machine, for good:** `nanny auth logout`. To revoke the key everywhere, use the dashboard.
+```bash
+nanny run --no-sync      # this run only
+export NANNY_NO_SYNC=1   # this machine
+```
+
+Or simply do not set `NANNY_API_KEY`. No key, no sync, no warning — that is the default state, not an error.

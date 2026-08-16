@@ -29,7 +29,7 @@ nanny run --limits=researcher
 | ----------------- | ------ | -------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | `--limits=<name>` | string | —              | Activate a named limit set from `nanny.toml`. Inherits from `[limits]`.                                                 |
 | `--join=<appId>`  | string | —              | Join an existing governance server by app id (from that server's `.nanny/app.json`), instead of enforcing locally. Explicit and app-id-only: never a name, never auto-detected. Not compatible with `--serve`. |
-| `--serve`         | flag   | —              | Run as the governance server that other processes and machines join, instead of launching a command. See [Governance server](#governance-server) below. |
+| `--serve`         | flag   | —              | Start the governance server, and launch `[start].cmd` underneath it when `nanny.toml` declares one. Omit `[start]` for a headless governor. See [Governance server](#governance-server) below. |
 | `--no-sync`       | flag   | —              | Do not forward events to Nanny Cloud for this run, even if the machine is logged in. Enforcement is unaffected. See [Connect to Nanny Cloud](/v0.5/guides/managed-mode). |
 | `--config=<path>` | path   | `./nanny.toml` | Path to config file.                                                                                                   |
 
@@ -81,12 +81,21 @@ nanny run > nanny.log
 
 ## Governance server
 
-`nanny run --serve` starts a long-lived **governance server** instead of launching a command. Other processes and machines connect to it over TCP with `nanny run --join=<appId>`, and every tool call from every connected agent counts against one shared budget and step limit. For a single-process agent you don't need this: plain `nanny run` is enough.
+`nanny run --serve` starts a long-lived **governance server**. Other processes and machines connect to it with `nanny run --join=<appId>`, and every tool call from every connected agent counts against one shared budget and step limit.
+
+Whether it also runs an app of its own is decided by `nanny.toml`:
+
+- **`[start]` present** — the governor launches that command underneath itself, in one process. One container, one command, no launcher script. Trailing arguments append to it, as with plain `nanny run`.
+- **`[start]` absent** — a headless governor, for the case where the apps live elsewhere and arrive via `--join`.
+
+Launching an app does not make the governor exclusive: it is still a server, and other processes can still join it, each with its own run id and budget.
+
+For a single-process agent with no `[proxy]` allowlist you don't need any of this — plain `nanny run` is enough. You *do* need it if `nanny.toml` declares `[proxy] allowed_hosts`, because the egress allowlist is enforced by the governance server and not by the in-process bridge.
 
 Starting a server requires `nanny init` to have already run in that directory: the server's state is keyed by the app's permanent `app_id`, not a global path, so two unrelated apps' servers on one machine never collide.
 
 ```bash
-nanny run --serve [--addr <addr>] [--cert <path>] [--key <path>] [--ca <path>]
+nanny run --serve [--addr <addr>] [--cert <path>] [--key <path>] [--ca <path>] [-- <args>]
 ```
 
 It reads `nanny.toml` from the current directory and blocks until stopped (`nanny stop` or `CTRL-C`).

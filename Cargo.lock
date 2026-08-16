@@ -1174,7 +1174,7 @@ dependencies = [
  "rustls-pemfile",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "time",
  "tiny_http",
  "tokio",
@@ -1188,7 +1188,7 @@ name = "nanny-config"
 version = "0.5.0"
 dependencies = [
  "serde",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "toml",
 ]
 
@@ -1198,7 +1198,7 @@ version = "0.5.0"
 dependencies = [
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1217,7 +1217,7 @@ dependencies = [
  "nanny-core",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "ureq",
 ]
 

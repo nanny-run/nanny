@@ -19,7 +19,7 @@ Set `[start].cmd` to your agent's entry point and adjust the limit values to mat
 The generated file includes inline comments for every field and links to the full `nanny.toml` reference.
 
 It also writes `.nanny/app.json`, this app's permanent identity (an `app_id` plus a
-human-facing `name`, which you'll be prompted for). This is written **once, ever**:
+human-facing `name`, which you'll be prompted for and which labels the app in the Nanny Cloud dashboard). This is written **once, ever**:
 if it already exists, `nanny init` leaves it untouched, even if you choose to
 replace `nanny.toml`. There's no way to regenerate an existing identity; a
 genuinely different app means running `nanny init` in a genuinely different

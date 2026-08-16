@@ -87,6 +87,7 @@
                 "group": "Guides",
                 "pages": [
                   "v0.5/guides/managed-mode",
+                  "v0.5/guides/deploying",
                   "v0.5/guides/governance-server",
                   "v0.5/guides/http-proxy-mode"
                 ]
@@ -96,7 +97,6 @@
                 "pages": [
                   "v0.5/init",
                   "v0.5/run",
-                  "v0.5/reference/cli-auth",
                   "v0.5/reference/cli-certs",
                   "v0.5/reference/cli-health",
                   "v0.5/uninstall"
