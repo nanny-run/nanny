@@ -184,7 +184,13 @@ pub fn cmd_server_start(
 
     let event_sink = target.ok().map(|target| {
         let (tx, rx) = std::sync::mpsc::channel();
-        crate::sync::ServerForwarder::spawn(rx, target.endpoint, target.api_key, session_token.clone());
+        crate::sync::ServerForwarder::spawn(
+            rx,
+            target.endpoint,
+            target.api_key,
+            session_token.clone(),
+            &cwd,
+        );
         tx
     });
 

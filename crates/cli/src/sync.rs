@@ -32,6 +32,7 @@
 //! request carries only the key (`X-Nanny-Key`) and a per-run session id
 //! (`X-Nanny-Session`).
 
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -140,6 +141,231 @@ pub fn sync_status_line(target: Result<&SyncTarget, NoSyncReason>, app_name: Opt
     }
 }
 
+// ── Delivery ──────────────────────────────────────────────────────────────────
+
+/// How many times to attempt one batch before spooling it for later.
+const SEND_ATTEMPTS: u32 = 4;
+/// First backoff step; doubles each attempt (250ms, 500ms, 1s, 2s).
+const BACKOFF_BASE: Duration = Duration::from_millis(250);
+/// Ceiling on the durable outbox. Generous — a month of a busy app's events is
+/// far smaller — but finite, so a permanently unreachable cloud cannot fill a
+/// disk. Exceeding it drops the oldest spooled batch and says so.
+const MAX_SPOOL_BYTES: u64 = 64 * 1024 * 1024;
+
+/// What happened to a batch, and therefore what to do with it next.
+#[derive(Debug, PartialEq, Eq)]
+enum Delivery {
+    /// Accepted. Nothing to keep.
+    Sent,
+    /// Not accepted, but might be later: transport failure, 5xx, or 429.
+    /// Worth spooling.
+    Retryable,
+    /// Refused in a way that will not change: 4xx other than 429. A 401 will
+    /// not start working, and a 413 will not shrink. Spooling these would fill
+    /// the outbox with batches that can never drain.
+    Permanent(u16),
+}
+
+/// POST one batch, retrying transient failures with bounded exponential backoff.
+///
+/// Runs on the forwarder thread, never the run's own, so sleeping here cannot
+/// slow the agent down.
+///
+/// This is also where the runtime starts reading the response status at all.
+/// Previously any outcome — 200, 401, 500 — was indistinguishable, and every
+/// batch was dropped either way, so a rejected key looked exactly like success.
+fn send_batch(
+    client: &reqwest::blocking::Client,
+    endpoint: &str,
+    api_key: &str,
+    session: &str,
+    body: &str,
+) -> Delivery {
+    let mut backoff = BACKOFF_BASE;
+    for attempt in 1..=SEND_ATTEMPTS {
+        let result = client
+            .post(endpoint)
+            .header("X-Nanny-Key", api_key)
+            .header("X-Nanny-Session", session)
+            .header("Content-Type", "application/x-ndjson")
+            .body(body.to_string())
+            .send();
+
+        // A transport error falls through to the retry: there is no status to
+        // read, and the next attempt may well connect.
+        if let Ok(resp) = result {
+            let status = resp.status();
+            if status.is_success() {
+                return Delivery::Sent;
+            }
+            // 429 and 5xx are worth another go; anything else 4xx is not.
+            if !(status.as_u16() == 429 || status.is_server_error()) {
+                return Delivery::Permanent(status.as_u16());
+            }
+        }
+
+        if attempt < SEND_ATTEMPTS {
+            std::thread::sleep(backoff);
+            backoff *= 2;
+        }
+    }
+    Delivery::Retryable
+}
+
+/// A durable outbox for batches the cloud could not take yet.
+///
+/// The local NDJSON log cannot serve as the buffer on its own, which is worth
+/// spelling out because it looks like it should. The log is append-only across
+/// *every* run the app has ever done, and the events in it carry no session:
+/// `X-Nanny-Session` is a per-run header, not a field. Replaying a byte range
+/// of that file would have to pick one session for events that belonged to
+/// many, and the cloud keys an execution off exactly that value — so a whole
+/// history would be merged into one bogus run. A high-water mark over the log
+/// is the obvious design and it is wrong for that reason.
+///
+/// The spool stores what the log cannot: the batch *and* the session it belongs
+/// to, so a replay lands under the run that actually produced it. Cloud dedups
+/// on (execution, content hash), so re-sending an overlapping batch is a no-op
+/// and delivery only has to be at-least-once.
+pub struct Spool {
+    dir: PathBuf,
+}
+
+impl Spool {
+    /// The outbox for an app, under its own `.nanny/` directory. Alongside the
+    /// logs rather than in `~/.nanny`, so it travels with the checkout that
+    /// produced it and is removed with it.
+    pub fn new(base_dir: &Path) -> Self {
+        Self { dir: base_dir.join(".nanny").join("spool") }
+    }
+
+    /// Persist a batch for a later attempt. Best-effort: an outbox that cannot
+    /// be written is a lost batch, which is exactly today's behaviour, so it
+    /// must never escalate into failing the run.
+    fn store(&self, session: &str, body: &str) {
+        if std::fs::create_dir_all(&self.dir).is_err() {
+            return;
+        }
+        // Spooled batches are event data, same as the logs beside them: they
+        // belong on disk and never in git. Done here rather than at init time
+        // because the directory only exists once something has to be held.
+        self.ensure_gitignored();
+        self.enforce_cap(body.len() as u64);
+
+        // Session on the first line, batch after it: self-describing, and
+        // parseable without a second index file that could drift out of sync.
+        let contents = format!("{session}\n{body}");
+        let name = format!("{}-{}.ndjson", now_millis(), uuid::Uuid::new_v4().simple());
+
+        // Write to a temp name and rename into place, so a crash mid-write can
+        // never leave a partial batch that a later drain would post as if whole.
+        let tmp = self.dir.join(format!(".{name}.tmp"));
+        if std::fs::write(&tmp, contents).is_ok() {
+            let _ = std::fs::rename(&tmp, self.dir.join(&name));
+        } else {
+            let _ = std::fs::remove_file(&tmp);
+        }
+    }
+
+    /// Best-effort `.gitignore` entry for the outbox, mirroring what the config
+    /// crate already does for `.nanny/logs/`. A missed entry is a nudge, not a
+    /// failure — but committed event data would be a real leak.
+    fn ensure_gitignored(&self) {
+        const LINE: &str = ".nanny/spool/";
+        let Some(base) = self.dir.parent().and_then(|p| p.parent()) else {
+            return;
+        };
+        let path = base.join(".gitignore");
+        let existing = std::fs::read_to_string(&path).unwrap_or_default();
+        let covered = existing.lines().any(|l| {
+            let t = l.trim();
+            t == LINE || t == ".nanny/spool" || t == ".nanny/" || t == ".nanny"
+        });
+        if covered {
+            return;
+        }
+        let mut updated = existing;
+        if !updated.is_empty() && !updated.ends_with('\n') {
+            updated.push('\n');
+        }
+        updated.push_str(LINE);
+        updated.push('\n');
+        let _ = std::fs::write(&path, updated);
+    }
+
+    /// Drop oldest batches until `incoming` fits under the cap.
+    fn enforce_cap(&self, incoming: u64) {
+        let mut entries = self.entries();
+        let mut total: u64 = entries.iter().map(|(_, size)| *size).sum();
+        while total + incoming > MAX_SPOOL_BYTES && !entries.is_empty() {
+            let (path, size) = entries.remove(0);
+            eprintln!(
+                "nanny: sync — outbox is full ({MAX_SPOOL_BYTES} bytes); dropping the oldest \
+                 unsent batch. Events in it are still in the local log."
+            );
+            let _ = std::fs::remove_file(&path);
+            total = total.saturating_sub(size);
+        }
+    }
+
+    /// Spooled batches, oldest first. Filenames start with a millisecond
+    /// timestamp, so lexical order is chronological.
+    fn entries(&self) -> Vec<(PathBuf, u64)> {
+        let Ok(read) = std::fs::read_dir(&self.dir) else {
+            return Vec::new();
+        };
+        let mut out: Vec<(PathBuf, u64)> = read
+            .flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == "ndjson"))
+            .filter_map(|e| e.metadata().ok().map(|m| (e.path(), m.len())))
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
+    /// Try to deliver everything spooled, oldest first. Stops at the first
+    /// batch that still cannot be sent, so ordering is preserved and a cloud
+    /// that is still down is not hammered once per file.
+    ///
+    /// Returns how many batches were delivered.
+    pub fn drain(&self, client: &reqwest::blocking::Client, endpoint: &str, api_key: &str) -> usize {
+        let mut delivered = 0usize;
+        for (path, _) in self.entries() {
+            let Ok(contents) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let Some((session, body)) = contents.split_once('\n') else {
+                // Not a shape this code ever writes; drop it rather than retry
+                // a malformed batch forever.
+                let _ = std::fs::remove_file(&path);
+                continue;
+            };
+            match send_batch(client, endpoint, api_key, session, body) {
+                Delivery::Sent => {
+                    let _ = std::fs::remove_file(&path);
+                    delivered += 1;
+                }
+                Delivery::Permanent(status) => {
+                    eprintln!(
+                        "nanny: sync — the cloud refused a stored batch ({status}); discarding it. \
+                         The events remain in the local log."
+                    );
+                    let _ = std::fs::remove_file(&path);
+                }
+                Delivery::Retryable => break,
+            }
+        }
+        delivered
+    }
+}
+
+fn now_millis() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+}
+
 /// A forwarder to the cloud orchestrator. Present only when a run syncs.
 pub struct CloudSync {
     tx: Sender<String>,
@@ -149,7 +375,16 @@ pub struct CloudSync {
 impl CloudSync {
     /// Start the background forwarder for a resolved target. `None` only if the
     /// HTTP client fails to build — callers treat `None` as "do nothing".
-    pub fn start(endpoint: String, api_key: String, session_token: &str) -> Option<Self> {
+    ///
+    /// `base_dir` is the app directory, used for the durable outbox. Anything
+    /// a previous run could not deliver is sent first, before this run's own
+    /// events, so an outage recovers in order.
+    pub fn start(
+        endpoint: String,
+        api_key: String,
+        session_token: &str,
+        base_dir: &Path,
+    ) -> Option<Self> {
         let session = session_token.to_string();
         let client = reqwest::blocking::Client::builder()
             .connect_timeout(Duration::from_secs(3))
@@ -157,8 +392,17 @@ impl CloudSync {
             .build()
             .ok()?;
 
+        let spool = Spool::new(base_dir);
         let (tx, rx) = std::sync::mpsc::channel::<String>();
-        let handle = std::thread::spawn(move || worker(rx, client, endpoint, api_key, session));
+        let handle = std::thread::spawn(move || {
+            // Backfill first: on the forwarder thread, so a cloud that is still
+            // down delays nothing the agent is doing.
+            let recovered = spool.drain(&client, &endpoint, &api_key);
+            if recovered > 0 {
+                eprintln!("nanny: sync — delivered {recovered} batch(es) held from an earlier run");
+            }
+            worker(rx, client, endpoint, api_key, session, spool)
+        });
         Some(Self { tx, handle })
     }
 
@@ -190,7 +434,9 @@ impl ServerForwarder {
         endpoint: String,
         api_key: String,
         server_secret: String,
+        base_dir: &Path,
     ) {
+        let spool = Spool::new(base_dir);
         std::thread::spawn(move || {
             let Ok(client) = reqwest::blocking::Client::builder()
                 .connect_timeout(Duration::from_secs(3))
@@ -199,24 +445,43 @@ impl ServerForwarder {
             else {
                 return;
             };
+
+            // Deliver anything a previous governor could not, before this one's
+            // own traffic. A fleet's history matters more than one app's, since
+            // every joined process reports through here.
+            let recovered = spool.drain(&client, &endpoint, &api_key);
+            if recovered > 0 {
+                eprintln!("nanny: sync — delivered {recovered} batch(es) held from an earlier run");
+            }
+
             let mut warned = false;
             while let Ok((run_id, lines)) = rx.recv() {
                 if lines.is_empty() {
                     continue;
                 }
                 let session = format!("{server_secret}:{run_id}");
-                let result = client
-                    .post(&endpoint)
-                    .header("X-Nanny-Key", &api_key)
-                    .header("X-Nanny-Session", &session)
-                    .header("Content-Type", "application/x-ndjson")
-                    .body(lines.join("\n"))
-                    .send();
-                if result.is_err() && !warned {
-                    eprintln!(
-                        "nanny: sync — failed to forward fleet events to the cloud (continuing locally)"
-                    );
-                    warned = true;
+                let body = lines.join("\n");
+                match send_batch(&client, &endpoint, &api_key, &session, &body) {
+                    Delivery::Sent => {}
+                    Delivery::Retryable => {
+                        spool.store(&session, &body);
+                        if !warned {
+                            eprintln!(
+                                "nanny: sync — cloud unreachable; holding fleet events locally \
+                                 and retrying later (enforcement is unaffected)"
+                            );
+                            warned = true;
+                        }
+                    }
+                    Delivery::Permanent(status) => {
+                        if !warned {
+                            eprintln!(
+                                "nanny: sync — the cloud refused fleet events ({status}); not \
+                                 retrying. Enforcement is unaffected."
+                            );
+                            warned = true;
+                        }
+                    }
                 }
             }
         });
@@ -231,6 +496,7 @@ fn worker(
     endpoint: String,
     api_key: String,
     session: String,
+    spool: Spool,
 ) {
     let mut batch: Vec<String> = Vec::new();
     let mut bytes = 0usize;
@@ -241,16 +507,29 @@ fn worker(
             return;
         }
         let body = batch.join("\n");
-        let result = client
-            .post(&endpoint)
-            .header("X-Nanny-Key", &api_key)
-            .header("X-Nanny-Session", &session)
-            .header("Content-Type", "application/x-ndjson")
-            .body(body)
-            .send();
-        if result.is_err() && !*warned {
-            eprintln!("nanny: sync — failed to forward events to the cloud (continuing locally)");
-            *warned = true;
+        match send_batch(&client, &endpoint, &api_key, &session, &body) {
+            Delivery::Sent => {}
+            Delivery::Retryable => {
+                // Hand it to the outbox rather than dropping it. This is the
+                // whole point: a cloud outage costs latency, not history.
+                spool.store(&session, &body);
+                if !*warned {
+                    eprintln!(
+                        "nanny: sync — cloud unreachable; holding events locally and \
+                         retrying on the next run (enforcement is unaffected)"
+                    );
+                    *warned = true;
+                }
+            }
+            Delivery::Permanent(status) => {
+                if !*warned {
+                    eprintln!(
+                        "nanny: sync — the cloud refused these events ({status}); not retrying. \
+                         They remain in the local log. Enforcement is unaffected."
+                    );
+                    *warned = true;
+                }
+            }
         }
         batch.clear();
         *bytes = 0;
@@ -434,11 +713,45 @@ mod tests {
         (port, rx)
     }
 
+    /// A server that answers every request with `status` and nothing else.
+    /// Loops rather than accepting once, since `send_batch` retries.
+    fn mock_status_server(status: u16) -> (u16, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let Ok(mut stream) = conn else { break };
+                let mut tmp = [0u8; 2048];
+                let _ = stream.read(&mut tmp);
+                let _ = stream.write_all(
+                    format!("HTTP/1.1 {status} X\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                        .as_bytes(),
+                );
+                let _ = stream.flush();
+            }
+        });
+        (port, handle)
+    }
+
+    /// A scratch app directory, so a test's outbox never touches a real one.
+    fn temp_app_dir() -> PathBuf {
+        static CNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = CNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("nanny-spool-test-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn spooled_files(dir: &Path) -> Vec<PathBuf> {
+        Spool::new(dir).entries().into_iter().map(|(p, _)| p).collect()
+    }
+
     #[test]
     fn forwards_batched_ndjson_with_headers() {
         let (port, rx) = mock_ingest_server();
+        let dir = temp_app_dir();
         let endpoint = format!("http://127.0.0.1:{port}/v1/ingest");
-        let sender = CloudSync::start(endpoint, "nny_test".to_string(), "session-abc").expect("sender starts");
+        let sender = CloudSync::start(endpoint, "nny_test".to_string(), "session-abc", &dir).expect("sender starts");
         sender.enqueue(r#"{"event":"ExecutionStarted"}"#.to_string());
         sender.enqueue(r#"{"event":"ExecutionStopped"}"#.to_string());
         sender.flush_and_join();
@@ -454,21 +767,190 @@ mod tests {
 
     #[test]
     fn unreachable_endpoint_never_panics_or_hangs() {
-        let sender = CloudSync::start("http://127.0.0.1:1/v1/ingest".to_string(), "k".to_string(), "s")
-            .expect("sender starts");
+        let dir = temp_app_dir();
+        let sender =
+            CloudSync::start("http://127.0.0.1:1/v1/ingest".to_string(), "k".to_string(), "s", &dir)
+                .expect("sender starts");
         sender.enqueue(r#"{"event":"StepCompleted"}"#.to_string());
-        sender.flush_and_join(); // returns (bounded by connect timeout), swallows the error
+        sender.flush_and_join(); // returns (bounded by connect timeout + backoff)
+    }
+
+    // ── Durable outbox ────────────────────────────────────────────────────────
+
+    #[test]
+    fn an_unreachable_cloud_holds_events_instead_of_dropping_them() {
+        // The whole point of the outbox. Before this, a failed batch was
+        // clear()ed and the events were gone — a cloud blip cost real history
+        // out of a log whose value is being complete.
+        let dir = temp_app_dir();
+        let sender =
+            CloudSync::start("http://127.0.0.1:1/v1/ingest".to_string(), "k".to_string(), "run-1", &dir)
+                .expect("sender starts");
+        sender.enqueue(r#"{"event":"ExecutionStarted"}"#.to_string());
+        sender.flush_and_join();
+
+        let held = spooled_files(&dir);
+        assert_eq!(held.len(), 1, "the undeliverable batch must be held, not dropped");
+
+        let contents = std::fs::read_to_string(&held[0]).unwrap();
+        let (session, body) = contents.split_once('\n').expect("session on the first line");
+        assert_eq!(session, "run-1", "the session must be stored with the batch");
+        assert!(body.contains("ExecutionStarted"), "the events must be intact: {body}");
+
+        // Held batches are event data — on disk, never in git.
+        let gitignore = std::fs::read_to_string(dir.join(".gitignore")).unwrap_or_default();
+        assert!(gitignore.contains(".nanny/spool/"), "the outbox must be gitignored: {gitignore:?}");
+    }
+
+    #[test]
+    fn a_held_batch_is_delivered_under_its_original_session() {
+        // Why the outbox stores the session rather than replaying the local log:
+        // the log spans every run the app has ever done and its lines carry no
+        // session, so a byte-range replay would have to pick one and would merge
+        // a whole history into a single bogus run. Attribution has to survive
+        // the outage, not just the bytes.
+        let dir = temp_app_dir();
+        Spool::new(&dir).store("original-session", r#"{"event":"StepCompleted"}"#);
+
+        let (port, rx_srv) = mock_ingest_server();
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let delivered = Spool::new(&dir).drain(
+            &client,
+            &format!("http://127.0.0.1:{port}/v1/ingest"),
+            "nny_k",
+        );
+
+        assert_eq!(delivered, 1);
+        let req = rx_srv.recv_timeout(Duration::from_secs(5)).expect("server received it");
+        assert!(
+            req.to_ascii_lowercase().contains("x-nanny-session: original-session"),
+            "a replayed batch must carry the session that produced it:\n{req}"
+        );
+        assert!(spooled_files(&dir).is_empty(), "a delivered batch must be removed");
+    }
+
+    #[test]
+    fn a_held_batch_survives_until_it_is_delivered() {
+        // Drain against a cloud that is still down must keep the batch, not
+        // consume it — otherwise the outbox loses exactly what it exists to keep.
+        let dir = temp_app_dir();
+        Spool::new(&dir).store("s", r#"{"event":"X"}"#);
+
+        let client = reqwest::blocking::Client::builder()
+            .connect_timeout(Duration::from_millis(200))
+            .timeout(Duration::from_millis(500))
+            .build()
+            .unwrap();
+        let delivered = Spool::new(&dir).drain(&client, "http://127.0.0.1:1/v1/ingest", "k");
+
+        assert_eq!(delivered, 0);
+        assert_eq!(spooled_files(&dir).len(), 1, "an undelivered batch must be kept");
+    }
+
+    #[test]
+    fn batches_are_replayed_oldest_first() {
+        // Ordering is part of an audit trail's meaning, so recovery must not
+        // reorder it.
+        let dir = temp_app_dir();
+        let spool = Spool::new(&dir);
+        spool.store("s1", r#"{"n":1}"#);
+        std::thread::sleep(Duration::from_millis(5));
+        spool.store("s2", r#"{"n":2}"#);
+
+        let files = spooled_files(&dir);
+        assert_eq!(files.len(), 2);
+        let first = std::fs::read_to_string(&files[0]).unwrap();
+        assert!(first.contains(r#"{"n":1}"#), "oldest batch must sort first: {first}");
+    }
+
+    #[test]
+    fn a_permanently_refused_batch_is_not_held_forever() {
+        // A 4xx will not start succeeding: a rejected key stays rejected and an
+        // oversized batch stays oversized. Holding those would fill the outbox
+        // with batches that can never drain, pushing out ones that could.
+        let dir = temp_app_dir();
+        Spool::new(&dir).store("s", r#"{"event":"X"}"#);
+
+        let (port, _rx) = mock_status_server(401);
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        Spool::new(&dir).drain(&client, &format!("http://127.0.0.1:{port}/v1/ingest"), "k");
+
+        assert!(spooled_files(&dir).is_empty(), "a permanently refused batch must be discarded");
+    }
+
+    #[test]
+    fn a_server_error_is_treated_as_retryable() {
+        let (port, _rx) = mock_status_server(503);
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let outcome = send_batch(
+            &client,
+            &format!("http://127.0.0.1:{port}/v1/ingest"),
+            "k",
+            "s",
+            r#"{"event":"X"}"#,
+        );
+        assert_eq!(outcome, Delivery::Retryable, "5xx must be retried, not discarded");
+    }
+
+    #[test]
+    fn a_client_error_is_permanent() {
+        let (port, _rx) = mock_status_server(413);
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let outcome = send_batch(
+            &client,
+            &format!("http://127.0.0.1:{port}/v1/ingest"),
+            "k",
+            "s",
+            r#"{"event":"X"}"#,
+        );
+        assert_eq!(outcome, Delivery::Permanent(413));
+    }
+
+    #[test]
+    fn startup_delivers_what_an_earlier_run_could_not() {
+        // End to end: a previous run left a batch behind, this run's forwarder
+        // clears it before sending its own events.
+        let dir = temp_app_dir();
+        Spool::new(&dir).store("previous-run", r#"{"event":"FromEarlierRun"}"#);
+
+        let (port, rx_srv) = mock_ingest_server();
+        let sender = CloudSync::start(
+            format!("http://127.0.0.1:{port}/v1/ingest"),
+            "nny_k".to_string(),
+            "current-run",
+            &dir,
+        )
+        .expect("sender starts");
+        sender.flush_and_join();
+
+        let req = rx_srv.recv_timeout(Duration::from_secs(5)).expect("backfill was sent");
+        assert!(req.contains("FromEarlierRun"), "the held batch must go first:\n{req}");
+        assert!(spooled_files(&dir).is_empty(), "the outbox must be empty afterwards");
     }
 
     #[test]
     fn server_forwarder_posts_per_run_with_derived_session() {
         let (port, rx_srv) = mock_ingest_server();
+        let dir = temp_app_dir();
         let (tx, rx) = std::sync::mpsc::channel();
         ServerForwarder::spawn(
             rx,
             format!("http://127.0.0.1:{port}/v1/ingest"),
             "nny_k".to_string(),
             "srvsecret".to_string(),
+            &dir,
         );
         tx.send(("run_abc".to_string(), vec![r#"{"e":"X"}"#.to_string()])).unwrap();
         drop(tx);

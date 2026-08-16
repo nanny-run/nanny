@@ -790,7 +790,7 @@ fn cmd_run(
     println!("{}", sync::sync_status_line(target.as_ref().map_err(|e| *e), app_name.as_deref()));
     let managed = target
         .ok()
-        .and_then(|t| sync::CloudSync::start(t.endpoint, t.api_key, &bridge.session_token));
+        .and_then(|t| sync::CloudSync::start(t.endpoint, t.api_key, &bridge.session_token, config_dir));
     // ExecutionStarted was already written locally; forward it too.
     if let (Some(sender), Ok(line)) = (&managed, serde_json::to_string(&started_event)) {
         sender.enqueue(line);
