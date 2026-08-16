@@ -169,6 +169,20 @@ pub fn cmd_server_start(
     let session_token = uuid::Uuid::new_v4().to_string();
     let target = crate::sync::resolve_sync(env, no_sync);
     println!("{}", crate::sync::sync_status_line(target.as_ref().map_err(|e| *e), Some(&app.name)));
+
+    // Record where this governor forwards (or that it doesn't), so `nanny
+    // status` can answer "is my fleet actually reporting?" without guessing.
+    // A long-lived governor prints its status line once, at startup, possibly
+    // weeks ago and possibly into a log nobody kept; the operator asking the
+    // question later needs an answer that outlives that line. Never the key,
+    // only the host.
+    let sync_state = match &target {
+        Ok(t) => t.endpoint.strip_suffix("/v1/ingest").unwrap_or(&t.endpoint).to_string(),
+        Err(_) => "off".to_string(),
+    };
+    std::fs::write(state_dir.join("server.sync"), &sync_state)
+        .with_context(|| format!("failed to write {}", state_dir.join("server.sync").display()))?;
+
     let event_sink = target.ok().map(|target| {
         let (tx, rx) = std::sync::mpsc::channel();
         crate::sync::ServerForwarder::spawn(rx, target.endpoint, target.api_key, session_token.clone());
@@ -291,6 +305,16 @@ pub fn cmd_server_status(app: Option<String>) -> Result<()> {
             let token_file = state_dir.join("server.token");
             if token_file.exists() {
                 println!("  token  : (see {})", token_file.display());
+            }
+
+            // Whether this governor forwards to Nanny Cloud. Written at start;
+            // absent means a pre-v0.6.0 governor that predates the file. Only
+            // reached after the TCP connect above succeeded, so a stale file
+            // from a dead governor can never be reported as live.
+            match std::fs::read_to_string(state_dir.join("server.sync")) {
+                Ok(s) if s.trim() == "off" => println!("  sync   : off (enforcing locally)"),
+                Ok(s) if !s.trim().is_empty() => println!("  sync   : {}", s.trim()),
+                _ => {}
             }
         }
         Err(_) => {
