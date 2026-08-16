@@ -1,31 +1,49 @@
 //! Cloud sync — forwards a copy of the append-only NDJSON event log to the cloud.
 //!
 //! Enforcement stays entirely local (the bridge is untouched); this is a
-//! best-effort, fire-and-forget side channel. There is no `mode` setting;
-//! sync is decided by one signal only: whether a valid, app-scoped Cloud
-//! credential exists locally (`.nanny/credentials.local.json`, minted by
-//! `app_credentials::maybe_self_mint`). No credential, no sync, that's the
-//! default state, not a warning-worthy one, since a credential now only ever
-//! exists because someone deliberately logged in for this specific app.
-//! `--no-sync` skips a run regardless.
+//! best-effort, fire-and-forget side channel.
+//!
+//! **One credential input: the `NANNY_API_KEY` environment variable.** There is
+//! no config field, no credential file, no login command, and nothing is ever
+//! written to disk to make sync work. Set the variable and a run syncs; leave it
+//! unset and the run is local-only. That is the whole surface, and it is the
+//! shape every comparable product uses (`DD_API_KEY`, `SENTRY_DSN`,
+//! `LANGFUSE_SECRET_KEY`): a durable secret handed to the process by whatever
+//! platform runs it, shared unchanged across every replica.
+//!
+//! Two overrides turn sync off while a key is present: `--no-sync` for one run,
+//! `NANNY_NO_SYNC` for a whole machine. Nothing turns sync *on* except the key,
+//! because a key's presence is already a deliberate act.
 //!
 //! Design guarantees:
-//! - **Local-first.** With no credential, nothing starts and the engine runs
-//!   offline with no dependency.
+//! - **Local-first.** With no key, nothing starts and the engine runs offline
+//!   with no dependency. The API key buys cloud sync and nothing else — every
+//!   enforcement guarantee holds identically without it.
 //! - **Non-blocking.** `enqueue` just pushes onto a channel; a background thread
 //!   batches and POSTs, so the run's poll loop never waits on the network.
 //! - **Fail-safe.** Network errors are swallowed (one warning, once). A slow or
 //!   down cloud never blocks, fails, or alters the agent run.
+//! - **Never silent.** Whether a run syncs is printed at startup, always. A run
+//!   that silently stops reporting is the failure mode a compliance product can
+//!   least afford, and it is exactly what v0.5.0 shipped.
 //!
-//! The organization (and, once Cloud supports it, the app) is derived from the
-//! API key on the cloud side, so only the key (`X-Nanny-Key`) and a per-run
-//! session id (`X-Nanny-Session`) are sent.
+//! The organization and the app are derived on the cloud side — the org from the
+//! API key, the app from the `AppIdentified` event in the payload — so the
+//! request carries only the key (`X-Nanny-Key`) and a per-run session id
+//! (`X-Nanny-Session`).
 
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use crate::app_credentials::AppCredentials;
+use crate::cloud::CloudEnv;
+use nanny_config::API_KEY_ENV;
+
+/// Machine-wide override to disable forwarding. Mirrors `--no-sync`, but
+/// persists across invocations, which `--no-sync` cannot. Any non-empty value
+/// disables sync; the variable was advertised in `--help` since v0.4.x but was
+/// read nowhere until now.
+const NO_SYNC_ENV: &str = "NANNY_NO_SYNC";
 
 // Match the cloud ingest caps so a batch is never rejected wholesale.
 const MAX_LINES: usize = 1000; // NDJSON lines per request
@@ -33,32 +51,93 @@ const MAX_BODY_BYTES: usize = 256 * 1024; // 256 KB per request
 const FLUSH_INTERVAL: Duration = Duration::from_millis(250);
 
 /// A resolved forwarding target: the full ingest URL and the key that authorizes
-/// it. The URL is derived from the credential's env, never stored or user-supplied.
+/// it. The URL is derived from a compiled host, never stored or user-supplied.
+///
+/// `Debug` is hand-written so the key can never reach a log line or a panic
+/// message; a derived one would print it verbatim.
+#[derive(Clone, PartialEq, Eq)]
 pub struct SyncTarget {
     pub endpoint: String,
     pub api_key: String,
 }
 
-/// Decide whether (and where) to forward. `None` means "don't sync";
-/// enforcement never depends on this. `--no-sync` always wins; otherwise sync
-/// happens exactly when an app-scoped credential is present, full stop, no
-/// separate mode to disagree with it.
-pub fn resolve_sync(credentials: Option<&AppCredentials>, no_sync: bool) -> Option<SyncTarget> {
-    if no_sync {
-        return None;
+impl std::fmt::Debug for SyncTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SyncTarget")
+            .field("endpoint", &self.endpoint)
+            .field("api_key", &"<redacted>")
+            .finish()
     }
-    let creds = credentials?;
-    Some(SyncTarget {
-        endpoint: creds.env.ingest_url(),
-        api_key: creds.api_key.clone(),
-    })
 }
 
-/// What to print at startup for "mode", purely a derived display value, never
-/// read back as config. Reflects whether this run actually has a credential to
-/// sync with, not a stored preference.
-pub fn effective_mode_label(credentials: Option<&AppCredentials>) -> &'static str {
-    if credentials.is_some() { "managed" } else { "local" }
+/// Read `NANNY_API_KEY`, treating blank or whitespace-only as unset. An unset CI
+/// secret usually surfaces as `""`, so falling through on empty is what stops a
+/// run from authenticating with a nonsense key and getting a 401 it cannot see
+/// (the runtime never inspects ingest status codes).
+fn api_key_from_env() -> Option<String> {
+    let key = std::env::var(API_KEY_ENV).ok()?;
+    let key = key.trim();
+    if key.is_empty() { None } else { Some(key.to_string()) }
+}
+
+/// Whether `NANNY_NO_SYNC` is set to any non-empty value.
+fn no_sync_from_env() -> bool {
+    std::env::var(NO_SYNC_ENV).is_ok_and(|v| !v.trim().is_empty())
+}
+
+/// Why a run is not syncing. Drives the startup line, so the reason is always
+/// visible rather than inferred from an absence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoSyncReason {
+    /// `--no-sync` was passed for this run.
+    Flag,
+    /// `NANNY_NO_SYNC` is set on this machine.
+    EnvOverride,
+    /// No `NANNY_API_KEY`. The default state, and not an error.
+    NoApiKey,
+}
+
+/// Decide whether (and where) to forward. `Err(reason)` means "don't sync", and
+/// enforcement never depends on this either way.
+///
+/// Precedence: explicit off beats everything, then the key's presence decides.
+/// There is deliberately no way to ask for sync without supplying a key, so the
+/// two can never disagree.
+pub fn resolve_sync(env: CloudEnv, no_sync: bool) -> Result<SyncTarget, NoSyncReason> {
+    if no_sync {
+        return Err(NoSyncReason::Flag);
+    }
+    if no_sync_from_env() {
+        return Err(NoSyncReason::EnvOverride);
+    }
+    let api_key = api_key_from_env().ok_or(NoSyncReason::NoApiKey)?;
+    Ok(SyncTarget { endpoint: env.ingest_url(), api_key })
+}
+
+/// The startup line describing sync state. Printed on every run, never
+/// suppressed: v0.5.0 mumbled `mode, local` and swallowed every real failure,
+/// which is how an app can stop reporting for weeks without anyone noticing.
+///
+/// `mode` survives only as a derived display word, never read back as config.
+pub fn sync_status_line(target: Result<&SyncTarget, NoSyncReason>, app_name: Option<&str>) -> String {
+    match target {
+        Ok(t) => {
+            let host = t.endpoint.strip_suffix("/v1/ingest").unwrap_or(&t.endpoint);
+            match app_name {
+                Some(name) => format!("nanny: mode managed — syncing to {host} (app: {name})"),
+                None => format!("nanny: mode managed — syncing to {host}"),
+            }
+        }
+        Err(NoSyncReason::Flag) => {
+            "nanny: mode local — not syncing (--no-sync). Enforcing locally.".to_string()
+        }
+        Err(NoSyncReason::EnvOverride) => {
+            format!("nanny: mode local — not syncing ({NO_SYNC_ENV} is set). Enforcing locally.")
+        }
+        Err(NoSyncReason::NoApiKey) => format!(
+            "nanny: mode local — not syncing ({API_KEY_ENV} is not set). Enforcing locally."
+        ),
+    }
 }
 
 /// A forwarder to the cloud orchestrator. Present only when a run syncs.
@@ -203,36 +282,114 @@ mod tests {
     use std::net::TcpListener;
     use std::sync::mpsc;
 
-    fn cred(env: CloudEnv) -> AppCredentials {
-        AppCredentials { api_key: "nny_k".to_string(), env }
+    /// `resolve_sync` reads process-wide env vars, so these tests must not run
+    /// concurrently with each other. Rust runs tests in threads by default, and
+    /// a neighbour clearing NANNY_API_KEY mid-assert is a real flake, not a
+    /// theoretical one.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Run `f` with the two sync env vars set to exactly the given values,
+    /// restoring whatever was there before. Poisoning is ignored: a panic in one
+    /// test must not cascade into every other test in this module.
+    fn with_env(api_key: Option<&str>, no_sync: Option<&str>, f: impl FnOnce()) {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_key = std::env::var(API_KEY_ENV).ok();
+        let prev_no_sync = std::env::var(NO_SYNC_ENV).ok();
+
+        let apply = |name: &str, value: Option<&str>| unsafe {
+            match value {
+                Some(v) => std::env::set_var(name, v),
+                None => std::env::remove_var(name),
+            }
+        };
+        apply(API_KEY_ENV, api_key);
+        apply(NO_SYNC_ENV, no_sync);
+
+        f();
+
+        apply(API_KEY_ENV, prev_key.as_deref());
+        apply(NO_SYNC_ENV, prev_no_sync.as_deref());
     }
 
     // ── resolve_sync (the gate) — no network ──────────────────────────────
 
     #[test]
-    fn syncs_when_a_credential_is_present() {
-        let c = cred(CloudEnv::Prod);
-        let t = resolve_sync(Some(&c), false).expect("credential present → sync");
-        assert_eq!(t.endpoint, CloudEnv::Prod.ingest_url(), "endpoint derived from the credential env");
-        assert_eq!(t.api_key, "nny_k");
+    fn syncs_when_the_api_key_is_set() {
+        with_env(Some("nny_k"), None, || {
+            let t = resolve_sync(CloudEnv::Prod, false).expect("key present → sync");
+            assert_eq!(t.endpoint, CloudEnv::Prod.ingest_url());
+            assert_eq!(t.api_key, "nny_k");
+        });
     }
 
     #[test]
-    fn no_sync_without_a_credential() {
-        assert!(resolve_sync(None, false).is_none(), "no credential → no sync, no warning needed");
+    fn the_env_selects_the_host_not_the_key() {
+        with_env(Some("nny_k"), None, || {
+            let t = resolve_sync(CloudEnv::Dev, false).expect("key present → sync");
+            assert_eq!(t.endpoint, CloudEnv::Dev.ingest_url(), "--env picks the host");
+        });
     }
 
     #[test]
-    fn no_sync_flag_disables_sync() {
-        let c = cred(CloudEnv::Prod);
-        assert!(resolve_sync(Some(&c), true).is_none(), "--no-sync overrides to off");
+    fn no_sync_without_an_api_key() {
+        with_env(None, None, || {
+            assert_eq!(resolve_sync(CloudEnv::Prod, false), Err(NoSyncReason::NoApiKey));
+        });
     }
 
     #[test]
-    fn effective_mode_label_reflects_credential_presence() {
-        let c = cred(CloudEnv::Prod);
-        assert_eq!(effective_mode_label(Some(&c)), "managed");
-        assert_eq!(effective_mode_label(None), "local");
+    fn a_blank_api_key_counts_as_unset() {
+        // An unset CI secret usually surfaces as "", and authenticating with it
+        // would 401 invisibly, since the runtime never reads ingest status.
+        with_env(Some("   "), None, || {
+            assert_eq!(resolve_sync(CloudEnv::Prod, false), Err(NoSyncReason::NoApiKey));
+        });
+    }
+
+    #[test]
+    fn the_no_sync_flag_wins_over_a_present_key() {
+        with_env(Some("nny_k"), None, || {
+            assert_eq!(resolve_sync(CloudEnv::Prod, true), Err(NoSyncReason::Flag));
+        });
+    }
+
+    #[test]
+    fn the_no_sync_env_var_wins_over_a_present_key() {
+        with_env(Some("nny_k"), Some("1"), || {
+            assert_eq!(resolve_sync(CloudEnv::Prod, false), Err(NoSyncReason::EnvOverride));
+        });
+    }
+
+    #[test]
+    fn a_blank_no_sync_env_var_does_not_disable_sync() {
+        with_env(Some("nny_k"), Some(""), || {
+            assert!(resolve_sync(CloudEnv::Prod, false).is_ok(), "empty means unset, as with the key");
+        });
+    }
+
+    // ── the startup line — never silent ───────────────────────────────────
+
+    #[test]
+    fn the_status_line_names_the_host_and_app_when_syncing() {
+        let t = SyncTarget { endpoint: CloudEnv::Prod.ingest_url(), api_key: "nny_k".into() };
+        let line = sync_status_line(Ok(&t), Some("gotm-nanny"));
+        assert!(line.contains("managed"), "{line}");
+        assert!(line.contains("https://api.nanny.run"), "{line}");
+        assert!(line.contains("gotm-nanny"), "{line}");
+        assert!(!line.contains("/v1/ingest"), "show the host, not the route: {line}");
+        assert!(!line.contains("nny_k"), "never print the key: {line}");
+    }
+
+    #[test]
+    fn every_not_syncing_reason_says_why_and_reassures() {
+        for reason in [NoSyncReason::Flag, NoSyncReason::EnvOverride, NoSyncReason::NoApiKey] {
+            let line = sync_status_line(Err(reason), None);
+            assert!(line.contains("not syncing"), "{reason:?}: {line}");
+            assert!(line.contains("Enforcing locally"), "{reason:?}: {line}");
+        }
+        assert!(sync_status_line(Err(NoSyncReason::NoApiKey), None).contains(API_KEY_ENV));
+        assert!(sync_status_line(Err(NoSyncReason::EnvOverride), None).contains(NO_SYNC_ENV));
+        assert!(sync_status_line(Err(NoSyncReason::Flag), None).contains("--no-sync"));
     }
 
     // ── CloudSync (the sender) — mock ingest, injected endpoint ───────────

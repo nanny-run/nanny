@@ -1,4 +1,4 @@
-//! Which Nanny Cloud environment `nanny auth` talks to.
+//! Which Nanny Cloud deployment the runtime forwards to.
 //!
 //! The backend host is the tool's business, not the user's: the API base URL is a
 //! compile-time constant and can only ever be one of OUR OWN hosts. There is no
@@ -11,6 +11,12 @@
 //! the build profile (that would repeat the "NODE_ENV for staging" anti-pattern,
 //! and staging's host runs as production anyway). A named selector can only
 //! resolve to a compiled host, so there is no exfiltration surface.
+//!
+//! **`--env` exists for people building Nanny, not people building apps with it.**
+//! It is hidden from `--help` and documented only in CONTRIBUTING.md. A customer
+//! has exactly one cloud and never chooses: `Prod` is the default and is the only
+//! value anything outside this repo will ever resolve to. `Dev` and `Staging`
+//! point at our own local and QA deployments.
 
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};

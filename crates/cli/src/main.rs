@@ -1,8 +1,6 @@
 // Nanny CLI — the only surface humans touch.
-mod app_credentials;
 mod cloud;
 mod commands;
-mod credentials;
 mod events;
 mod identity;
 mod runtime;
@@ -68,10 +66,17 @@ enum Command {
         #[arg(long)]
         limits: Option<String>,
 
-        /// Do not forward events to Nanny Cloud for this run, even if logged in.
+        /// Do not forward events to Nanny Cloud for this run, even with a key set.
         /// Enforcement is unaffected. Also settable with NANNY_NO_SYNC=1.
         #[arg(long)]
         no_sync: bool,
+
+        /// Which Nanny Cloud to forward to. Hidden: this exists for people
+        /// *building* Nanny, not people building apps with it — everyone else
+        /// has exactly one cloud and never chooses. Takes a name, never a URL,
+        /// so no other endpoint is expressible. See CONTRIBUTING.md.
+        #[arg(long, value_enum, default_value_t = cloud::CloudEnv::Prod, hide = true)]
+        env: cloud::CloudEnv,
 
         /// Join an existing governance server by appId (from that server's
         /// `.nanny/app.json`), instead of starting a local bridge. Explicit and
@@ -142,14 +147,6 @@ enum Command {
     /// Checks: local bridge, network server, certificate expiry.
     /// Exits 0 if healthy, 1 if any active component is unhealthy.
     Health,
-
-    /// Connect your machine to Nanny Cloud (`login` / `logout`).
-    ///
-    /// Optional. Enforcement is always local and never depends on this — login
-    /// only turns on cloud event sync. `nanny auth login` opens the browser to
-    /// approve, then remembers your machine so `nanny run` can sync.
-    #[command(subcommand)]
-    Auth(commands::auth::AuthCommand),
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -159,7 +156,7 @@ fn main() {
 
     let result = match cli.command {
         Command::Init => cmd_init(),
-        Command::Run { limits, no_sync, join, serve, addr, cert, key, ca, extra_args } => {
+        Command::Run { limits, no_sync, env, join, serve, addr, cert, key, ca, extra_args } => {
             if serve {
                 if !extra_args.is_empty() || limits.is_some() || join.is_some() {
                     Err(anyhow::anyhow!(
@@ -168,12 +165,12 @@ fn main() {
                     ))
                 } else {
                     // The headless governor runs the full network server
-                    // (mTLS, certs, etc.), plus cloud sync gated on an
-                    // app-scoped credential being present, honoring --no-sync.
-                    commands::server::cmd_server_start(addr, cert, key, ca, no_sync)
+                    // (mTLS, certs, etc.), plus cloud sync gated on
+                    // NANNY_API_KEY being set, honoring --no-sync.
+                    commands::server::cmd_server_start(addr, cert, key, ca, no_sync, env)
                 }
             } else {
-                cmd_run(&cli.config, limits.as_deref(), no_sync, join, extra_args)
+                cmd_run(&cli.config, limits.as_deref(), no_sync, env, join, extra_args)
             }
         }
         Command::Uninstall => cmd_uninstall(),
@@ -181,7 +178,6 @@ fn main() {
         Command::Stop { app } => commands::server::cmd_server_stop(app),
         Command::Certs(action) => commands::certs::cmd_certs(action),
         Command::Health => commands::health::cmd_health(),
-        Command::Auth(action) => commands::auth::cmd_auth(action),
     };
 
     if let Err(e) = result {
@@ -572,6 +568,7 @@ fn cmd_run(
     config_path: &Path,
     limits_name: Option<&str>,
     no_sync: bool,
+    env: cloud::CloudEnv,
     join: Option<String>,
     extra_args: Vec<String>,
 ) -> Result<()> {
@@ -602,13 +599,14 @@ fn cmd_run(
 
     // [managed] endpoint/api_key, and [runtime]/mode, are both retired; either
     // is now silently ignored by the parser, so warn rather than silently do
-    // nothing. There is no config knob to "keep" anymore, sync is automatic
-    // once this machine is logged in (`nanny auth login`).
+    // nothing. There is no config knob to "keep" anymore: sync is decided
+    // entirely by whether NANNY_API_KEY is set in the environment.
     if let Ok(raw) = std::fs::read_to_string(config_path) {
         if nanny_config::has_managed_section(&raw) {
             eprintln!(
-                "nanny: [managed] in nanny.toml is deprecated and ignored — run \
-                 `nanny auth login` and Cloud sync happens automatically, no config needed."
+                "nanny: [managed] in nanny.toml is deprecated and ignored — set the \
+                 NANNY_API_KEY environment variable and Cloud sync happens \
+                 automatically, no config needed."
             );
         }
     }
@@ -676,24 +674,18 @@ fn cmd_run(
     let bridge = Bridge::start(bridge_components)
         .context("failed to start bridge")?;
 
-    // ── Cloud sync (None + no-op unless a credential is present) ────────────
+    // ── Cloud sync (off unless NANNY_API_KEY is set) ────────────────────────
     // Forwards a copy of the NDJSON event log to the cloud; enforcement stays
-    // fully local. Fire-and-forget, never blocks or fails the run. There is
-    // no mode setting: sync happens exactly when an app-scoped credential
-    // exists (self-minted below if this machine is logged in but this app
-    // isn't yet), and `--no-sync` did not turn it off.
-    let app_credentials = identity::AppIdentity::load(config_dir)
+    // fully local. Fire-and-forget, never blocks or fails the run. The key is
+    // the only input: no config field, no credential file, nothing written to
+    // disk. The status line prints on every run either way — a run that stops
+    // reporting must never do so silently.
+    let app_name = identity::AppIdentity::load(config_dir).ok().flatten().map(|a| a.name);
+    let target = sync::resolve_sync(env, no_sync);
+    println!("{}", sync::sync_status_line(target.as_ref().map_err(|e| *e), app_name.as_deref()));
+    let managed = target
         .ok()
-        .flatten()
-        .and_then(|app| app_credentials::maybe_self_mint(config_dir, &app.app_id));
-    println!("nanny: mode, {}", sync::effective_mode_label(app_credentials.as_ref()));
-    let managed = match sync::resolve_sync(app_credentials.as_ref(), no_sync) {
-        Some(target) => {
-            println!("nanny: syncing events to {} (enforcement stays local)", target.endpoint);
-            sync::CloudSync::start(target.endpoint, target.api_key, &bridge.session_token)
-        }
-        None => None,
-    };
+        .and_then(|t| sync::CloudSync::start(t.endpoint, t.api_key, &bridge.session_token));
     // ExecutionStarted was already written locally; forward it too.
     if let (Some(sender), Ok(line)) = (&managed, serde_json::to_string(&started_event)) {
         sender.enqueue(line);

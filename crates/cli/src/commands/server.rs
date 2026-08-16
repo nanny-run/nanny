@@ -82,6 +82,7 @@ pub fn cmd_server_start(
     key: Option<PathBuf>,
     ca: Option<PathBuf>,
     no_sync: bool,
+    env: crate::cloud::CloudEnv,
 ) -> Result<()> {
     let cwd = std::env::current_dir().context("cannot determine current directory")?;
 
@@ -160,24 +161,19 @@ pub fn cmd_server_start(
     )
     .with_context(|| format!("failed to write {}", state_dir.join("server.proxy").display()))?;
 
-    // Cloud forwarding: sync happens exactly when an app-scoped credential is
-    // present (self-minted here if this machine is logged in but this app
-    // isn't yet), and --no-sync didn't turn it off. The engine only exposes
-    // events; the forwarder that talks to the cloud lives here.
+    // Cloud forwarding: sync happens exactly when NANNY_API_KEY is set and
+    // --no-sync didn't turn it off. The engine only exposes events; the
+    // forwarder that talks to the cloud lives here. The status line prints
+    // either way — a governor that silently stops reporting for a whole fleet
+    // is the worst version of the failure v0.5.0 shipped.
     let session_token = uuid::Uuid::new_v4().to_string();
-    let credentials = crate::app_credentials::maybe_self_mint(&cwd, &app.app_id);
-    let event_sink = match crate::sync::resolve_sync(credentials.as_ref(), no_sync) {
-        Some(target) => {
-            println!(
-                "nanny: syncing fleet events to {} (enforcement stays local)",
-                target.endpoint
-            );
-            let (tx, rx) = std::sync::mpsc::channel();
-            crate::sync::ServerForwarder::spawn(rx, target.endpoint, target.api_key, session_token.clone());
-            Some(tx)
-        }
-        None => None,
-    };
+    let target = crate::sync::resolve_sync(env, no_sync);
+    println!("{}", crate::sync::sync_status_line(target.as_ref().map_err(|e| *e), Some(&app.name)));
+    let event_sink = target.ok().map(|target| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        crate::sync::ServerForwarder::spawn(rx, target.endpoint, target.api_key, session_token.clone());
+        tx
+    });
 
     // [observability] applies to --serve exactly the same way it applies to
     // local `nanny run`: the config makes the same promise either way ("here's
