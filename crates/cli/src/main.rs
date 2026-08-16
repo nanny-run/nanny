@@ -162,16 +162,22 @@ fn main() {
         Command::Init => cmd_init(),
         Command::Run { limits, no_sync, env, join, serve, addr, cert, key, ca, extra_args } => {
             if serve {
-                if !extra_args.is_empty() || limits.is_some() || join.is_some() {
+                if limits.is_some() || join.is_some() {
                     Err(anyhow::anyhow!(
-                        "`--serve` runs a headless governor and takes no command, --limits, or \
-                         --join, use `nanny run --serve [--addr ...]`"
+                        "`--serve` runs the governance server and takes neither --limits nor \
+                         --join. Its limits come from nanny.toml, and it *is* the governor, \
+                         so there is nothing to join."
                     ))
                 } else {
-                    // The headless governor runs the full network server
-                    // (mTLS, certs, etc.), plus cloud sync gated on
-                    // NANNY_API_KEY being set, honoring --no-sync.
-                    commands::server::cmd_server_start(addr, cert, key, ca, no_sync, env)
+                    // Runs the full network server (mTLS, certs, proxy), plus
+                    // cloud sync gated on NANNY_API_KEY, honoring --no-sync.
+                    // Also launches [start].cmd underneath it when nanny.toml
+                    // declares one; without [start] it stays headless for the
+                    // shared-governor case. Trailing args append to that
+                    // command, exactly as they do for plain `nanny run`.
+                    commands::server::cmd_server_start(
+                        addr, cert, key, ca, no_sync, env, extra_args,
+                    )
                 }
             } else {
                 cmd_run(&cli.config, limits.as_deref(), no_sync, env, join, extra_args)
@@ -478,11 +484,47 @@ fn percent_encode_userinfo(value: &str) -> String {
 }
 
 fn cmd_run_via_network_server(command: Vec<String>, server: NetworkServerInfo) -> Result<()> {
-    let (program, args) = command.split_first().expect("command is non-empty");
-
     println!("nanny: network server detected at {}", server.addr);
     println!("nanny: governance enforced remotely — limits and rules apply");
     println!();
+
+    let (mut cmd, run_id) = build_governed_child(command, &server)?;
+
+    // Declare this app to the governor for this run, before the child can do
+    // anything attributable. A governor holds one credential but serves many
+    // apps, so identity has to travel per run in the event stream; without
+    // this, everything a joined process does would be filed under the
+    // governor's own app.
+    declare_app_to_governor(&server, Path::new("."), &run_id);
+
+    let status = cmd
+        .status()
+        .with_context(|| format!("failed to run '{}'", command_program(&cmd)))?;
+
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
+
+    Ok(())
+}
+
+/// The program name from a built command, for error messages.
+fn command_program(cmd: &std::process::Command) -> String {
+    cmd.get_program().to_string_lossy().into_owned()
+}
+
+/// Build a child process wired to a governance server: transport, credentials,
+/// run id, mTLS certs, and the CONNECT proxy.
+///
+/// Shared by `--join` (joining someone else's governor) and `--serve` (running
+/// the app under the governor this process just started), so the two can never
+/// drift on something as consequential as whether the proxy allowlist is
+/// actually applied.
+fn build_governed_child(
+    command: Vec<String>,
+    server: &NetworkServerInfo,
+) -> Result<(std::process::Command, String)> {
+    let (program, args) = command.split_first().expect("command is non-empty");
 
     // Cert files from ~/.nanny/certs/ — auto-injected if present.
     // Cross-machine deployments override these via NANNY_BRIDGE_CERT/KEY/CA.
@@ -557,38 +599,34 @@ fn cmd_run_via_network_server(command: Vec<String>, server: NetworkServerInfo) -
         cmd.env("no_proxy",  "127.0.0.1,localhost");
     }
 
-    // Declare this app to the governor for this run, before the child can do
-    // anything attributable. A governor holds one credential but serves many
-    // apps, so identity has to travel per run in the event stream; without
-    // this, everything a joined process does would be filed under the
-    // governor's own app.
-    //
-    // Done here rather than in the child because a black-box app governed only
-    // by the proxy has no SDK to declare with. We borrow the SDK's own client
-    // by setting the same env vars on this process that we just set on the
-    // child, so all three transports (socket, loopback TCP, mTLS) are handled
-    // by one implementation instead of a second copy of the logic here.
-    if let Ok(Some(app)) = identity::AppIdentity::load(Path::new(".")) {
-        // SAFETY: single-threaded at this point — the child has not been
-        // spawned and nothing else in this process reads the environment
-        // concurrently. These are the same values already staged onto `cmd`.
-        unsafe {
-            std::env::set_var("NANNY_BRIDGE_ADDR", &server.addr);
-            std::env::set_var("NANNY_SESSION_TOKEN", &server.token);
-            std::env::set_var("NANNY_RUN_ID", &run_id);
-        }
-        nanny::set_app(app.app_id, app.name);
+    Ok((cmd, run_id))
+}
+
+/// Tell the governor which app this run belongs to.
+///
+/// Done from the CLI rather than the child because a black-box app governed
+/// only by the proxy has no SDK to declare with. Borrows the SDK's own client
+/// by setting the same env vars on this process that were staged onto the
+/// child, so all three transports (socket, loopback TCP, mTLS) stay one
+/// implementation rather than a second copy of the logic here.
+///
+/// Best-effort: an app with no `.nanny/app.json` simply doesn't declare, and
+/// Cloud groups its runs the way it always has.
+fn declare_app_to_governor(server: &NetworkServerInfo, dir: &Path, run_id: &str) {
+    let Ok(Some(app)) = identity::AppIdentity::load(dir) else {
+        return;
+    };
+    // SAFETY: called before the child is spawned, with nothing else in this
+    // process reading the environment concurrently. These are the same values
+    // already staged onto the child's command — the run id especially, since
+    // declaring against a different run would file the identity under a run
+    // that never does any work.
+    unsafe {
+        std::env::set_var("NANNY_BRIDGE_ADDR", &server.addr);
+        std::env::set_var("NANNY_SESSION_TOKEN", &server.token);
+        std::env::set_var("NANNY_RUN_ID", run_id);
     }
-
-    let status = cmd
-        .status()
-        .with_context(|| format!("failed to run '{program}'"))?;
-
-    if !status.success() {
-        std::process::exit(status.code().unwrap_or(1));
-    }
-
-    Ok(())
+    nanny::set_app(app.app_id, app.name);
 }
 
 fn cmd_run(

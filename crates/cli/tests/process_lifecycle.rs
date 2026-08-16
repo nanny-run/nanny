@@ -536,10 +536,10 @@ log = "stdout"
     let server_toml_dir = temp_dir();
     fs::write(
         server_toml_dir.join("nanny.toml"),
-        r#"[start]
-cmd = "echo unused"
-
-[limits]
+        // No [start]: these tests want a headless governor. `--serve` runs
+        // [start].cmd when nanny.toml declares one, so a dummy command here
+        // would launch, exit instantly, and take the governor down with it.
+        r#"[limits]
 steps   = 100
 tokens  = 1000
 timeout = 60000
@@ -614,10 +614,10 @@ fn joined_app_is_attributed_to_its_own_identity() {
     let server_dir = temp_dir();
     fs::write(
         server_dir.join("nanny.toml"),
-        r#"[start]
-cmd = "echo unused"
-
-[limits]
+        // No [start]: these tests want a headless governor. `--serve` runs
+        // [start].cmd when nanny.toml declares one, so a dummy command here
+        // would launch, exit instantly, and take the governor down with it.
+        r#"[limits]
 steps   = 100
 tokens  = 1000
 timeout = 60000
@@ -764,6 +764,154 @@ log = "stdout"
     );
 }
 
+// ── T8c: `--serve` runs [start] under the governor, and stays joinable ───────
+//
+// The whole point of letting --serve launch the app: one command, no launcher
+// script. A script has to poll for readiness, runs `sh` as PID 1 so SIGTERM
+// never reaches the governor, and orphans one half if the other dies. Doing it
+// in-process removes all three.
+//
+// Also pins that launching an app of its own does NOT make the governor
+// exclusive — it is still a server, and other processes can still join it.
+
+#[test]
+fn serve_runs_the_start_command_and_remains_joinable() {
+    let home = temp_dir();
+
+    let server_dir = temp_dir();
+    fs::write(
+        server_dir.join("nanny.toml"),
+        r#"[start]
+cmd = "sh -c \"echo SERVE-RAN-THE-APP; sleep 5\""
+
+[limits]
+steps   = 100
+tokens  = 1000
+timeout = 60000
+
+[observability]
+log = "file"
+"#,
+    )
+    .unwrap();
+    let governor_id = write_app_identity(&server_dir);
+
+    let server_port = free_port();
+    let mut server = Command::new(nanny_bin())
+        .current_dir(&server_dir)
+        .env("NANNY_HOME", &home)
+        .args(["run", "--serve", "--addr", &format!("127.0.0.1:{server_port}")])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("governor must spawn");
+
+    let mut ready = false;
+    for _ in 0..100 {
+        if std::net::TcpStream::connect(format!("127.0.0.1:{server_port}")).is_ok() {
+            ready = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(ready, "governor must become ready within 10 s");
+
+    // While the governor's own app is still running, a separate process must
+    // still be able to join — launching an app does not close the door.
+    let client_dir = temp_dir();
+    fs::write(
+        client_dir.join("nanny.toml"),
+        r#"[start]
+cmd = "echo JOINED-WHILE-SERVING"
+
+[limits]
+steps   = 10
+tokens  = 100
+timeout = 10000
+"#,
+    )
+    .unwrap();
+    write_app_identity(&client_dir);
+
+    let joined = Command::new(nanny_bin())
+        .current_dir(&client_dir)
+        .env("NANNY_HOME", &home)
+        .args(["--config", &config_arg(&client_dir), "run", &format!("--join={governor_id}")])
+        .output()
+        .expect("join must complete");
+
+    let _ = server.kill();
+    let server_out = server.wait_with_output().expect("governor must be reaped");
+
+    let _ = fs::remove_dir_all(&client_dir);
+    let _ = fs::remove_dir_all(&server_dir);
+    let _ = fs::remove_dir_all(&home);
+
+    let server_stdout = String::from_utf8_lossy(&server_out.stdout);
+    assert!(
+        server_stdout.contains("SERVE-RAN-THE-APP"),
+        "--serve must run [start].cmd, not ignore it\ngot: {server_stdout}"
+    );
+    assert!(
+        server_stdout.contains("running [start] under this governor"),
+        "--serve must say it is launching the app\ngot: {server_stdout}"
+    );
+
+    let joined_stdout = String::from_utf8_lossy(&joined.stdout);
+    assert!(
+        joined.status.success() && joined_stdout.contains("JOINED-WHILE-SERVING"),
+        "a governor running its own app must still accept joins\nstdout: {joined_stdout}\nstderr: {}",
+        String::from_utf8_lossy(&joined.stderr),
+    );
+}
+
+// ── T8d: `--serve` with no [start] stays headless ────────────────────────────
+
+#[test]
+fn serve_without_a_start_section_stays_headless() {
+    let home = temp_dir();
+    let server_dir = temp_dir();
+    fs::write(
+        server_dir.join("nanny.toml"),
+        r#"[limits]
+steps   = 100
+tokens  = 1000
+timeout = 60000
+"#,
+    )
+    .unwrap();
+    write_app_identity(&server_dir);
+
+    let server_port = free_port();
+    let mut server = Command::new(nanny_bin())
+        .current_dir(&server_dir)
+        .env("NANNY_HOME", &home)
+        .args(["run", "--serve", "--addr", &format!("127.0.0.1:{server_port}")])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("governor must spawn");
+
+    let mut ready = false;
+    for _ in 0..100 {
+        if std::net::TcpStream::connect(format!("127.0.0.1:{server_port}")).is_ok() {
+            ready = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    let _ = server.kill();
+    let out = server.wait_with_output().expect("governor must be reaped");
+    let _ = fs::remove_dir_all(&server_dir);
+    let _ = fs::remove_dir_all(&home);
+
+    assert!(ready, "a headless governor must still come up");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("running headless"),
+        "no [start] must mean headless, and say so\ngot: {stdout}"
+    );
+}
+
 // ── T9b: plain `nanny run` refuses a proxy allowlist it cannot enforce ───────
 //
 // The in-process bridge listens on a Unix socket and has no CONNECT proxy;
@@ -866,10 +1014,10 @@ log = "stdout"
     let server_toml_dir = temp_dir();
     fs::write(
         server_toml_dir.join("nanny.toml"),
-        r#"[start]
-cmd = "echo unused"
-
-[limits]
+        // No [start]: these tests want a headless governor. `--serve` runs
+        // [start].cmd when nanny.toml declares one, so a dummy command here
+        // would launch, exit instantly, and take the governor down with it.
+        r#"[limits]
 steps   = 100
 tokens  = 1000
 timeout = 60000
@@ -990,10 +1138,10 @@ log = "stdout"
     let server_toml_dir = temp_dir();
     fs::write(
         server_toml_dir.join("nanny.toml"),
-        r#"[start]
-cmd = "echo unused"
-
-[limits]
+        // No [start]: these tests want a headless governor. `--serve` runs
+        // [start].cmd when nanny.toml declares one, so a dummy command here
+        // would launch, exit instantly, and take the governor down with it.
+        r#"[limits]
 steps   = 100
 tokens  = 1000
 timeout = 60000

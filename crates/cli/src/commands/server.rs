@@ -15,7 +15,7 @@
 
 use anyhow::{Context, Result};
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use nanny_bridge::network::NetworkServer;
 use nanny_config;
@@ -83,6 +83,7 @@ pub fn cmd_server_start(
     ca: Option<PathBuf>,
     no_sync: bool,
     env: crate::cloud::CloudEnv,
+    extra_args: Vec<String>,
 ) -> Result<()> {
     let cwd = std::env::current_dir().context("cannot determine current directory")?;
 
@@ -200,22 +201,85 @@ pub fn cmd_server_start(
 
     println!("nanny: name ({}), appId ({})", app.name, app.app_id);
 
-    // Blocking — returns only when the server shuts down (CTRL-C / SIGTERM).
-    NetworkServer::start_blocking_synced(
-        addr,
-        cert_path,
-        key_path,
-        ca_path,
-        components,
-        proxy_allowed_hosts,
-        Some(session_token),
-        RATE_LIMIT_RPS,
-        event_sink,
-        nanny_server_state_dir(&app.app_id)?,
-        local_log_path,
-    )?;
+    // Does this governor also have an app of its own to run?
+    //
+    // `[start]` already means "here is the app" everywhere else — plain
+    // `nanny run` requires it — so `--serve` honouring it is the consistent
+    // reading, not a new convention. Present: governor plus that app, one
+    // command, no launcher script. Absent: headless governor, the shared-
+    // governor case where the apps live elsewhere and arrive via `--join`.
+    //
+    // Either way the governor is a full network server: launching an app of
+    // its own never stops other processes or machines joining it.
+    let child_command: Option<Vec<String>> = match config.start.as_ref() {
+        Some(start) => {
+            let mut command = shlex::split(&start.cmd).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "invalid [start].cmd in nanny.toml: unterminated quote or invalid \
+                     shell syntax: {:?}",
+                    start.cmd
+                )
+            })?;
+            if command.is_empty() {
+                anyhow::bail!("[start].cmd in nanny.toml is empty");
+            }
+            command.extend(extra_args);
+            Some(command)
+        }
+        None => {
+            if !extra_args.is_empty() {
+                anyhow::bail!(
+                    "trailing arguments were given, but nanny.toml has no [start] section \
+                     to append them to.\n\n\
+                     Add [start] cmd = \"...\" to run an app under this governor, or drop \
+                     the arguments to run it headless."
+                );
+            }
+            None
+        }
+    };
 
-    Ok(())
+    let state_dir_for_server = nanny_server_state_dir(&app.app_id)?;
+
+    match child_command {
+        // ── Headless governor ────────────────────────────────────────────────
+        // Blocking — returns only when the server shuts down (CTRL-C/SIGTERM).
+        None => {
+            println!("nanny: no [start] in nanny.toml — running headless, join it with --join");
+            NetworkServer::start_blocking_synced(
+                addr,
+                cert_path,
+                key_path,
+                ca_path,
+                components,
+                proxy_allowed_hosts,
+                Some(session_token),
+                RATE_LIMIT_RPS,
+                event_sink,
+                state_dir_for_server,
+                local_log_path,
+            )?;
+            Ok(())
+        }
+
+        // ── Governor plus its own app ────────────────────────────────────────
+        Some(command) => run_governor_with_app(
+            GovernorSetup {
+                addr,
+                cert_path,
+                key_path,
+                ca_path,
+                components,
+                proxy_allowed_hosts,
+                session_token,
+                event_sink,
+                state_dir: state_dir_for_server,
+                local_log_path,
+            },
+            command,
+            &app.app_id,
+        ),
+    }
 }
 
 // ── nanny stop (governance server stop) ───────────────────────────────────────
@@ -271,6 +335,153 @@ pub fn cmd_server_stop(app: Option<String>) -> Result<()> {
 }
 
 // ── nanny status (governance server status) ───────────────────────────────────
+
+/// Everything `NetworkServer::start_blocking_synced` needs, grouped so it can
+/// be handed to a thread in one move.
+struct GovernorSetup {
+    addr: SocketAddr,
+    cert_path: PathBuf,
+    key_path: PathBuf,
+    ca_path: PathBuf,
+    components: nanny_bridge::BridgeComponents,
+    proxy_allowed_hosts: Option<Vec<String>>,
+    session_token: String,
+    event_sink: Option<std::sync::mpsc::Sender<(String, Vec<String>)>>,
+    state_dir: PathBuf,
+    local_log_path: Option<PathBuf>,
+}
+
+/// Run the governance server and, underneath it, the app from `[start]`.
+///
+/// The governor runs on a background thread and the app on this one. That
+/// ordering matters: the app is only spawned once the governor's listener is
+/// bound, so there is no readiness race to poll around — the gap a launcher
+/// script has to paper over with `until nanny status`.
+///
+/// Being one process also fixes what a two-command shell launcher cannot:
+/// `nanny` is PID 1 in a container, so it receives SIGTERM directly and the
+/// governor gets its full graceful drain; it owns the child, so the child is
+/// reaped rather than orphaned; and if either side dies the other is torn
+/// down instead of left running half-governed.
+fn run_governor_with_app(setup: GovernorSetup, command: Vec<String>, app_id: &str) -> Result<()> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let state_dir = setup.state_dir.clone();
+
+    // The governor thread flips this on the way out, whether that was a clean
+    // SIGTERM drain or a startup failure. Either way the app must not keep
+    // running ungoverned.
+    let governor_finished = Arc::new(AtomicBool::new(false));
+    let governor_result: Arc<std::sync::Mutex<Option<anyhow::Error>>> =
+        Arc::new(std::sync::Mutex::new(None));
+
+    let finished = governor_finished.clone();
+    let result_slot = governor_result.clone();
+    let governor = std::thread::Builder::new()
+        .name("nanny-governor".into())
+        .spawn(move || {
+            let outcome = NetworkServer::start_blocking_synced(
+                setup.addr,
+                setup.cert_path,
+                setup.key_path,
+                setup.ca_path,
+                setup.components,
+                setup.proxy_allowed_hosts,
+                Some(setup.session_token),
+                RATE_LIMIT_RPS,
+                setup.event_sink,
+                setup.state_dir,
+                setup.local_log_path,
+            );
+            if let Err(e) = outcome {
+                *result_slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(e);
+            }
+            finished.store(true, Ordering::SeqCst);
+        })
+        .context("failed to start the governor thread")?;
+
+    // Wait for the listener before spawning the app. The governor writes
+    // server.addr only after a successful bind, so its appearance is the
+    // readiness signal — and it carries the port actually bound, which may not
+    // be the one requested if the default fell forward.
+    let addr_file = state_dir.join("server.addr");
+    let server = wait_for_governor(&addr_file, &governor_finished, app_id)?;
+
+    // If the governor died during startup, surface its error rather than a
+    // confusing "can't reach the server" from the child.
+    if let Some(e) = governor_result.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        return Err(e);
+    }
+
+    let (mut cmd, run_id) = crate::build_governed_child(command, &server)?;
+    crate::declare_app_to_governor(&server, Path::new("."), &run_id);
+
+    println!("nanny: running [start] under this governor");
+    println!();
+
+    let mut child = cmd.spawn().with_context(|| {
+        format!("failed to spawn '{}'", cmd.get_program().to_string_lossy())
+    })?;
+
+    // Poll rather than block on wait(), so a governor shutdown (SIGTERM in a
+    // container) takes the app down with it instead of leaving this process
+    // hanging on a child nothing is governing any more.
+    let status = loop {
+        match child.try_wait().context("failed to poll the app process")? {
+            Some(status) => break status,
+            None => {
+                if governor_finished.load(Ordering::SeqCst) {
+                    eprintln!("nanny: governor stopped — stopping the app it was governing");
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break std::process::ExitStatus::default();
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+    };
+
+    // The app is done, so the governor has nothing left to govern. Drop the
+    // discovery files first so `nanny status`/`--join` never point at a
+    // governor that is on its way out.
+    let _ = std::fs::remove_file(state_dir.join("server.pid"));
+    let _ = std::fs::remove_file(state_dir.join("server.token"));
+    let _ = std::fs::remove_file(state_dir.join("server.addr"));
+    drop(governor);
+
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
+    Ok(())
+}
+
+/// Block until the governor has bound and published its address, or until it
+/// gives up. Returns the discovery info the child needs.
+fn wait_for_governor(
+    addr_file: &Path,
+    governor_finished: &std::sync::atomic::AtomicBool,
+    app_id: &str,
+) -> Result<crate::NetworkServerInfo> {
+    use std::sync::atomic::Ordering;
+
+    // Generous: costs nothing on a healthy start (returns as soon as the file
+    // appears) and only spends time when something is actually wrong.
+    for _ in 0..200 {
+        if addr_file.exists() {
+            return crate::detect_joined_server(app_id);
+        }
+        if governor_finished.load(Ordering::SeqCst) {
+            anyhow::bail!("the governance server exited before it finished starting");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    anyhow::bail!(
+        "the governance server did not become ready within 10 s\n\n\
+         Nothing was written to {}",
+        addr_file.display()
+    )
+}
 
 pub fn cmd_server_status(app: Option<String>) -> Result<()> {
     let app_id = resolve_app_id(app)?;
