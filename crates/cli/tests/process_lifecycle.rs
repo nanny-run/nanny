@@ -77,6 +77,24 @@ fn write_app_identity(dir: &Path) -> String {
     id
 }
 
+/// Ask the OS for a port that is genuinely free right now.
+///
+/// Binding to port 0 makes the kernel pick one, then we release it and hand
+/// the number to the server the test is about to spawn.
+///
+/// Hardcoded port numbers do not work here. These tests run in parallel, so a
+/// reused number makes a test that passes alone fail in a suite; and across
+/// back-to-back `cargo test` runs the previous run's sockets linger in
+/// TIME_WAIT on those exact numbers. Both failure modes look like a broken
+/// server rather than a broken test, which is the worst kind of flake.
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .expect("the OS must be able to hand out an ephemeral port")
+        .local_addr()
+        .expect("a bound listener always has a local address")
+        .port()
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 /// A process that exits on its own completes cleanly — exit code 0.
@@ -449,7 +467,7 @@ log = "stdout"
     write_app_identity(&dir);
 
     // Pick a port for the server. We'll probe it then kill the process.
-    let port = 15900u16; // static, unlikely to be in use during tests
+    let port = free_port();
 
     let mut child = Command::new(nanny_bin())
         .current_dir(&dir)
@@ -514,7 +532,7 @@ log = "stdout"
 
     // Start a plain-HTTP governance server on a loopback port, with its own
     // app identity, `--serve` requires one to key its state.
-    let server_port = 15901u16;
+    let server_port = free_port();
     let server_toml_dir = temp_dir();
     fs::write(
         server_toml_dir.join("nanny.toml"),
@@ -628,9 +646,7 @@ timeout = 10000
     let joiner_id = write_app_identity(&client_dir);
     assert_ne!(governor_id, joiner_id, "the two apps must be distinct for this test to mean anything");
 
-    // 15904: every port in this file must be unique — these tests run in
-    // parallel, and reusing one makes a test that passes alone fail in a suite.
-    let server_port = 15904u16;
+    let server_port = free_port();
     let mut server = Command::new(nanny_bin())
         .current_dir(&server_dir)
         .env("NANNY_HOME", &home)
@@ -813,7 +829,7 @@ log = "stdout"
     .unwrap();
     let app_id = write_app_identity(&server_toml_dir);
 
-    let server_port = 15902u16;
+    let server_port = free_port();
     let mut server = Command::new(nanny_bin())
         .current_dir(&server_toml_dir)
         .env("NANNY_HOME", &home)
@@ -934,7 +950,7 @@ log = "stdout"
     .unwrap();
     let app_id = write_app_identity(&server_toml_dir);
 
-    let server_port = 15903u16;
+    let server_port = free_port();
     let mut server = Command::new(nanny_bin())
         .current_dir(&server_toml_dir)
         .env("NANNY_HOME", &home)

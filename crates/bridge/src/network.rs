@@ -1194,7 +1194,7 @@ mod tests {
     use nanny_core::agent::limits::Limits;
     use nanny_runtime::ToolRegistry;
     use std::collections::HashMap;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::Ordering;
     use std::time::Duration;
 
     // secure_compare ──────────────────────────────────────────────────────────
@@ -1374,12 +1374,28 @@ mod tests {
         }
     }
 
-    /// Pick a unique port for each test so parallel tests don't collide.
+    /// Ask the OS for a port that is genuinely free right now.
+    ///
+    /// Binding to port 0 makes the kernel pick one, then we release it and
+    /// hand the number to the server under test.
+    ///
+    /// This replaces a fixed base (15200) plus an incrementing counter, which
+    /// was unique only *within a single process*. Across back-to-back
+    /// `cargo test` runs the previous run's sockets are still in TIME_WAIT on
+    /// those exact ports, and `% 200` meant the 201st test wrapped onto the
+    /// first one's port. That is how `proxy_blocks_ssrf_loopback` became
+    /// flaky: it failed four runs out of four when the suite was run
+    /// repeatedly, while passing every time in isolation.
+    ///
+    /// There is a small window between releasing the listener and the server
+    /// binding, but the kernel does not hand out the same ephemeral port twice
+    /// in quick succession, so this is dramatically better than a fixed range.
     fn next_port() -> u16 {
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-        // Start at 15200; each test uses the next port
-        15200u16 + (n as u16 % 200)
+        std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("the OS must be able to hand out an ephemeral port")
+            .local_addr()
+            .expect("a bound listener always has a local address")
+            .port()
     }
 
     fn test_certs_dir() -> PathBuf {
@@ -1834,18 +1850,24 @@ mod tests {
         (status, String::from_utf8_lossy(&body_bytes).to_string())
     }
 
-    /// Poll TCP connect until the port is accepting connections (up to 3 s).
+    /// Poll TCP connect until the port is accepting connections (up to 10 s).
     /// Replaces fixed sleep(350ms): under heavy parallel test load, the fixed
     /// sleep is not enough.  Polling is both faster on a quiet machine and
     /// robust on a loaded one.
+    ///
+    /// The budget is deliberately generous. It costs nothing on a healthy run
+    /// (this returns as soon as the port answers) and only spends real time
+    /// when something is actually wrong, so a slow CI box is not reported as a
+    /// broken server. The old 3 s budget was tight enough to lose a race
+    /// against TLS setup on a loaded machine.
     fn wait_for_port(port: u16) {
-        for _ in 0..60 {
+        for _ in 0..200 {
             if std::net::TcpStream::connect(format!("127.0.0.1:{port}")).is_ok() {
                 return;
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        panic!("server on port {port} never became ready within 3 s");
+        panic!("server on port {port} never became ready within 10 s");
     }
 
     /// Start a proxy-enabled network server in a background thread.
