@@ -151,6 +151,42 @@ fn bind_with_fallforward(requested: SocketAddr) -> Result<std::net::TcpListener>
     )
 }
 
+/// Write a shared secret to disk, owner-readable only, with no window in
+/// which it is readable by anyone else.
+///
+/// The mode is set **as the file is created**, not applied afterwards. Writing
+/// first and calling `set_permissions` second (what this replaced) leaves the
+/// file at the process umask — commonly 0644 — for the moment in between, which
+/// on a multi-user box is long enough to read a token out of.
+fn write_secret_file(path: &Path, contents: &str) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write as _;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+            .with_context(|| format!("failed to create {}", path.display()))?;
+        f.write_all(contents.as_bytes())
+            .with_context(|| format!("failed to write {}", path.display()))?;
+        // `.mode()` only applies when the file is created, so an existing file
+        // from an earlier run keeps its old mode. Enforce it either way.
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("failed to restrict {}", path.display()))?;
+    }
+    #[cfg(not(unix))]
+    {
+        // Windows has no umask window; ACLs on the per-user state directory are
+        // the protection there.
+        std::fs::write(path, contents)
+            .with_context(|| format!("failed to write {}", path.display()))?;
+    }
+    Ok(())
+}
+
 // ── Per-IP rate limiter ───────────────────────────────────────────────────────
 
 /// Sliding-window per-IP rate limiter.  DoS protection only — never a
@@ -1074,25 +1110,16 @@ impl NetworkServer {
         std::fs::write(&addr_file, addr.to_string())
             .with_context(|| format!("failed to write {}", addr_file.display()))?;
 
+        // Both files are shared secrets: created owner-read-only, never merely
+        // chmod'd after the fact.
         let token_file = state_dir.join("server.token");
-        std::fs::write(&token_file, &token)
-            .with_context(|| format!("failed to write {}", token_file.display()))?;
+        write_secret_file(&token_file, &token)?;
 
         // Separate file for the CONNECT-only credential, never merged into
         // server.token. `cmd_run_via_network_server` reads this one specifically
         // when embedding Proxy-Authorization userinfo into HTTPS_PROXY.
         let proxy_token_file = state_dir.join("server.proxy_token");
-        std::fs::write(&proxy_token_file, &proxy_token)
-            .with_context(|| format!("failed to write {}", proxy_token_file.display()))?;
-
-        // Restrict both token files to owner-read-only. They're shared secrets;
-        // other users on the same machine must not be able to read them.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&token_file, std::fs::Permissions::from_mode(0o600));
-            let _ = std::fs::set_permissions(&proxy_token_file, std::fs::Permissions::from_mode(0o600));
-        }
+        write_secret_file(&proxy_token_file, &proxy_token)?;
 
         // PID file so `nanny stop --app=<id>` can send SIGTERM.
         let pid_file = state_dir.join("server.pid");
