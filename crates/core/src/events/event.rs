@@ -150,6 +150,28 @@ pub enum ExecutionEvent {
         version: Option<String>,
     },
 
+    /// Emitted once when a process declares which app it is, from the
+    /// committed `.nanny/app.json`.
+    ///
+    /// `app_id` is the permanent, generated identity written by `nanny init`
+    /// and never regenerated; `name` is the human-chosen display label and may
+    /// change without the app becoming a different app.
+    ///
+    /// This rides in the payload rather than being derived from the API key,
+    /// which is what lets one governor holding one credential serve many apps
+    /// and still have each attributed separately — the same reason OpenTelemetry
+    /// makes `service.name` a resource attribute instead of a transport concern.
+    /// A process joining a governor declares its own identity here; one that has
+    /// none inherits the governor's.
+    ///
+    /// Attribution label only, exactly like `HarnessIdentified`: never content,
+    /// never pricing, never touches the ledger, never affects a stop.
+    AppIdentified {
+        ts: u64,
+        app_id: String,
+        name: String,
+    },
+
     /// Emitted when the agent activates a named limits set via `agent_enter`.
     ///
     /// Records the name of the limits set and the limits now in effect,
