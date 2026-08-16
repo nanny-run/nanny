@@ -663,6 +663,36 @@ fn cmd_run(
         return cmd_run_via_network_server(command, server);
     }
 
+    // ── Refuse to run a control we cannot enforce ─────────────────────────────
+    // Past this point the run is governed by the in-process bridge, which has
+    // no CONNECT proxy: it listens on a Unix socket (a TCP loopback port on
+    // Windows) and is deliberately not a network server. `HTTPS_PROXY` can only
+    // name a host:port, so no mainstream HTTP client can route through a Unix
+    // socket — a proxy allowlist is not something this path can ever honor.
+    //
+    // Without this check, `[proxy] allowed_hosts` is silently inert here: no
+    // injection, no enforcement, no warning, and traffic leaves ungoverned
+    // while the config says otherwise. That is the same fail-open G8 fixed on
+    // the `--join` path on 2026-08-02; the identical hole was left open on this
+    // one, which is the path most people use.
+    //
+    // Fail closed, per the manifesto: a declared control that cannot be
+    // enforced stops the run rather than pretending.
+    if let Some(hosts) = config.proxy.as_ref().map(|p| &p.allowed_hosts) {
+        if !hosts.is_empty() {
+            anyhow::bail!(
+                "[proxy] allowed_hosts is set, but `nanny run` governs through the \
+                 in-process bridge, which cannot enforce a proxy allowlist.\n\n\
+                 Traffic would leave ungoverned while the config claims otherwise, so \
+                 this refuses to start rather than fail open.\n\n\
+                 The proxy lives in the governance server. Use it instead:\n\n\
+                 \x20   nanny run --serve            # terminal 1\n\
+                 \x20   nanny run --join=<appId>     # terminal 2\n\n\
+                 Or remove [proxy] allowed_hosts to run under the bridge."
+            );
+        }
+    }
+
     // Build the wired runtime from config.
     // If a named limits set was requested, resolve it with inheritance.
     let components = if let Some(name) = limits_name {

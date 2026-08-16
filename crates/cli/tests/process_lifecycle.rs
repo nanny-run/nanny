@@ -764,6 +764,61 @@ log = "stdout"
     );
 }
 
+// ── T9b: plain `nanny run` refuses a proxy allowlist it cannot enforce ───────
+//
+// The in-process bridge listens on a Unix socket and has no CONNECT proxy;
+// HTTPS_PROXY can only name a host:port, so this path can never honor
+// [proxy] allowed_hosts. Before this guard the section was silently inert:
+// no injection, no enforcement, no warning, traffic leaving ungoverned while
+// nanny.toml said otherwise — the same fail-open G8 fixed on the --join path
+// while leaving it open on this one.
+
+#[test]
+fn plain_run_refuses_a_proxy_allowlist_it_cannot_enforce() {
+    let dir = temp_dir();
+    fs::write(
+        dir.join("nanny.toml"),
+        r#"[start]
+cmd = "echo should-never-run"
+
+[limits]
+steps   = 10
+tokens  = 100
+timeout = 10000
+
+[proxy]
+allowed_hosts = ["api.openai.com"]
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(nanny_bin())
+        .args(["--config", &config_arg(&dir), "run"])
+        .output()
+        .expect("nanny run must complete");
+
+    let _ = fs::remove_dir_all(&dir);
+
+    assert!(!output.status.success(), "must refuse to start, not fail open");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("allowed_hosts"),
+        "the error must name the setting that caused it\ngot: {stderr}"
+    );
+    assert!(
+        stderr.contains("--serve"),
+        "the error must point at the path that CAN enforce it\ngot: {stderr}"
+    );
+
+    // The whole point: the agent must not have run.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("should-never-run"),
+        "the child must never be spawned when a declared control can't be enforced\ngot: {stdout}"
+    );
+}
+
 // ── T10: proxy env vars are auto-injected when the SERVER has [proxy] configured ─
 //
 // The server's own nanny.toml (not the client's) decides whether [proxy]
