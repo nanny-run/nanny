@@ -22,7 +22,7 @@ from nanny_sdk.exceptions import (
     ToolDenied,
 )
 from nanny_sdk.instrument import instrument
-from nanny_sdk.run import fresh_run
+from nanny_sdk.run import fresh_run, run_scope
 
 __all__ = [
     # Decorators
@@ -33,6 +33,7 @@ __all__ = [
     "instrument",
     # Run control
     "fresh_run",
+    "run_scope",
     # App attribution
     "set_app",
     # Exceptions

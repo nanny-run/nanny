@@ -87,13 +87,26 @@ def _token() -> str:
 def _run_id() -> str | None:
     """Run id for this process on the governance server (G3).
 
-    Set from ``NANNY_RUN_ID`` — ``nanny run`` injects a fresh id per invocation,
-    or several processes set the same id to share one budget and stop together.
-    Absent → the server's default run (shared-budget behaviour). The local bridge
-    ignores it (one process is always one run). Mirrors the Rust client
-    (``crates/cli/src/lib.rs``): run id = which budget you spend, distinct from
-    ``NANNY_SESSION_TOKEN`` (who you are).
+    Resolution order: an active ``run_scope()`` (a ``ContextVar``, correctly
+    isolated per thread/task — see ``run.py``) wins if set; otherwise falls
+    back to ``NANNY_RUN_ID`` — ``nanny run`` injects a fresh id per invocation,
+    or several processes set the same id to share one budget and stop
+    together. Absent → the server's default run (shared-budget behaviour).
+    The local bridge ignores it (one process is always one run). Mirrors the
+    Rust client (``crates/cli/src/lib.rs``): run id = which budget you spend,
+    distinct from ``NANNY_SESSION_TOKEN`` (who you are).
+
+    The ``ContextVar`` is checked first specifically so a threaded/async host
+    running several concurrent runs (e.g. a web server, one thread per
+    tenant) never has one tenant's env-var write race another's read — every
+    existing single-run-per-process caller (the CLI, example apps) never sets
+    a scope, so this falls through to the env var exactly as before.
     """
+    from nanny_sdk.run import _scoped_run_id
+
+    scoped = _scoped_run_id()
+    if scoped:
+        return scoped
     val = os.environ.get("NANNY_RUN_ID")
     return val if val else None
 
