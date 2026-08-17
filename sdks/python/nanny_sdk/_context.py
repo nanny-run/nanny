@@ -1,4 +1,4 @@
-"""PolicyContext — mirrors the Rust PolicyContext struct field-for-field.
+"""PolicyContext: mirrors the Rust PolicyContext struct field-for-field.
 
 Passed to every ``@rule`` function so it can inspect agent state before
 deciding whether to allow or deny the pending tool call.
@@ -25,7 +25,7 @@ class PolicyContext:
         """Parse a bridge response dict into a ``PolicyContext``.
 
         Handles both the bridge wire format (``step``, ``tokens_spent``) and the
-        Python field names (``step_count``, ``tokens_spent``) — the ``/status``
+        Python field names (``step_count``, ``tokens_spent``). The ``/status``
         endpoint uses the short wire names; direct dict construction uses the
         Python names.
         """

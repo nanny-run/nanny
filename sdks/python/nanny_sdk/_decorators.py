@@ -20,7 +20,7 @@ from nanny_sdk.exceptions import BridgeUnavailable, RuleDenied
 F = TypeVar("F", bound=Callable[..., Any])
 
 # ---------------------------------------------------------------------------
-# Rule registry — populated at decoration time, evaluated before each tool call
+# Rule registry: populated at decoration time, evaluated before each tool call
 # ---------------------------------------------------------------------------
 
 # Ordered dict so rules are evaluated in registration order.
@@ -34,7 +34,7 @@ def tool(*, tokens: int = 0) -> Callable[[F], F]:
     allowlist, and rule limits. Charges ``tokens`` on each allowed call.
 
     In passthrough mode (no ``NANNY_BRIDGE_PORT``) the decorated function
-    is returned unchanged — zero overhead, zero import errors.
+    is returned unchanged, zero overhead, zero import errors.
     """
 
     def decorator(fn: F) -> F:
@@ -56,7 +56,7 @@ def tool(*, tokens: int = 0) -> Callable[[F], F]:
             Fetches live counters from ``GET /status`` first so rules have
             access to ``step_count``, ``tool_call_history``, etc.
 
-            If the bridge is unreachable, raises ``BridgeUnavailable`` —
+            If the bridge is unreachable, raises ``BridgeUnavailable``:
             silently continuing with zeroed counters would let the agent run
             ungoverned, violating the manifesto guarantee that Nanny fails
             closed.
@@ -103,11 +103,11 @@ def rule(name: str) -> Callable[[F], F]:
     """Register a policy rule function.
 
     The decorated function receives a ``PolicyContext`` and returns ``bool``.
-    ``False`` → ``RuleDenied(name)`` raised at the pending tool call site,
+    ``False`` raises ``RuleDenied(name)`` at the pending tool call site,
     before the bridge is ever contacted.
 
     Rules are evaluated in registration order. The first rule that returns
-    ``False`` stops evaluation — remaining rules are not called.
+    ``False`` stops evaluation, remaining rules are not called.
 
     ``ctx.last_tool_args`` and ``ctx.requested_tool`` are always populated.
     ``ctx.step_count``, ``ctx.tokens_spent``, and ``ctx.tool_call_history``
@@ -128,7 +128,7 @@ def agent(name: str) -> Callable[[F], F]:
     block so the scope always exits even on exception. Supports both sync
     and async functions.
 
-    ``/agent/enter`` is called **before** the ``try`` block — if the scope
+    ``/agent/enter`` is called **before** the ``try`` block: if the scope
     is not found (bridge returns 404), ``AgentNotFound`` propagates immediately
     and ``/agent/exit`` is never called (the scope was never activated).
     """

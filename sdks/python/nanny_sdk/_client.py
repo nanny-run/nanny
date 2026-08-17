@@ -15,16 +15,16 @@ The bridge uses different transports depending on the OS and configuration:
 ``NANNY_SESSION_TOKEN`` is always injected on all platforms.
 
 Transport priority:
-1. ``NANNY_BRIDGE_SOCKET``  — Unix domain socket (macOS/Linux local)
-2. ``NANNY_BRIDGE_PORT``    — TCP loopback (Windows local)
-3. ``NANNY_BRIDGE_ADDR``    — TCP + mTLS (network / cross-machine)
+1. ``NANNY_BRIDGE_SOCKET``: Unix domain socket (macOS/Linux local)
+2. ``NANNY_BRIDGE_PORT``: TCP loopback (Windows local)
+3. ``NANNY_BRIDGE_ADDR``: TCP + mTLS (network / cross-machine)
 4. None of the above        → passthrough (all decorators are no-ops)
 
 All environment variables are read at call time (not import time) so tests can
 set them via ``monkeypatch`` without reloading the module.
 
 When none of the three transport env vars are set the SDK is in passthrough
-mode — every decorator is a no-op and no network calls are made. This is the
+mode, every decorator is a no-op and no network calls are made. This is the
 normal state when running ``python agent.py`` directly instead of
 ``nanny run agent.py``.
 """
@@ -56,7 +56,7 @@ from nanny_sdk.exceptions import (
 )
 
 # ---------------------------------------------------------------------------
-# Environment helpers — evaluated lazily so monkeypatch works in tests
+# Environment helpers, evaluated lazily so monkeypatch works in tests
 # ---------------------------------------------------------------------------
 
 
@@ -87,20 +87,17 @@ def _token() -> str:
 def _run_id() -> str | None:
     """Run id for this process on the governance server (G3).
 
-    Resolution order: an active ``run_scope()`` (a ``ContextVar``, correctly
-    isolated per thread/task — see ``run.py``) wins if set; otherwise falls
-    back to ``NANNY_RUN_ID`` — ``nanny run`` injects a fresh id per invocation,
-    or several processes set the same id to share one budget and stop
-    together. Absent → the server's default run (shared-budget behaviour).
-    The local bridge ignores it (one process is always one run). Mirrors the
-    Rust client (``crates/cli/src/lib.rs``): run id = which budget you spend,
-    distinct from ``NANNY_SESSION_TOKEN`` (who you are).
+    Checks the `run_scope()` ContextVar first (isolated per thread/task, so
+    a host running several concurrent runs never races on it), then falls
+    back to `NANNY_RUN_ID`, set by `nanny run` per invocation, or shared
+    across processes on purpose to pool one budget. Absent means the
+    server's default run (shared-budget behaviour). The local bridge ignores
+    it, one process is always one run. Mirrors the Rust client
+    (`crates/cli/src/lib.rs`): run id is which budget you spend, distinct
+    from `NANNY_SESSION_TOKEN` (who you are).
 
-    The ``ContextVar`` is checked first specifically so a threaded/async host
-    running several concurrent runs (e.g. a web server, one thread per
-    tenant) never has one tenant's env-var write race another's read — every
-    existing single-run-per-process caller (the CLI, example apps) never sets
-    a scope, so this falls through to the env var exactly as before.
+    With no scope ever entered, this resolves exactly as it did before
+    `run_scope()` existed.
     """
     from nanny_sdk.run import _scoped_run_id
 
@@ -112,7 +109,7 @@ def _run_id() -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# mTLS cert resolution — used when NANNY_BRIDGE_ADDR is set
+# mTLS cert resolution, used when NANNY_BRIDGE_ADDR is set
 # ---------------------------------------------------------------------------
 #
 # Two formats are accepted for all three NANNY_BRIDGE_CERT/KEY/CA env vars:
@@ -120,7 +117,7 @@ def _run_id() -> str | None:
 #   File path:   NANNY_BRIDGE_CA=/path/to/ca.crt
 #   Inline PEM:  NANNY_BRIDGE_CA="-----BEGIN CERTIFICATE-----\n..."
 #
-# Inline PEM works without a filesystem — useful in Docker/k8s where secrets
+# Inline PEM works without a filesystem, useful in Docker/k8s where secrets
 # are injected as env var values rather than mounted files.
 #
 # NANNY_BRIDGE_CERT may be a combined cert+key PEM bundle, in which case
@@ -141,7 +138,7 @@ def _resolve_pem_value(env_var: str, fallback: Path) -> str | None:
     """
     val = os.environ.get(env_var)
     if val:
-        return val  # inline PEM or file path — both returned as-is
+        return val  # inline PEM or file path, both returned as-is
     return str(fallback) if fallback.exists() else None
 
 
@@ -176,18 +173,18 @@ def _build_ssl_context(cert_val: str, key_val: str | None, ca_val: str) -> ssl.S
 
     Each value may be an inline PEM string or a file path.
     ``load_verify_locations(cadata=...)`` accepts inline PEM directly.
-    ``load_cert_chain`` requires file paths — ``_as_path`` handles the
+    ``load_cert_chain`` requires file paths, ``_as_path`` handles the
     temp-file dance for inline PEM values.
     """
     ctx = ssl.create_default_context()
 
-    # CA — verify the server certificate.
+    # CA: verify the server certificate.
     if ca_val.startswith("-----BEGIN"):
         ctx.load_verify_locations(cadata=ca_val)
     else:
         ctx.load_verify_locations(cafile=ca_val)
 
-    # Client cert + key — prove our identity to the server (mTLS).
+    # Client cert + key: prove our identity to the server (mTLS).
     # ssl.SSLContext.load_cert_chain reads the files immediately, so
     # _as_path temp files are cleaned up while the data is already loaded.
     with _as_path(cert_val) as cert_path:
@@ -360,15 +357,15 @@ def _raise_stop_from_410(resp: httpx.Response) -> None:
     carrying the stop reason (``{"error":"execution stopped","reason":"…"}``).
     We surface it as a typed stop instead of letting httpx raise a raw
     ``HTTPStatusError``, so agents and frameworks catch it cleanly (G7). The run
-    stopped on an earlier call — possibly on another process sharing the same
-    ``NANNY_RUN_ID`` — so the precise tool/rule detail is not on this response;
+    stopped on an earlier call, possibly on another process sharing the same
+    ``NANNY_RUN_ID``, so the precise tool/rule detail is not on this response;
     known limit reasons map to their class, everything else to
     ``ExecutionStopped`` carrying the reason.
     """
     reason = ""
     try:
         reason = str(resp.json().get("reason", ""))
-    except Exception:  # noqa: BLE001 — a malformed body still means the run stopped
+    except Exception:  # noqa: BLE001 (a malformed body still means the run stopped)
         pass
     match reason:
         case "MaxStepsReached":
@@ -389,7 +386,7 @@ def _raise_stop_from_410(resp: httpx.Response) -> None:
 
 
 def health() -> bool:
-    """Connectivity check — returns True if bridge responds with state running."""
+    """Connectivity check: returns True if bridge responds with state running."""
     with _bridge_call(), _make_client(timeout=5.0) as c:
         resp = c.get("/health", headers=_headers())
     resp.raise_for_status()
@@ -398,7 +395,7 @@ def health() -> bool:
 
 
 def get_status() -> PolicyContext:
-    """GET /status — returns live execution counters as a ``PolicyContext``.
+    """GET /status: returns live execution counters as a ``PolicyContext``.
 
     ``requested_tool`` and ``last_tool_args`` are not populated from ``/status``;
     the ``@tool`` decorator sets them on the returned context before passing it
@@ -414,7 +411,7 @@ def get_status() -> PolicyContext:
 
 
 def call_tool(tool_name: str, tokens: int, args: dict[str, Any]) -> None:
-    """POST /tool/call — raises a NannyStop subclass if denied, returns None if allowed.
+    """POST /tool/call: raises a NannyStop subclass if denied, returns None if allowed.
 
     Raises ``BridgeUnavailable`` (also a ``NannyStop``) if the bridge can't be
     reached at all: a governed tool call must fail closed, not silently run
@@ -423,7 +420,7 @@ def call_tool(tool_name: str, tokens: int, args: dict[str, Any]) -> None:
     payload = {"tool": tool_name, "tokens": tokens, "args": args}
     with _bridge_call(), _make_client(timeout=10.0) as c:
         resp = c.post("/tool/call", json=payload, headers=_headers())
-    # 410 Gone → this run already stopped; raise a typed stop, not a raw HTTP error.
+    # 410 Gone: this run already stopped, raise a typed stop, not a raw HTTP error.
     if resp.status_code == 410:
         _raise_stop_from_410(resp)
     resp.raise_for_status()
@@ -437,9 +434,9 @@ def call_tool(tool_name: str, tokens: int, args: dict[str, Any]) -> None:
 
 
 def agent_enter(name: str) -> None:
-    """POST /agent/enter — activate a named limit scope.
+    """POST /agent/enter: activate a named limit scope.
 
-    The bridge returns 404 when the named scope is not in nanny.toml —
+    The bridge returns 404 when the named scope is not in nanny.toml,
     raises ``AgentNotFound`` in that case. Raises ``BridgeUnavailable`` if the
     bridge can't be reached at all, same reasoning as ``call_tool``.
     """
@@ -447,16 +444,16 @@ def agent_enter(name: str) -> None:
         resp = c.post("/agent/enter", json={"name": name}, headers=_headers())
     if resp.status_code == 404:
         raise AgentNotFound()
-    # 410 Gone → this run already stopped; raise a typed stop, not a raw HTTP error.
+    # 410 Gone: this run already stopped, raise a typed stop, not a raw HTTP error.
     if resp.status_code == 410:
         _raise_stop_from_410(resp)
     resp.raise_for_status()
 
 
 def agent_exit(name: str) -> None:
-    """POST /agent/exit — deactivate the named limit scope.
+    """POST /agent/exit: deactivate the named limit scope.
 
-    Silently ignored if the bridge closed the connection after a stop event —
+    Silently ignored if the bridge closed the connection after a stop event,
     the bridge already recorded the scope exit when it issued the stop.
     """
     try:
@@ -467,11 +464,11 @@ def agent_exit(name: str) -> None:
 
 
 def report_stop(reason: str) -> None:
-    """POST /stop — notify the bridge of a stop reason before raising.
+    """POST /stop: notify the bridge of a stop reason before raising.
 
     The bridge records this so the NDJSON log shows the real stop reason
     (e.g. ``RuleDenied``) instead of ``ProcessCrashed`` when the process exits.
-    Silently ignored if the bridge is unreachable — best-effort only.
+    Silently ignored if the bridge is unreachable, best-effort only.
     """
     try:
         with _make_client(timeout=2.0) as c:
@@ -485,7 +482,7 @@ def report_stop_rule(tool_name: str, rule_name: str) -> None:
 
     Client-side rule denials never reach ``/tool/call``, so the bridge has no
     other opportunity to append a ``RuleDenied`` event to the stream.
-    Silently ignored if the bridge is unreachable — best-effort only.
+    Silently ignored if the bridge is unreachable, best-effort only.
     """
     try:
         with _make_client(timeout=2.0) as c:

@@ -1,7 +1,7 @@
 """Nanny stop-reason exceptions.
 
 Each variant of the Rust ``StopReason`` enum maps to a typed Python exception.
-Names match exactly — no prefix, no divergence.
+Names match exactly, no prefix, no divergence.
 
     from nanny_sdk import BudgetExhausted, ToolDenied
 """
@@ -56,7 +56,7 @@ class BridgeUnavailable(NannyStop):
     """The bridge was active but unreachable during rule evaluation or a tool call.
 
     Extends NannyStop (BaseException) so it propagates through broad
-    ``except Exception`` handlers in agent frameworks — the same reason all
+    ``except Exception`` handlers in agent frameworks, the same reason all
     stop signals use BaseException. Silently swallowing a bridge failure would
     let the agent continue ungoverned, violating the manifesto guarantee.
     """
@@ -66,7 +66,7 @@ class ExecutionStopped(NannyStop):
     """The run this call belongs to has already stopped (G3/G7).
 
     Raised when an action endpoint answers 410 Gone: the run hit a limit, or was
-    stopped, on an earlier call — possibly by another process sharing the same
+    stopped, on an earlier call, possibly by another process sharing the same
     ``NANNY_RUN_ID``. The governance server keys enforcement state by run id, so
     the stop is final for this run only, not the whole server. ``reason`` carries
     the stop reason the bridge reported. Known limit reasons (BudgetExhausted,
