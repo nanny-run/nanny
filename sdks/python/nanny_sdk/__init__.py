@@ -9,6 +9,7 @@ Run your agent under ``nanny run agent.py``. All decorators are no-ops when
 
 from nanny_sdk._decorators import agent, rule, tool
 from nanny_sdk.app import set_app
+from nanny_sdk.events import get_run_events
 from nanny_sdk.exceptions import (
     AgentCompleted,
     AgentNotFound,
@@ -36,6 +37,8 @@ __all__ = [
     "run_scope",
     # App attribution
     "set_app",
+    # Usage events
+    "get_run_events",
     # Exceptions
     "NannyStop",
     "MaxStepsReached",

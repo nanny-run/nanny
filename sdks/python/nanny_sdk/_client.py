@@ -32,6 +32,7 @@ normal state when running ``python agent.py`` directly instead of
 from __future__ import annotations
 
 import ipaddress
+import json
 import os
 import ssl
 import tempfile
@@ -392,6 +393,47 @@ def health() -> bool:
     resp.raise_for_status()
     data: dict[str, str] = resp.json()
     return data.get("state") == "running"
+
+
+def get_run_events(run_id: str) -> list[dict[str, Any]]:
+    """GET /events for a specific run id, not necessarily this thread's own.
+
+    Unlike every other bridge call in this module, the caller supplies
+    ``run_id`` explicitly instead of it being read off the current thread's
+    ``run_scope()``/``NANNY_RUN_ID`` (see ``_headers()``): a usage tailer
+    polling many runs' events from one background thread has no "current
+    run" of its own to read a contextvar for, it needs one specific run's
+    events on demand. Returns the run's full buffered event list every
+    call (the bridge only clears it via the separate cloud-forwarding
+    hook, ``take_run_events``, never on a plain GET) — the caller is
+    expected to track how many it has already consumed, e.g. by index or
+    by best-effort recorded ``ts``.
+
+    Returns `[]` for a run the bridge has no record of yet (a fresh run
+    with no events at all is a case, not an error) as well as when the
+    bridge is unreachable (``BridgeUnavailable``): a usage tailer is a
+    best-effort side channel, not something that should crash a session
+    over a transient network blip the actual governed calls already
+    tolerate by failing closed elsewhere.
+    """
+    headers = {"X-Nanny-Session-Token": _token(), "X-Nanny-Run-Id": run_id}
+    try:
+        with _make_client(timeout=5.0) as c:
+            resp = c.get("/events", headers=headers)
+    except httpx.TransportError:
+        return []
+    if resp.status_code != 200:
+        return []
+    events: list[dict[str, Any]] = []
+    for line in resp.text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            events.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return events
 
 
 def get_status() -> PolicyContext:
