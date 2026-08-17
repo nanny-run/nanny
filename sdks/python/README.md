@@ -124,6 +124,21 @@ Only meaningful under a network server (`nanny run --serve` / `--join`), which t
 
 ---
 
+## `run_scope` — the same idea, for concurrent runs in one process
+
+`fresh_run` writes to a process-global environment variable, which is correct for a short-lived, one-run-per-process caller, but two runs active at the same time in one process (a threaded or async server handling more than one independent session at once) would race on that same write. `run_scope` is the concurrent-safe form:
+
+```python
+import nanny_sdk
+
+with nanny_sdk.run_scope() as run_id:
+    ...  # every governed call in this thread or task uses this run_id
+```
+
+Each call gets its own run id, isolated per thread and per asyncio task, so two runs in flight at once in the same process never clobber each other's budget or stop state. Pass an explicit `run_id` to resume a specific run instead of minting a fresh one. Every caller that never calls this is unaffected, resolution falls through to `NANNY_RUN_ID` exactly as before.
+
+---
+
 ## `nanny.toml` example
 
 ```toml
