@@ -371,9 +371,45 @@ struct GovernorSetup {
 /// down instead of left running half-governed.
 fn run_governor_with_app(setup: GovernorSetup, command: Vec<String>, app_id: &str) -> Result<()> {
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     let state_dir = setup.state_dir.clone();
+
+    // ── User-interrupt handling (Ctrl-C / SIGTERM) ───────────────────────────
+    //
+    // Without this, a SIGINT from a terminal Ctrl-C has no installed handler
+    // anywhere in this process, so the OS's default disposition kills `nanny`
+    // outright — before it ever reaches the post-loop cleanup below. That
+    // leaves this run's discovery files behind under `state_dir` forever, and
+    // the next `nanny run --serve` fails with "has server state but isn't
+    // reachable". The governed child (e.g. uvicorn) has its own signal
+    // handling and shuts down fine on its own via normal terminal job-control
+    // (SIGINT goes to the whole foreground process group); this handler's job
+    // is only to make sure *this* process — the governor — also notices the
+    // signal, stops the child if the OS hasn't already, and cleans up.
+    //
+    // Registered here, before the governor thread or the child even exist, so
+    // a Ctrl-C during any blocking point in this function (waiting for the
+    // governor to bind, waiting on the child) is still caught. `child_pid` is
+    // `None` until the child is actually spawned below; the handler no-ops the
+    // kill step until then, since there's nothing to kill yet.
+    let child_pid: Arc<Mutex<Option<u32>>> = Arc::new(Mutex::new(None));
+    {
+        let child_pid = child_pid.clone();
+        let state_dir = state_dir.clone();
+        ctrlc::set_handler(move || {
+            if let Some(pid) = *child_pid.lock().unwrap_or_else(|e| e.into_inner()) {
+                force_kill_pid(pid);
+            }
+            remove_discovery_files(&state_dir);
+            // A deliberate, immediate exit — this runs on ctrlc's dedicated
+            // signal thread, not the thread running the poll loop below, so
+            // there is no unwind path back into this function's normal
+            // control flow to fall through to.
+            std::process::exit(130);
+        })
+        .context("failed to install SIGINT/SIGTERM handler")?;
+    }
 
     // The governor thread flips this on the way out, whether that was a clean
     // SIGTERM drain or a startup failure. Either way the app must not keep
@@ -430,6 +466,10 @@ fn run_governor_with_app(setup: GovernorSetup, command: Vec<String>, app_id: &st
         format!("failed to spawn '{}'", cmd.get_program().to_string_lossy())
     })?;
 
+    // From here on, a Ctrl-C/SIGTERM lands the signal handler installed above
+    // on an actual PID to kill, not a no-op.
+    *child_pid.lock().unwrap_or_else(|e| e.into_inner()) = Some(child.id());
+
     // Poll rather than block on wait(), so a governor shutdown (SIGTERM in a
     // container) takes the app down with it instead of leaving this process
     // hanging on a child nothing is governing any more.
@@ -451,15 +491,54 @@ fn run_governor_with_app(setup: GovernorSetup, command: Vec<String>, app_id: &st
     // The app is done, so the governor has nothing left to govern. Drop the
     // discovery files first so `nanny status`/`--join` never point at a
     // governor that is on its way out.
-    let _ = std::fs::remove_file(state_dir.join("server.pid"));
-    let _ = std::fs::remove_file(state_dir.join("server.token"));
-    let _ = std::fs::remove_file(state_dir.join("server.addr"));
+    remove_discovery_files(&state_dir);
     drop(governor);
 
     if !status.success() {
         std::process::exit(status.code().unwrap_or(1));
     }
     Ok(())
+}
+
+/// Force-kill a process by PID, mirroring `std::process::Child::kill()`'s
+/// semantics (SIGKILL on Unix, terminate on Windows) for the one caller that
+/// only has a PID, not a `Child` handle: the SIGINT/SIGTERM handler above runs
+/// on ctrlc's own signal thread, which doesn't own the `Child` value the main
+/// thread is busy polling in the loop below.
+fn force_kill_pid(pid: u32) {
+    #[cfg(unix)]
+    {
+        let _ = std::process::Command::new("kill")
+            .args(["-KILL", &pid.to_string()])
+            .status();
+    }
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/F"])
+            .status();
+    }
+}
+
+/// Every discovery file a `nanny run --serve` invocation may have written
+/// under `state_dir`, gathered in one place so no cleanup path (normal exit,
+/// governor-died early exit, or a Ctrl-C/SIGTERM interrupt) forgets one:
+/// `server.pid`, `server.addr`, `server.token`, `server.proxy_token` are
+/// written by `NetworkServer` in the bridge crate; `server.proxy` and
+/// `server.sync` are written by `cmd_server_start` above. A stale leftover
+/// from any of the six is exactly what makes the next `nanny run --serve`
+/// report "has server state but isn't reachable".
+fn remove_discovery_files(state_dir: &Path) {
+    for name in [
+        "server.pid",
+        "server.addr",
+        "server.token",
+        "server.proxy_token",
+        "server.proxy",
+        "server.sync",
+    ] {
+        let _ = std::fs::remove_file(state_dir.join(name));
+    }
 }
 
 /// Block until the governor has bound and published its address, or until it
