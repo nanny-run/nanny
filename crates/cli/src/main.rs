@@ -83,7 +83,7 @@ enum Command {
         #[arg(long)]
         serve: bool,
 
-        /// (with --serve) Listen address; governance API and proxy share this port.
+        /// (with --serve) Listen address for the governance API.
         /// Loopback is plain HTTP; a non-loopback address makes mTLS mandatory.
         ///
         /// Left at the default, a busy port steps forward to the next free one
@@ -160,7 +160,7 @@ fn main() {
                          so there is nothing to join."
                     ))
                 } else {
-                    // Runs the full network server (mTLS, certs, proxy), plus
+                    // Runs the full network server (mTLS, certs), plus
                     // cloud sync gated on NANNY_API_KEY, honoring --no-sync.
                     // Also launches [start].cmd underneath it when nanny.toml
                     // declares one; without [start] it stays headless for the
@@ -373,20 +373,9 @@ fn cmd_uninstall_impl(exe: &Path) -> Result<()> {
 struct NetworkServerInfo {
     /// Address to inject as NANNY_BRIDGE_ADDR (0.0.0.0 → 127.0.0.1 for local use).
     addr: String,
-    /// Session token to inject as NANNY_SESSION_TOKEN. Guards every ordinary
-    /// governance request, never the CONNECT tunnel, which uses
-    /// `proxy_token` instead (see network.rs's `AppState::proxy_token` for why
-    /// they're deliberately separate credentials).
+    /// Session token to inject as NANNY_SESSION_TOKEN. Guards every
+    /// governance request.
     token: String,
-    /// The CONNECT-only credential, embedded as Proxy-Authorization userinfo
-    /// in the injected HTTPS_PROXY URL, never the session token.
-    proxy_token: String,
-    /// Whether the SERVER (not the joining client's own nanny.toml, which may
-    /// live in a different directory entirely) has `[proxy] allowed_hosts`
-    /// configured, read from `server.proxy`, written by `cmd_server_start` at
-    /// the same time as `server.addr`. Missing file (older server binary)
-    /// defaults to false, no proxy env injection.
-    proxy_configured: bool,
 }
 
 /// Look up the governor for `app_id` and confirm it's actually reachable.
@@ -427,51 +416,9 @@ fn detect_joined_server(app_id: &str) -> Result<NetworkServerInfo> {
         );
     }
 
-    let proxy_configured = std::fs::read_to_string(state_dir.join("server.proxy"))
-        .map(|s| s.trim() == "1")
-        .unwrap_or(false);
-
-    // Only required when the server actually has [proxy] configured, a
-    // server with no proxy still writes this file (see network.rs), but
-    // failing loudly here regardless keeps this function's error handling
-    // simple and matches the existing "corrupt state" bail above.
-    let proxy_token = std::fs::read_to_string(state_dir.join("server.proxy_token"))
-        .with_context(|| format!("missing proxy token for app '{app_id}'"))?
-        .trim()
-        .to_string();
-
-    Ok(NetworkServerInfo { addr: connect_addr, token, proxy_token, proxy_configured })
+    Ok(NetworkServerInfo { addr: connect_addr, token })
 }
 
-/// Run the command against a detected network governance server instead of
-/// starting a local bridge. The server handles all enforcement — `nanny run`
-/// here just injects env vars and waits for the child to finish.
-///
-/// When `server.proxy_configured` is true, the child also gets
-/// `HTTPS_PROXY`/`HTTP_PROXY` (and lowercase variants) pointed at the same
-/// governor address automatically — the governance API and the CONNECT proxy
-/// share one port. Without this, the allowlist silently does nothing
-/// unless a human remembers to set these vars by hand, which is a fail-open
-/// gap the manifesto forbids. Read from the SERVER's own config
-/// (`server.proxy`), not the joining client's nanny.toml — the two may live in
-/// different directories entirely.
-/// Percent-encode a value for safe use as URL userinfo (the `user` in
-/// `http://user@host`). Every value passed through this today is a UUID we
-/// generate ourselves, so nothing here is ever actually escaped in
-/// practice, this exists purely so that fact stays true even if
-/// `proxy_token`'s shape ever changes later, rather than relying on it.
-fn percent_encode_userinfo(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for b in value.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
-                out.push(b as char);
-            }
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
-}
 
 fn cmd_run_via_network_server(command: Vec<String>, server: NetworkServerInfo) -> Result<()> {
     println!("nanny: network server detected at {}", server.addr);
@@ -504,12 +451,11 @@ fn command_program(cmd: &std::process::Command) -> String {
 }
 
 /// Build a child process wired to a governance server: transport, credentials,
-/// run id, mTLS certs, and the CONNECT proxy.
+/// run id, and mTLS certs.
 ///
 /// Shared by `--join` (joining someone else's governor) and `--serve` (running
 /// the app under the governor this process just started), so the two can never
-/// drift on something as consequential as whether the proxy allowlist is
-/// actually applied.
+/// drift on how a governed child is wired.
 fn build_governed_child(
     command: Vec<String>,
     server: &NetworkServerInfo,
@@ -546,48 +492,6 @@ fn build_governed_child(
     if cert_file.exists() { cmd.env("NANNY_BRIDGE_CERT", &cert_file); }
     if key_file.exists()  { cmd.env("NANNY_BRIDGE_KEY",  &key_file); }
     if ca_file.exists()   { cmd.env("NANNY_BRIDGE_CA",   &ca_file); }
-
-    // Auto-inject the CONNECT proxy address so [proxy] allowed_hosts is
-    // enforced without the dev having to set these by hand. The governance API
-    // and the proxy share one port (network.rs), so the same server address
-    // works for both. Set both cases — some HTTP clients only check lowercase
-    // (curl, several Python libs), others only uppercase.
-    //
-    // proxy_token (NOT the session token) is embedded as userinfo
-    // (`http://<proxy_token>:@host:port`) so the child's own HTTP client sends
-    // it as standard `Proxy-Authorization: Basic ...` on the CONNECT
-    // handshake, the only credential mechanism a generic proxy-aware client
-    // can actually deliver there (unlike NANNY_SESSION_TOKEN above, which
-    // rides a custom header on ordinary requests; a CONNECT tunnel has no
-    // opportunity to carry one). Using a separate, narrowly-scoped credential
-    // here (rather than reusing the session token) matters because this is
-    // the one value in the whole system that ends up embedded in a URL: some
-    // HTTP clients print the full proxy URL when their own verbose/debug
-    // logging is turned on, which a header value wouldn't be as likely to hit.
-    // If that ever leaks, it only grants "open a tunnel to an already
-    // allowlisted host", not full run control (stop, tool calls, budget).
-    // Percent-encoded defensively even though it's always a UUID we generate
-    // ourselves, cheap insurance against this ever changing later.
-    //
-    // The trailing `:` (empty password) is load-bearing, not decorative:
-    // confirmed directly against Python's `requests`, with no `:`, urlparse
-    // reports `password=None` rather than `""`, which trips an internal
-    // exception in `requests.utils.get_auth_from_url` that silently discards
-    // the username too (returns `("", "")` with no error). httpx doesn't
-    // share this bug, which is why chat (httpx) worked and Tavily search
-    // (requests, used by the tavily-python client) got a bare, credential-less
-    // CONNECT and a 407. An explicit empty password avoids the whole path.
-    if server.proxy_configured {
-        let proxy_url = format!("http://{}:@{}", percent_encode_userinfo(&server.proxy_token), server.addr);
-        cmd.env("HTTPS_PROXY", &proxy_url);
-        cmd.env("https_proxy", &proxy_url);
-        cmd.env("HTTP_PROXY",  &proxy_url);
-        cmd.env("http_proxy",  &proxy_url);
-        // So the agent's own bridge/session calls to the governor never get
-        // routed through the proxy they're configuring.
-        cmd.env("NO_PROXY",  "127.0.0.1,localhost");
-        cmd.env("no_proxy",  "127.0.0.1,localhost");
-    }
 
     Ok((cmd, run_id))
 }
@@ -688,36 +592,6 @@ fn cmd_run(
     if let Some(app_id) = join.as_deref() {
         let server = detect_joined_server(app_id)?;
         return cmd_run_via_network_server(command, server);
-    }
-
-    // ── Refuse to run a control we cannot enforce ─────────────────────────────
-    // Past this point the run is governed by the in-process bridge, which has
-    // no CONNECT proxy: it listens on a Unix socket (a TCP loopback port on
-    // Windows) and is deliberately not a network server. `HTTPS_PROXY` can only
-    // name a host:port, so no mainstream HTTP client can route through a Unix
-    // socket, and a proxy allowlist is not something this path can ever honor.
-    //
-    // Without this check, `[proxy] allowed_hosts` is silently inert here: no
-    // injection, no enforcement, no warning, and traffic leaves ungoverned
-    // while the config says otherwise. That is the same fail-open G8 fixed on
-    // the `--join` path on 2026-08-02; the identical hole was left open on this
-    // one, which is the path most people use.
-    //
-    // Fail closed, per the manifesto: a declared control that cannot be
-    // enforced stops the run rather than pretending.
-    if let Some(hosts) = config.proxy.as_ref().map(|p| &p.allowed_hosts) {
-        if !hosts.is_empty() {
-            anyhow::bail!(
-                "[proxy] allowed_hosts is set, but `nanny run` governs through the \
-                 in-process bridge, which cannot enforce a proxy allowlist.\n\n\
-                 Traffic would leave ungoverned while the config claims otherwise, so \
-                 this refuses to start rather than fail open.\n\n\
-                 The proxy lives in the governance server. Use it instead:\n\n\
-                 \x20   nanny run --serve            # terminal 1\n\
-                 \x20   nanny run --join=<appId>     # terminal 2\n\n\
-                 Or remove [proxy] allowed_hosts to run under the bridge."
-            );
-        }
     }
 
     // Build the wired runtime from config.

@@ -98,16 +98,9 @@ pub fn cmd_server_start(
     let app = AppIdentity::load_required(&cwd)?;
 
     // Proxy mode is opt-in.
-    // If [proxy] exists but allowed_hosts is empty or omitted, proxy is treated as not configured.
 
     // Build BridgeComponents from config (no CLI ceiling — server uses config values).
     let components = build_bridge_components(&config);
-
-    // Proxy is configured only when allowed_hosts is present and non-empty.
-    let proxy_allowed_hosts = config
-        .proxy
-        .as_ref()
-        .and_then(|p| (!p.allowed_hosts.is_empty()).then(|| p.allowed_hosts.clone()));
 
     // Resolve cert paths: use CLI args, else fall back to ~/.nanny/certs/.
     let certs_dir = default_certs_dir();
@@ -142,17 +135,6 @@ pub fn cmd_server_start(
     // default steps forward, and `--join`/`--app` must discover the real one.
     // Only the code that owns the bound socket knows it.
     let state_dir = nanny_server_state_dir(&app.app_id)?;
-
-    // Record whether this server has [proxy] allowed_hosts active, so a
-    // joining `nanny run --join=<appId>` (possibly in a different directory with
-    // its own, irrelevant nanny.toml) knows whether to inject
-    // HTTPS_PROXY/HTTP_PROXY, the proxy is configured on the SERVER's config,
-    // not the client's.
-    std::fs::write(
-        state_dir.join("server.proxy"),
-        if proxy_allowed_hosts.is_some() { "1" } else { "0" },
-    )
-    .with_context(|| format!("failed to write {}", state_dir.join("server.proxy").display()))?;
 
     // Cloud forwarding: sync happens exactly when NANNY_API_KEY is set and
     // --no-sync didn't turn it off. The engine only exposes events; the
@@ -252,7 +234,6 @@ pub fn cmd_server_start(
                 key_path,
                 ca_path,
                 components,
-                proxy_allowed_hosts,
                 Some(session_token),
                 RATE_LIMIT_RPS,
                 event_sink,
@@ -270,7 +251,6 @@ pub fn cmd_server_start(
                 key_path,
                 ca_path,
                 components,
-                proxy_allowed_hosts,
                 session_token,
                 event_sink,
                 state_dir: state_dir_for_server,
@@ -344,7 +324,6 @@ struct GovernorSetup {
     key_path: PathBuf,
     ca_path: PathBuf,
     components: nanny_bridge::BridgeComponents,
-    proxy_allowed_hosts: Option<Vec<String>>,
     session_token: String,
     event_sink: Option<std::sync::mpsc::Sender<(String, Vec<String>)>>,
     state_dir: PathBuf,
@@ -423,7 +402,6 @@ fn run_governor_with_app(setup: GovernorSetup, command: Vec<String>, app_id: &st
                 setup.key_path,
                 setup.ca_path,
                 setup.components,
-                setup.proxy_allowed_hosts,
                 Some(setup.session_token),
                 RATE_LIMIT_RPS,
                 setup.event_sink,
@@ -517,8 +495,8 @@ fn force_kill_pid(pid: u32) {
 /// Every discovery file a `nanny run --serve` invocation may have written
 /// under `state_dir`, gathered in one place so no cleanup path (normal exit,
 /// governor-died early exit, or a Ctrl-C/SIGTERM interrupt) forgets one:
-/// `server.pid`, `server.addr`, `server.token`, `server.proxy_token` are
-/// written by `NetworkServer` in the bridge crate; `server.proxy` and
+/// `server.pid`, `server.addr`, `server.token` are
+/// written by `NetworkServer` in the bridge crate; and
 /// `server.sync` are written by `cmd_server_start` above. A stale leftover
 /// from any of the six is exactly what makes the next `nanny run --serve`
 /// report "has server state but isn't reachable".
@@ -527,8 +505,6 @@ fn remove_discovery_files(state_dir: &Path) {
         "server.pid",
         "server.addr",
         "server.token",
-        "server.proxy_token",
-        "server.proxy",
         "server.sync",
     ] {
         let _ = std::fs::remove_file(state_dir.join(name));

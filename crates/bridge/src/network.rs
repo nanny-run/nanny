@@ -40,14 +40,12 @@ use axum::{
     Router,
 };
 use hyper::body::Incoming;
-use nanny_core::events::event::ExecutionEvent;
 use tower::Service as TowerService;
 use uuid::Uuid;
 
 use nanny_runtime::ToolRegistry;
 
 use super::{
-    append_event, mark_stopped, now_ms,
     BridgeComponents, BridgeResp, BridgeState, ContentType,
     handle_agent_enter, handle_agent_exit, handle_app, handle_events, handle_harness, handle_health,
     handle_llm_usage, handle_rule_evaluate, handle_status, handle_stop,
@@ -234,31 +232,13 @@ struct AppState {
     template: Arc<RunTemplate>,
     registry: Arc<ToolRegistry>,
     /// Session token stored separately for fast auth check without locking.
-    /// Guards every ordinary request (tool calls, status, etc.), never the
-    /// CONNECT tunnel, which uses `proxy_token` instead (see its own doc).
+    /// Guards every request: tool calls, status, everything.
     session_token: String,
-    /// A second, independent credential, deliberately NOT `session_token`,
-    /// that authorizes only the CONNECT tunnel, nothing else. Two reasons it's
-    /// separate rather than reused:
-    /// 1. `session_token` grants full run control (stop the run, call any
-    ///    tool, exhaust budget); `proxy_token` grants only "open a tunnel to
-    ///    an already-allowlisted host". If `proxy_token` leaks (its one real
-    ///    exposure path: a developer's own HTTP client printing the proxy URL
-    ///    in verbose/debug logging, CONNECT has no other way to carry a
-    ///    credential with zero app-side code changes, see `handle_connect`),
-    ///    the blast radius is the tunnel only, not the whole run.
-    /// 2. `session_token` is meant to be visible (printed at startup, read by
-    ///    a human copy-pasting it for manual cross-machine setup);
-    ///    `proxy_token` isn't something a human should ever need to eyeball.
-    proxy_token: String,
-    /// Optional proxy allowlist. When present and non-empty, CONNECT requests
-    /// are treated as proxy traffic and enforced against this list.
-    proxy_allowed_hosts: Option<Vec<String>>,
     /// Per-IP rate limiter — DoS protection.
     rate_limiter: RateLimiter,
 }
 
-/// Constant-time byte comparison for secrets (session/proxy tokens). Plain
+/// Constant-time byte comparison for the session token. Plain
 /// `==` short-circuits on the first differing byte, which leaks a timing
 /// signal proportional to how many leading bytes an attacker guessed
 /// correctly. This is the standard XOR-accumulate technique, no crypto
@@ -420,322 +400,6 @@ async fn route_app(State(app): State<AppState>, headers: HeaderMap, body: Bytes)
     to_response(handle_app(&body, &shared))
 }
 
-// ── IP / host SSRF guard ──────────────────────────────────────────────────────
-
-/// Returns `true` if the host must be blocked regardless of the allowlist.
-///
-/// Blocks loopback (127.x.x.x / ::1), link-local (169.254.x.x — cloud metadata
-/// endpoint), RFC-1918 private ranges, broadcast, and the "localhost" name.
-/// Proxying to these would give a compromised agent a path to the host network
-/// or cloud metadata APIs. There is intentionally no config escape hatch — the
-/// security property is unconditional.
-fn is_blocked_host(host: &str) -> bool {
-    use std::net::IpAddr;
-
-    // Reject "localhost" by name.
-    if host.eq_ignore_ascii_case("localhost") {
-        return true;
-    }
-
-    // Non-IP hostnames (e.g. "api.openai.com") are not blocked here — the
-    // allowlist check handles them.
-    let Ok(ip) = host.parse::<IpAddr>() else {
-        return false;
-    };
-
-    match ip {
-        IpAddr::V4(v4) => {
-            let [a, b, ..] = v4.octets();
-            v4.is_loopback()            // 127.x.x.x
-            || (a == 169 && b == 254)   // 169.254.x.x — link-local / cloud metadata
-            || v4.is_private()          // 10.x, 172.16–31.x, 192.168.x
-            || v4.is_broadcast()        // 255.255.255.255
-        }
-        IpAddr::V6(v6) => {
-            v6.is_loopback()                               // ::1
-            || (v6.segments()[0] & 0xffc0) == 0xfe80      // fe80::/10  link-local
-            || (v6.segments()[0] & 0xfe00) == 0xfc00      // fc00::/7   unique local
-        }
-    }
-}
-
-// ── Proxy allowlist ───────────────────────────────────────────────────────────
-
-/// Returns `true` if `host` matches any pattern in `patterns`.
-///
-/// Supported patterns:
-/// - Exact hostname: `"api.openai.com"`
-/// - Single leading wildcard: `"*.openai.com"` — matches `api.openai.com` but
-///   NOT `openai.com` or `evil.openai.com.attacker.com`
-fn host_is_allowed(host: &str, patterns: &[String]) -> bool {
-    patterns.iter().any(|p| {
-        if p == host {
-            return true;
-        }
-        // "*.example.com" matches any single subdomain but not the bare domain.
-        // The leading "." in format!(".{suffix}") prevents partial suffix attacks:
-        // "evil.openai.com.attacker.com".ends_with(".openai.com") == false ✓
-        if let Some(suffix) = p.strip_prefix("*.") {
-            return host.ends_with(&format!(".{suffix}"));
-        }
-        false
-    })
-}
-
-/// Validate `[proxy] allowed_hosts` entries at server startup.
-///
-/// Fails loudly on empty strings or unsupported glob patterns so misconfigured
-/// servers are caught before they bind a socket.
-pub fn validate_allowed_hosts(entries: &[String]) -> Result<()> {
-    for entry in entries {
-        if entry.is_empty() {
-            anyhow::bail!("[proxy] allowed_hosts: entry must not be empty");
-        }
-        if entry.contains("**") {
-            anyhow::bail!(
-                "[proxy] allowed_hosts: '**' globs are not supported (got {entry:?})"
-            );
-        }
-        if let Some(suffix) = entry.strip_prefix("*.") {
-            if suffix.contains('*') {
-                anyhow::bail!(
-                    "[proxy] allowed_hosts: only a single leading '*.' is allowed (got {entry:?})"
-                );
-            }
-            if suffix.is_empty() || !suffix.contains('.') {
-                anyhow::bail!(
-                    "[proxy] allowed_hosts: '*.{suffix}' must include at least one dot \
-                     (e.g. '*.openai.com', not '*.com')"
-                );
-            }
-        } else if entry.contains('*') {
-            anyhow::bail!(
-                "[proxy] allowed_hosts: wildcards are only supported as a leading '*.' \
-                 prefix (got {entry:?})"
-            );
-        }
-    }
-    Ok(())
-}
-
-// ── Proxy (HTTP CONNECT) ──────────────────────────────────────────────────────
-//
-// CONNECT is intercepted at the raw hyper-connection level, by `GovernorService`
-// below, BEFORE it ever reaches axum's `Router::call()`, never via a normal
-// axum route or fallback. This is not a style choice: routing a CONNECT request
-// through `axum::Router::call()` silently breaks hyper's server-side upgrade
-// handoff (`hyper::upgrade::on(req)` never resolves, `OnUpgrade` errors
-// "operation was canceled", and the client sees a dead connection with zero
-// bytes back). Confirmed with a minimal reproduction outside this codebase:
-// bare `hyper::server::conn::http1` + `.with_upgrades()` completes the upgrade
-// correctly; the identical request/response routed through `axum::Router`
-// (with or without axum-server, with or without our own middleware) does not.
-// Since `GovernorService::call` branches BEFORE axum sees the request, this
-// function performs its own auth and rate-limit checks below, the checks
-// `require_token`/`rate_limit_middleware` normally provide via `.layer()`
-// never run for CONNECT, because CONNECT never reaches the layered router
-// at all.
-//
-// Auth here is standard HTTP proxy `Proxy-Authorization: Basic <b64(token:)>`,
-// NOT `X-Nanny-Session-Token` (which every other endpoint uses). This isn't a
-// style choice either: a CONNECT tunnel is established by whatever HTTP
-// client the target process already uses (httpx, curl, Node's http client…),
-// driven purely by the `HTTPS_PROXY`/`HTTP_PROXY` env vars `nanny run`
-// injects, no such client sends an arbitrary custom header on the CONNECT
-// handshake itself, only the one auth mechanism every proxy-aware client
-// already implements: Basic auth via userinfo in the proxy URL
-// (`http://<token>@host:port`), which becomes `Proxy-Authorization` on the
-// wire. `cmd_run_via_network_server` (crates/cli/src/main.rs) is what embeds
-// the token there.
-/// Check `Proxy-Authorization: Basic <b64(proxy_token:)>`, the CONNECT-only
-/// credential (see `AppState::proxy_token`), never `session_token`. The
-/// password half is always empty (`proxy_token:`): there's only one secret
-/// here, matching how `cmd_run_via_network_server` encodes it.
-fn proxy_auth_ok(headers: &HeaderMap, proxy_token: &str) -> bool {
-    use base64::{engine::general_purpose::STANDARD, Engine};
-
-    let Some(value) = headers
-        .get(axum::http::header::PROXY_AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-    else {
-        return false;
-    };
-    let Some(encoded) = value.strip_prefix("Basic ") else {
-        return false;
-    };
-    let Ok(decoded) = STANDARD.decode(encoded) else {
-        return false;
-    };
-    let Ok(decoded) = String::from_utf8(decoded) else {
-        return false;
-    };
-    match decoded.split_once(':') {
-        Some((user, _pass)) => secure_compare(user, proxy_token),
-        None => false,
-    }
-}
-
-/// Called only after `GovernorService::call` has already confirmed the rate
-/// limit and `Proxy-Authorization` pass; this function starts from "this
-/// CONNECT is authorized" and never re-checks either itself.
-async fn handle_connect(req: hyper::Request<Incoming>, app: AppState) -> Response {
-    // Proxy traffic belongs to the connecting agent's run — resolve it so the
-    // ToolAllowed/ToolDenied events land on the right run's event log.
-    let shared = app.run_state(req.headers());
-
-    // Match every other action endpoint (route_tool_call, route_rule_evaluate,
-    // route_agent_enter) — once this run has stopped (including from an earlier
-    // proxy denial), refuse every further CONNECT with 410, not just the host
-    // that caused the stop. Without this, the same run could keep tunneling to
-    // an allowed host after being denied elsewhere, which would silently undo
-    // the hard stop this fix exists to guarantee.
-    if let Some(reason) = stopped_reason(&shared) {
-        return stopped_gone(&reason);
-    }
-
-    let Some(allowed) = app.proxy_allowed_hosts.as_deref() else {
-        return (
-            StatusCode::NOT_FOUND,
-            r#"{"error":"proxy not configured"}"#,
-        )
-            .into_response();
-    };
-
-    // CONNECT uses authority-form: "host:port" or "[ipv6]:port".
-    let authority = req
-        .uri()
-        .authority()
-        .map(|a| a.as_str().to_string())
-        .unwrap_or_default();
-    // RFC 7231 §4.3.6: IPv6 literals are bracketed — "[addr]:port".
-    // Strip the brackets to get a bare address for is_blocked_host / is_allowed.
-    let host = if authority.starts_with('[') {
-        authority
-            .trim_start_matches('[')
-            .split(']')
-            .next()
-            .unwrap_or("")
-            .to_string()
-    } else {
-        authority.split(':').next().unwrap_or("").to_string()
-    };
-
-    if host.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            r#"{"error":"invalid CONNECT target"}"#,
-        )
-            .into_response();
-    }
-
-    // ── SSRF guard ────────────────────────────────────────────────────────────
-    // Loopback, link-local, and RFC-1918 ranges are always blocked, regardless
-    // of what is in allowed_hosts. No config escape hatch.
-    if is_blocked_host(&host) {
-        {
-            let mut guard = shared.lock().unwrap();
-            append_event(&mut guard, ExecutionEvent::ToolDenied {
-                ts:   now_ms(),
-                tool: format!("http_proxy:{host}"),
-            });
-            // A proxy denial is a hard stop, same as any other ToolDenied
-            // (lib.rs pairs append_event with mark_stopped for every other
-            // denial path) — without this the run never actually stops, only
-            // that one connection fails, contradicting the manifesto's "hard
-            // stops are real stops" and the documented behavior.
-            mark_stopped(&mut guard, "ToolDenied");
-        }
-        eprintln!("nanny proxy: blocked SSRF attempt to {host}");
-        return (
-            StatusCode::FORBIDDEN,
-            format!(r#"{{"error":"proxy destination blocked","host":"{host}"}}"#),
-        )
-            .into_response();
-    }
-
-    // ── Allowlist check ───────────────────────────────────────────────────────
-    if !host_is_allowed(&host, allowed) {
-        {
-            let mut guard = shared.lock().unwrap();
-            append_event(&mut guard, ExecutionEvent::ToolDenied {
-                ts:   now_ms(),
-                tool: format!("http_proxy:{host}"),
-            });
-            // See the SSRF-guard branch above — a proxy denial must end
-            // the run, matching every other ToolDenied path.
-            mark_stopped(&mut guard, "ToolDenied");
-        }
-        eprintln!("nanny proxy: denied host {host}");
-        return (
-            StatusCode::FORBIDDEN,
-            format!(r#"{{"error":"proxy destination denied","host":"{host}"}}"#),
-        )
-            .into_response();
-    }
-
-    // ── Allowed — emit ToolAllowed before tunneling ───────────────────────────
-    // Also counts as a real step, same as an ordinary allowed tool call
-    // (handle_tool_call, lib.rs): a proxied HTTP call is real governed work,
-    // there's no reason it shouldn't move the same step counter. Previously
-    // didn't — confirmed directly: this was the only one of the three
-    // ToolAllowed call sites in the whole codebase that never touched
-    // step_count or emitted StepCompleted, which is exactly why an agent
-    // whose only governed action is proxied LLM calls (no `@tool` at all)
-    // showed zero steps regardless of how much real work it did.
-    {
-        let mut guard = shared.lock().unwrap();
-        guard.step_count += 1;
-        let step_now = guard.step_count;
-        append_event(&mut guard, ExecutionEvent::ToolAllowed {
-            ts:   now_ms(),
-            tool: format!("http_proxy:{host}"),
-        });
-        append_event(&mut guard, ExecutionEvent::StepCompleted {
-            ts:   now_ms(),
-            step: step_now,
-        });
-    }
-
-    // ── Tunnel ────────────────────────────────────────────────────────────────
-    // CRITICAL: call hyper::upgrade::on(req) BEFORE returning the response,
-    // and on the RAW hyper::Request<Incoming>, not a request that has passed
-    // through axum's Router (see the module comment above for why). This
-    // removes the `OnUpgrade` extension from the request, which signals hyper
-    // to keep the connection alive after sending the 200 instead of closing
-    // it. Calling `on` inside the spawned task (after the return) is too
-    // late, hyper would close the connection first.
-    //
-    // Flow after 200:
-    //   client ──mTLS──► bridge (hyper Upgraded stream)
-    //   bridge ──TCP───► target (TcpStream)
-    //   tokio::io::copy_bidirectional relays bytes in both directions.
-    let on_upgrade = hyper::upgrade::on(req);
-
-    let authority_for_task = authority.clone();
-    tokio::task::spawn(async move {
-        match on_upgrade.await {
-            Ok(upgraded) => {
-                let mut upgraded = hyper_util::rt::TokioIo::new(upgraded);
-                match tokio::net::TcpStream::connect(&authority_for_task).await {
-                    Ok(mut target) => {
-                        // Normal I/O errors (client disconnect, timeout) are not
-                        // worth logging — they happen on every clean client disconnect.
-                        let _ = tokio::io::copy_bidirectional(&mut upgraded, &mut target).await;
-                    }
-                    Err(e) => {
-                        eprintln!("nanny proxy: connect to {authority_for_task} failed: {e}");
-                    }
-                }
-            }
-            Err(e) => eprintln!("nanny proxy: upgrade error: {e}"),
-        }
-    });
-
-    // Return 200 — hyper completes sending the response headers and then hands
-    // the raw connection to the spawned task via the upgrade mechanism.
-    StatusCode::OK.into_response()
-}
-
 /// Router fallback for genuinely unmatched, non-CONNECT requests. CONNECT
 /// never reaches this (`GovernorService` intercepts it earlier) so this is
 /// just a 404 for any other unrecognized method/path.
@@ -802,10 +466,9 @@ impl TowerService<hyper::Request<Incoming>> for GovernorService {
         let app = self.app.clone();
         let peer = self.peer;
         let mut router = self.router.clone();
-        let is_connect = req.method().as_str() == "CONNECT";
 
         Box::pin(async move {
-            // ── Universal checkpoint — every request, CONNECT or not ──────
+            // ── Universal checkpoint — every request ──────────────────────
             if !rate_limit_ok(&app, peer) {
                 return Ok((
                     StatusCode::TOO_MANY_REQUESTS,
@@ -814,28 +477,14 @@ impl TowerService<hyper::Request<Incoming>> for GovernorService {
                     .into_response());
             }
 
-            if is_connect {
-                // CONNECT's own credential, never session_token. See
-                // AppState::proxy_token for why they're deliberately distinct.
-                if !proxy_auth_ok(req.headers(), &app.proxy_token) {
-                    return Ok((
-                        StatusCode::PROXY_AUTHENTICATION_REQUIRED,
-                        [(axum::http::header::PROXY_AUTHENTICATE, "Basic realm=\"nanny\"")],
-                        r#"{"error":"Unauthorized"}"#,
-                    )
-                        .into_response());
-                }
-                Ok(handle_connect(req, app).await)
-            } else {
-                if !session_token_ok(req.headers(), &app.session_token) {
-                    return Ok((StatusCode::UNAUTHORIZED, r#"{"error":"Unauthorized"}"#).into_response());
-                }
-                let mut req = req.map(axum::body::Body::new);
-                req.extensions_mut().insert(ConnectInfo(peer));
-                match TowerService::call(&mut router, req).await {
-                    Ok(resp) => Ok(resp),
-                    Err(never) => match never {},
-                }
+            if !session_token_ok(req.headers(), &app.session_token) {
+                return Ok((StatusCode::UNAUTHORIZED, r#"{"error":"Unauthorized"}"#).into_response());
+            }
+            let mut req = req.map(axum::body::Body::new);
+            req.extensions_mut().insert(ConnectInfo(peer));
+            match TowerService::call(&mut router, req).await {
+                Ok(resp) => Ok(resp),
+                Err(never) => match never {},
             }
         })
     }
@@ -961,13 +610,12 @@ impl NetworkServer {
         key_path: PathBuf,
         ca_path: PathBuf,
         components: BridgeComponents,
-        proxy_allowed_hosts: Option<Vec<String>>,
         session_token: Option<String>,
         rate_limit_rps: u32,
         state_dir: PathBuf,
     ) -> Result<()> {
         Self::start_blocking_synced(
-            addr, cert_path, key_path, ca_path, components, proxy_allowed_hosts, session_token,
+            addr, cert_path, key_path, ca_path, components, session_token,
             rate_limit_rps, None, state_dir, None,
         )
     }
@@ -993,7 +641,6 @@ impl NetworkServer {
         key_path: PathBuf,
         ca_path: PathBuf,
         components: BridgeComponents,
-        proxy_allowed_hosts: Option<Vec<String>>,
         session_token: Option<String>,
         rate_limit_rps: u32,  // max req/s per client IP — DoS protection, default 100
         event_sink: Option<Sender<(String, Vec<String>)>>,
@@ -1002,11 +649,6 @@ impl NetworkServer {
     ) -> Result<()> {
         // Install ring crypto provider — safe to call multiple times.
         let _ = rustls::crypto::ring::default_provider().install_default();
-
-        // Validate proxy allowlist entries before binding — fail loudly at startup.
-        if let Some(ref hosts) = proxy_allowed_hosts {
-            validate_allowed_hosts(hosts)?;
-        }
 
         // Bind before writing any state, so the files record the port actually
         // in use rather than the one that was requested, since an occupied default
@@ -1017,11 +659,6 @@ impl NetworkServer {
             .context("bound listener has no local address")?;
 
         let token = session_token.unwrap_or_else(|| Uuid::new_v4().to_string());
-        // A separate, freshly generated credential for the CONNECT tunnel only.
-        // See AppState::proxy_token for why it's never the same value as
-        // `token`. Always generated, even when [proxy] isn't configured;
-        // matches `token`'s own unconditional generation, avoids a branch.
-        let proxy_token = Uuid::new_v4().to_string();
         let (template, registry) = init_run_template(components, token.clone());
         let template = Arc::new(template);
 
@@ -1090,8 +727,6 @@ impl NetworkServer {
             template,
             registry,
             session_token: token.clone(),
-            proxy_token: proxy_token.clone(),
-            proxy_allowed_hosts,
             rate_limiter: RateLimiter::new(rate_limit_rps),
         };
 
@@ -1110,16 +745,10 @@ impl NetworkServer {
         std::fs::write(&addr_file, addr.to_string())
             .with_context(|| format!("failed to write {}", addr_file.display()))?;
 
-        // Both files are shared secrets: created owner-read-only, never merely
-        // chmod'd after the fact.
+        // A shared secret: created owner-read-only, never merely chmod'd
+        // after the fact.
         let token_file = state_dir.join("server.token");
         write_secret_file(&token_file, &token)?;
-
-        // Separate file for the CONNECT-only credential, never merged into
-        // server.token. `cmd_run_via_network_server` reads this one specifically
-        // when embedding Proxy-Authorization userinfo into HTTPS_PROXY.
-        let proxy_token_file = state_dir.join("server.proxy_token");
-        write_secret_file(&proxy_token_file, &proxy_token)?;
 
         // PID file so `nanny stop --app=<id>` can send SIGTERM.
         let pid_file = state_dir.join("server.pid");
@@ -1144,11 +773,6 @@ impl NetworkServer {
             println!("  NANNY_BRIDGE_ADDR={addr}");
             println!("  NANNY_SESSION_TOKEN=$(cat {})", token_file.display());
             println!("  NANNY_BRIDGE_CERT, NANNY_BRIDGE_KEY, NANNY_BRIDGE_CA  (from ~/.nanny/certs/)");
-            println!(
-                "  (if manually setting HTTPS_PROXY for [proxy] allowed_hosts: \
-                 http://$(cat {})@<addr>)",
-                proxy_token_file.display()
-            );
         }
         println!();
         println!("Press CTRL-C to stop.");
@@ -1363,142 +987,30 @@ mod tests {
 
     // host_is_allowed ─────────────────────────────────────────────────────────
 
-    #[test]
-    fn exact_match_is_allowed() {
-        assert!(host_is_allowed("api.openai.com", &["api.openai.com".into()]));
-    }
 
-    #[test]
-    fn exact_match_different_host_denied() {
-        assert!(!host_is_allowed("evil.com", &["api.openai.com".into()]));
-    }
 
-    #[test]
-    fn glob_matches_subdomain() {
-        assert!(host_is_allowed("api.openai.com", &["*.openai.com".into()]));
-        assert!(host_is_allowed("x.openai.com",   &["*.openai.com".into()]));
-    }
 
-    #[test]
-    fn glob_does_not_match_bare_domain() {
-        // "*.openai.com" must NOT match "openai.com" itself
-        assert!(!host_is_allowed("openai.com", &["*.openai.com".into()]));
-    }
 
-    #[test]
-    fn glob_does_not_match_suffix_attack() {
-        // "evil.openai.com.attacker.com" must NOT match "*.openai.com"
-        assert!(!host_is_allowed(
-            "evil.openai.com.attacker.com",
-            &["*.openai.com".into()]
-        ));
-    }
 
-    #[test]
-    fn empty_allowlist_denies_everything() {
-        assert!(!host_is_allowed("api.openai.com", &[]));
-    }
 
-    #[test]
-    fn multiple_patterns_any_match_allows() {
-        let patterns = vec!["*.openai.com".into(), "api.groq.com".into()];
-        assert!(host_is_allowed("chat.openai.com", &patterns));
-        assert!(host_is_allowed("api.groq.com",    &patterns));
-        assert!(!host_is_allowed("evil.com",        &patterns));
-    }
 
     // is_blocked_host ─────────────────────────────────────────────────────────
 
-    #[test]
-    fn localhost_name_is_blocked() {
-        assert!(is_blocked_host("localhost"));
-        assert!(is_blocked_host("LOCALHOST"));
-    }
 
-    #[test]
-    fn loopback_ipv4_is_blocked() {
-        assert!(is_blocked_host("127.0.0.1"));
-        assert!(is_blocked_host("127.0.0.2"));
-        assert!(is_blocked_host("127.255.255.255"));
-    }
 
-    #[test]
-    fn link_local_metadata_ip_is_blocked() {
-        // AWS/GCP/Azure cloud metadata endpoint — primary SSRF target
-        assert!(is_blocked_host("169.254.169.254"));
-        assert!(is_blocked_host("169.254.0.1"));
-    }
 
-    #[test]
-    fn rfc1918_ranges_are_blocked() {
-        assert!(is_blocked_host("10.0.0.1"));
-        assert!(is_blocked_host("10.255.255.255"));
-        assert!(is_blocked_host("172.16.0.1"));
-        assert!(is_blocked_host("172.31.255.255"));
-        assert!(is_blocked_host("192.168.0.1"));
-        assert!(is_blocked_host("192.168.255.255"));
-    }
 
-    #[test]
-    fn loopback_ipv6_is_blocked() {
-        assert!(is_blocked_host("::1"));
-    }
 
-    #[test]
-    fn link_local_ipv6_is_blocked() {
-        assert!(is_blocked_host("fe80::1"));
-    }
 
-    #[test]
-    fn public_ips_are_not_blocked() {
-        assert!(!is_blocked_host("8.8.8.8"));
-        assert!(!is_blocked_host("1.1.1.1"));
-        assert!(!is_blocked_host("2606:4700:4700::1111")); // Cloudflare IPv6
-    }
 
-    #[test]
-    fn public_hostnames_are_not_blocked() {
-        assert!(!is_blocked_host("api.openai.com"));
-        assert!(!is_blocked_host("api.groq.com"));
-    }
 
     // validate_allowed_hosts ──────────────────────────────────────────────────
 
-    #[test]
-    fn valid_entries_pass_validation() {
-        let entries = vec![
-            "api.openai.com".into(),
-            "*.openai.com".into(),
-            "api.groq.com".into(),
-        ];
-        assert!(validate_allowed_hosts(&entries).is_ok());
-    }
 
-    #[test]
-    fn empty_entry_fails_validation() {
-        assert!(validate_allowed_hosts(&["".into()]).is_err());
-    }
 
-    #[test]
-    fn double_star_glob_fails_validation() {
-        assert!(validate_allowed_hosts(&["**.openai.com".into()]).is_err());
-    }
 
-    #[test]
-    fn wildcard_in_middle_fails_validation() {
-        assert!(validate_allowed_hosts(&["api.*.com".into()]).is_err());
-    }
 
-    #[test]
-    fn glob_with_no_dot_fails_validation() {
-        // "*.com" is too broad (TLD-level wildcard)
-        assert!(validate_allowed_hosts(&["*.com".into()]).is_err());
-    }
 
-    #[test]
-    fn valid_glob_passes_validation() {
-        assert!(validate_allowed_hosts(&["*.openai.com".into()]).is_ok());
-    }
 
     // ── Test fixtures ─────────────────────────────────────────────────────────
 
@@ -1519,7 +1031,7 @@ mod tests {
     /// was unique only *within a single process*. Across back-to-back
     /// `cargo test` runs the previous run's sockets are still in TIME_WAIT on
     /// those exact ports, and `% 200` meant the 201st test wrapped onto the
-    /// first one's port. That is how `proxy_blocks_ssrf_loopback` became
+    /// first one's port. That is how a cross-test port collision became
     /// flaky: it failed four runs out of four when the suite was run
     /// repeatedly, while passing every time in isolation.
     ///
@@ -1739,7 +1251,7 @@ mod tests {
         let ca2 = ca.clone();
         let token2 = token.clone();
         std::thread::spawn(move || {
-            NetworkServer::start_blocking(addr, cert2, key2, ca2, test_components(), None, Some(token2), 100, test_state_dir())
+            NetworkServer::start_blocking(addr, cert2, key2, ca2, test_components(), Some(token2), 100, test_state_dir())
                 .ok();
         });
 
@@ -1795,7 +1307,7 @@ mod tests {
         let ca2 = ca.clone();
         let tok2 = token.clone();
         std::thread::spawn(move || {
-            NetworkServer::start_blocking(addr, cert2, key2, ca2, test_components(), None, Some(tok2), 100, test_state_dir()).ok();
+            NetworkServer::start_blocking(addr, cert2, key2, ca2, test_components(), Some(tok2), 100, test_state_dir()).ok();
         });
         wait_for_port(port);
 
@@ -1825,166 +1337,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    // ── Proxy integration tests ───────────────────────────────────────────────
-    //
-    // These tests send raw CONNECT requests over a direct TLS connection so we
-    // can control exactly what goes into the CONNECT line and the
-    // X-Nanny-Session-Token header — reqwest's proxy API abstracts too much.
 
-    /// Build a blocking rustls client stream to the test server.
-    /// Connects to `server_addr`, presents the client cert, and verifies the
-    /// server cert against the CA. Returns the TLS-wrapped stream ready for raw
-    /// HTTP bytes. We use "localhost" as the SNI because the test certs have
-    /// "localhost" as a SAN.
-    fn tls_connect_raw(
-        server_addr: &str,
-        ca_pem: &[u8],
-        client_cert_pem: &[u8],
-        client_key_pem: &[u8],
-    ) -> impl std::io::Read + std::io::Write {
-        use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
-
-        let mut ca_reader = ca_pem;
-        let ca_certs: Vec<CertificateDer<'static>> =
-            rustls_pemfile::certs(&mut ca_reader)
-                .collect::<std::result::Result<Vec<_>, _>>()
-                .unwrap();
-        let mut root_store = rustls::RootCertStore::empty();
-        for cert in ca_certs {
-            root_store.add(cert).unwrap();
-        }
-
-        let mut client_cert_reader = client_cert_pem;
-        let client_certs: Vec<CertificateDer<'static>> =
-            rustls_pemfile::certs(&mut client_cert_reader)
-                .collect::<std::result::Result<Vec<_>, _>>()
-                .unwrap();
-        let mut client_key_reader = client_key_pem;
-        let client_key: PrivateKeyDer<'static> =
-            rustls_pemfile::private_key(&mut client_key_reader)
-                .unwrap()
-                .unwrap();
-
-        let tls_config = Arc::new(
-            rustls::ClientConfig::builder()
-                .with_root_certificates(root_store)
-                .with_client_auth_cert(client_certs, client_key)
-                .unwrap(),
-        );
-        let server_name = ServerName::try_from("localhost").unwrap().to_owned();
-        let tcp = std::net::TcpStream::connect(server_addr).unwrap();
-        // Timeout prevents hanging forever if the server is down or stale.
-        tcp.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
-        tcp.set_write_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
-        let conn = rustls::ClientConnection::new(tls_config, server_name).unwrap();
-        rustls::StreamOwned::new(conn, tcp)
-    }
-
-    /// Send a raw CONNECT request and return (status_code, response_body).
-    ///
-    /// Uses `read` (not `read_exact`) for the header loop so that an unexpected
-    /// EOF from the peer does not panic. This matters for the allowed-CONNECT
-    /// case: the tunnel task spawned by the handler tries to reach the target
-    /// (e.g. api.openai.com) which is unreachable in tests, so it drops the
-    /// upgraded connection without TLS close_notify. The 200 response is already
-    /// in the OS receive buffer before that happens — we will have read it on a
-    /// prior `read` call and broken out of the loop. The subsequent EOF arrives
-    /// on the *next* read, which we handle by simply stopping.
-    fn send_connect<S: std::io::Read + std::io::Write>(
-        stream: &mut S,
-        target: &str,
-        token: &str,
-    ) -> (u16, String) {
-        // Real clients only ever send Proxy-Authorization on a CONNECT
-        // handshake (see handle_connect's doc comment), match that here so
-        // this test exercises the real auth path, not a header no real HTTP
-        // client can actually produce for CONNECT.
-        use base64::{engine::general_purpose::STANDARD, Engine};
-        let creds = STANDARD.encode(format!("{token}:"));
-        let req = format!(
-            "CONNECT {target} HTTP/1.1\r\nHost: {target}\r\nProxy-Authorization: Basic {creds}\r\n\r\n"
-        );
-        stream.write_all(req.as_bytes()).unwrap();
-
-        // Read until the end-of-headers marker (\r\n\r\n) is found, or EOF/error.
-        // A single read() call frequently delivers the entire response (headers +
-        // body) in one chunk, so body bytes may already be present in `raw` past
-        // the \r\n\r\n boundary.
-        let mut raw: Vec<u8> = Vec::new();
-        let mut buf = [0u8; 1024];
-        loop {
-            match stream.read(&mut buf) {
-                Ok(0) => break, // clean EOF
-                Ok(n) => {
-                    raw.extend_from_slice(&buf[..n]);
-                    if raw.windows(4).any(|w| w == b"\r\n\r\n") {
-                        break; // end-of-headers found
-                    }
-                }
-                Err(_) => break, // UnexpectedEof (no TLS close_notify) or I/O error
-            }
-            if raw.len() > 8192 {
-                break;
-            }
-        }
-
-        // Split at the end-of-headers marker.
-        let header_end = raw
-            .windows(4)
-            .position(|w| w == b"\r\n\r\n")
-            .map(|p| p + 4)
-            .unwrap_or(raw.len());
-
-        let header_bytes = &raw[..header_end];
-        // Body bytes that arrived in the same TCP segment as the last header bytes.
-        let mut body_bytes: Vec<u8> = raw[header_end..].to_vec();
-
-        let header_str = String::from_utf8_lossy(header_bytes);
-
-        let status = header_str
-            .lines()
-            .next()
-            .and_then(|l| l.split_whitespace().nth(1))
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0u16);
-
-        // 200 = tunnel established — no body, connection is upgraded. Return early.
-        // For all other status codes, collect the body.
-        if status != 200 {
-            let content_length: Option<usize> = header_str.lines().find_map(|l| {
-                let (k, v) = l.split_once(':')?;
-                if k.trim().eq_ignore_ascii_case("content-length") {
-                    v.trim().parse().ok()
-                } else {
-                    None
-                }
-            });
-
-            if let Some(cl) = content_length {
-                // Only read bytes not already buffered.
-                let remaining = cl.saturating_sub(body_bytes.len());
-                if remaining > 0 {
-                    let start = body_bytes.len();
-                    body_bytes.resize(start + remaining, 0);
-                    let _ = stream.read_exact(&mut body_bytes[start..]);
-                }
-                body_bytes.truncate(cl);
-            } else {
-                // No Content-Length: read until EOF / timeout (short error body).
-                loop {
-                    match stream.read(&mut buf) {
-                        Ok(0) | Err(_) => break,
-                        Ok(n) => body_bytes.extend_from_slice(&buf[..n]),
-                    }
-                    if body_bytes.len() > 65536 {
-                        break;
-                    }
-                }
-            }
-        }
-
-        (status, String::from_utf8_lossy(&body_bytes).to_string())
-    }
 
     /// Poll TCP connect until the port is accepting connections (up to 10 s).
     /// Replaces fixed sleep(350ms): under heavy parallel test load, the fixed
@@ -2093,365 +1446,16 @@ mod tests {
         }
     }
 
-    /// Start a proxy-enabled network server in a background thread.
-    /// Two distinct credentials, matching production: `session_token` guards
-    /// ordinary requests (e.g. GET /events), `proxy_token` guards CONNECT
-    /// only. A test that does both (e.g. CONNECT then check /events) needs
-    /// the right one for each call, using one where the other belongs fails
-    /// with 401/407, by design.
-    struct ProxyServer {
-        port: u16,
-        session_token: String,
-        proxy_token: String,
-        cert_dir: PathBuf,
-    }
 
-    fn start_proxy_server(proxy_config: Option<Vec<String>>) -> ProxyServer {
-        let dir = test_certs_dir();
-        gen_certs_for_test(&dir);
 
-        let port = next_port();
-        let addr: SocketAddr = format!("0.0.0.0:{port}").parse().unwrap();
-        let session_token = format!("proxy-test-token-{port}");
-        let state_dir = test_state_dir();
 
-        let cert = dir.join("server.crt");
-        let key  = dir.join("server.key");
-        let ca   = dir.join("ca.crt");
-        let tok2 = session_token.clone();
-        let state_dir2 = state_dir.clone();
 
-        std::thread::spawn(move || {
-            NetworkServer::start_blocking(
-                addr, cert, key, ca, test_components(), proxy_config, Some(tok2), 100, state_dir2,
-            )
-            .ok();
-        });
-        wait_for_port(port);
 
-        // proxy_token is generated internally, not settable by the caller;
-        // read it from the state file after the server writes it, matching
-        // how production (`cmd_run_via_network_server`) discovers it too.
-        let proxy_token_file = state_dir.join("server.proxy_token");
-        let mut proxy_token = String::new();
-        for _ in 0..50 {
-            if let Ok(v) = std::fs::read_to_string(&proxy_token_file) {
-                proxy_token = v.trim().to_string();
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        assert!(!proxy_token.is_empty(), "server.proxy_token must be written by the time the port is ready");
 
-        ProxyServer { port, session_token, proxy_token, cert_dir: dir }
-    }
 
-    #[test]
-    fn proxy_not_configured_returns_404() {
-        // No proxy_allowed_hosts — CONNECT should return 404.
-        let s = start_proxy_server(None);
 
-        let ca   = std::fs::read(s.cert_dir.join("ca.crt")).unwrap();
-        let cert = std::fs::read(s.cert_dir.join("client.crt")).unwrap();
-        let key  = std::fs::read(s.cert_dir.join("client.key")).unwrap();
-        let mut stream = tls_connect_raw(&format!("127.0.0.1:{}", s.port), &ca, &cert, &key);
-        let (status, _) = send_connect(&mut stream, "api.openai.com:443", &s.proxy_token);
-        assert_eq!(status, 404, "CONNECT without proxy config must return 404");
-    }
 
-    #[test]
-    fn proxy_denies_non_allowlisted_host() {
-        let s = start_proxy_server(Some(vec!["api.openai.com".into()]));
 
-        let ca   = std::fs::read(s.cert_dir.join("ca.crt")).unwrap();
-        let cert = std::fs::read(s.cert_dir.join("client.crt")).unwrap();
-        let key  = std::fs::read(s.cert_dir.join("client.key")).unwrap();
-        let mut stream = tls_connect_raw(&format!("127.0.0.1:{}", s.port), &ca, &cert, &key);
-        let (status, body) = send_connect(&mut stream, "evil.com:443", &s.proxy_token);
-        assert_eq!(status, 403, "CONNECT to non-allowlisted host must return 403");
-        assert!(body.contains("denied"), "body must indicate the reason");
-    }
-
-    #[test]
-    fn connect_rejects_the_ordinary_session_token() {
-        // The whole point of the proxy_token/session_token split: a token that
-        // works for ordinary requests must NOT also work on CONNECT.
-        let s = start_proxy_server(Some(vec!["api.openai.com".into()]));
-
-        let ca   = std::fs::read(s.cert_dir.join("ca.crt")).unwrap();
-        let cert = std::fs::read(s.cert_dir.join("client.crt")).unwrap();
-        let key  = std::fs::read(s.cert_dir.join("client.key")).unwrap();
-        let mut stream = tls_connect_raw(&format!("127.0.0.1:{}", s.port), &ca, &cert, &key);
-        let (status, _) = send_connect(&mut stream, "api.openai.com:443", &s.session_token);
-        assert_eq!(status, 407, "session_token must not authenticate a CONNECT tunnel");
-    }
-
-    #[test]
-    fn ordinary_request_rejects_the_proxy_token() {
-        // The reverse direction of the same split: a token that works on
-        // CONNECT must NOT also work for ordinary governance requests.
-        let s = start_proxy_server(Some(vec!["api.openai.com".into()]));
-
-        let ca_pem   = std::fs::read(s.cert_dir.join("ca.crt")).unwrap();
-        let cert_pem = std::fs::read(s.cert_dir.join("client.crt")).unwrap();
-        let key_pem  = std::fs::read(s.cert_dir.join("client.key")).unwrap();
-        let ca_cert  = reqwest::Certificate::from_pem(&ca_pem).unwrap();
-        let identity = reqwest::Identity::from_pem(&[cert_pem, key_pem].concat()).unwrap();
-
-        let client = reqwest::blocking::Client::builder()
-            .add_root_certificate(ca_cert)
-            .identity(identity)
-            .use_rustls_tls()
-            .danger_accept_invalid_hostnames(true)
-            .timeout(Duration::from_secs(5))
-            .build()
-            .unwrap();
-
-        let resp = client
-            .get(format!("https://127.0.0.1:{}/health", s.port))
-            .header("X-Nanny-Session-Token", &s.proxy_token)
-            .send()
-            .expect("request must complete");
-
-        assert_eq!(resp.status(), 401, "proxy_token must not authenticate an ordinary request");
-    }
-
-    #[test]
-    fn proxy_blocks_ssrf_loopback() {
-        let s = start_proxy_server(Some(vec!["127.0.0.1".into(), "localhost".into()]));
-
-        let ca   = std::fs::read(s.cert_dir.join("ca.crt")).unwrap();
-        let cert = std::fs::read(s.cert_dir.join("client.crt")).unwrap();
-        let key  = std::fs::read(s.cert_dir.join("client.key")).unwrap();
-        let mut stream = tls_connect_raw(&format!("127.0.0.1:{}", s.port), &ca, &cert, &key);
-        // Loopback must be blocked even when explicitly listed in allowed_hosts
-        let (status, body) = send_connect(&mut stream, "127.0.0.1:80", &s.proxy_token);
-        assert_eq!(status, 403, "loopback must be blocked regardless of allowlist");
-        assert!(body.contains("blocked"), "body must say 'blocked', not 'denied'");
-    }
-
-    #[test]
-    fn proxy_blocks_ssrf_cloud_metadata() {
-        let s = start_proxy_server(Some(vec!["169.254.169.254".into()]));
-
-        let ca   = std::fs::read(s.cert_dir.join("ca.crt")).unwrap();
-        let cert = std::fs::read(s.cert_dir.join("client.crt")).unwrap();
-        let key  = std::fs::read(s.cert_dir.join("client.key")).unwrap();
-        let mut stream = tls_connect_raw(&format!("127.0.0.1:{}", s.port), &ca, &cert, &key);
-        let (status, body) = send_connect(&mut stream, "169.254.169.254:80", &s.proxy_token);
-        assert_eq!(status, 403, "cloud metadata IP must be blocked regardless of allowlist");
-        assert!(body.contains("blocked"), "body must say 'blocked'");
-    }
-
-    #[test]
-    fn proxy_denial_emits_tool_denied_event() {
-        let s = start_proxy_server(Some(vec!["api.openai.com".into()]));
-
-        let ca   = std::fs::read(s.cert_dir.join("ca.crt")).unwrap();
-        let cert = std::fs::read(s.cert_dir.join("client.crt")).unwrap();
-        let key  = std::fs::read(s.cert_dir.join("client.key")).unwrap();
-        let mut stream = tls_connect_raw(&format!("127.0.0.1:{}", s.port), &ca, &cert, &key);
-        let (status, _) = send_connect(&mut stream, "evil.com:443", &s.proxy_token);
-        assert_eq!(status, 403);
-
-        // Check the ToolDenied event appeared in /events via a reqwest call
-        // (reuse the existing mTLS client from the existing test helpers).
-        std::thread::sleep(Duration::from_millis(50)); // let event flush
-
-        let ca_pem   = std::fs::read(s.cert_dir.join("ca.crt")).unwrap();
-        let cert_pem = std::fs::read(s.cert_dir.join("client.crt")).unwrap();
-        let key_pem  = std::fs::read(s.cert_dir.join("client.key")).unwrap();
-        let ca_cert  = reqwest::Certificate::from_pem(&ca_pem).unwrap();
-        let identity = reqwest::Identity::from_pem(&[cert_pem, key_pem].concat()).unwrap();
-
-        let client = reqwest::blocking::Client::builder()
-            .add_root_certificate(ca_cert)
-            .identity(identity)
-            .use_rustls_tls()
-            .danger_accept_invalid_hostnames(true)
-            .timeout(std::time::Duration::from_secs(5))
-            .build()
-            .unwrap();
-
-        let resp = client
-            .get(format!("https://127.0.0.1:{}/events", s.port))
-            .header("X-Nanny-Session-Token", &s.session_token)
-            .send()
-            .unwrap();
-
-        let body = resp.text().unwrap();
-        let has_tool_denied = body.lines().any(|l| {
-            serde_json::from_str::<serde_json::Value>(l)
-                .map(|v| v["event"] == "ToolDenied")
-                .unwrap_or(false)
-        });
-        assert!(has_tool_denied, "ToolDenied event must appear after proxy denial\ngot: {body}");
-    }
-
-    #[test]
-    fn proxy_denial_marks_run_stopped() {
-        // A proxy denial must be a hard stop — /status must report the run
-        // Stopped with reason ToolDenied, not still Running with a single
-        // failed connection. Matches the documented behavior and every other
-        // denial path (RuleDenied, ToolDenied via /tool/call).
-        let s = start_proxy_server(Some(vec!["api.openai.com".into()]));
-
-        let ca   = std::fs::read(s.cert_dir.join("ca.crt")).unwrap();
-        let cert = std::fs::read(s.cert_dir.join("client.crt")).unwrap();
-        let key  = std::fs::read(s.cert_dir.join("client.key")).unwrap();
-        let mut stream = tls_connect_raw(&format!("127.0.0.1:{}", s.port), &ca, &cert, &key);
-        let (status, _) = send_connect(&mut stream, "evil.com:443", &s.proxy_token);
-        assert_eq!(status, 403);
-
-        let ca_cert  = reqwest::Certificate::from_pem(&ca).unwrap();
-        let identity = reqwest::Identity::from_pem(&[cert, key].concat()).unwrap();
-        let client = reqwest::blocking::Client::builder()
-            .add_root_certificate(ca_cert)
-            .identity(identity)
-            .use_rustls_tls()
-            .danger_accept_invalid_hostnames(true)
-            .timeout(std::time::Duration::from_secs(5))
-            .build()
-            .unwrap();
-
-        let resp = client
-            .get(format!("https://127.0.0.1:{}/status", s.port))
-            .header("X-Nanny-Session-Token", &s.session_token)
-            .send()
-            .unwrap();
-        let body: serde_json::Value = resp.json().unwrap();
-        assert_eq!(body["state"], "stopped", "run must be Stopped after a proxy denial\ngot: {body}");
-        assert_eq!(body["reason"], "ToolDenied", "stop reason must be ToolDenied\ngot: {body}");
-    }
-
-    #[test]
-    fn proxy_stopped_run_denies_subsequent_allowed_host() {
-        // Once a run is stopped (by any denial), it must stay stopped for
-        // every further CONNECT in that run — including to an otherwise
-        // allowed host — same as route_tool_call/route_rule_evaluate already
-        // do. Otherwise a denied run could keep tunneling to its LLM host as
-        // if nothing happened, quietly undoing the hard stop.
-        let s = start_proxy_server(Some(vec!["api.openai.com".into()]));
-
-        let ca   = std::fs::read(s.cert_dir.join("ca.crt")).unwrap();
-        let cert = std::fs::read(s.cert_dir.join("client.crt")).unwrap();
-        let key  = std::fs::read(s.cert_dir.join("client.key")).unwrap();
-
-        // First connection: denied host, stops the run.
-        let mut stream1 = tls_connect_raw(&format!("127.0.0.1:{}", s.port), &ca, &cert, &key);
-        let (status1, _) = send_connect(&mut stream1, "evil.com:443", &s.proxy_token);
-        assert_eq!(status1, 403);
-
-        // Second connection, same token (same default run, no X-Nanny-Run-Id):
-        // CONNECT to the ALLOWED host must now be refused too — 410, not 200.
-        let mut stream2 = tls_connect_raw(&format!("127.0.0.1:{}", s.port), &ca, &cert, &key);
-        let (status2, body2) = send_connect(&mut stream2, "api.openai.com:443", &s.proxy_token);
-        assert_eq!(
-            status2, 410,
-            "an allowed host must still be refused once the run has stopped\nbody: {body2}"
-        );
-        assert!(body2.contains("ToolDenied"), "410 body must carry the typed reason\ngot: {body2}");
-    }
-
-    #[test]
-    fn proxy_allowed_host_emits_tool_allowed_event() {
-        // "api.openai.com" is on the allowlist. We verify ToolAllowed fires.
-        //
-        // The ToolAllowed event is written before the hyper upgrade attempt, so
-        // it appears in /events even if the tunnel fails (which it always does in
-        // tests since api.openai.com is unreachable on loopback).
-        //
-        // Strategy: send the CONNECT in a background thread (so the main thread
-        // is free to poll /events).  The background thread calls send_connect
-        // which does a blocking read — this drives the TLS send of the request
-        // bytes AND waits for the server's response.  The main thread waits for
-        // the server to process the event, then checks /events.
-        let s = start_proxy_server(Some(vec!["api.openai.com".into()]));
-
-        let ca   = std::fs::read(s.cert_dir.join("ca.crt")).unwrap();
-        let cert = std::fs::read(s.cert_dir.join("client.crt")).unwrap();
-        let key  = std::fs::read(s.cert_dir.join("client.key")).unwrap();
-
-        // Send CONNECT in a background thread — don't assert the status here
-        // because the upgrade attempt (api.openai.com TCP connect) always fails
-        // in tests.  We only care that the server received the request and emitted
-        // the ToolAllowed event.
-        {
-            let ca2    = ca.clone();
-            let cert2  = cert.clone();
-            let key2   = key.clone();
-            let proxy_token2 = s.proxy_token.clone();
-            let port = s.port;
-            std::thread::spawn(move || {
-                let mut stream =
-                    tls_connect_raw(&format!("127.0.0.1:{port}"), &ca2, &cert2, &key2);
-                // send_connect does write + blocking read; the read drives the
-                // TLS flush so the server receives the request before we return.
-                let _status = send_connect(&mut stream, "api.openai.com:443", &proxy_token2);
-                // Status may be 0 (upgrade canceled) or 200 — either is fine for
-                // this test.  We discard the value.
-            });
-        }
-
-        let ca_pem   = std::fs::read(s.cert_dir.join("ca.crt")).unwrap();
-        let cert_pem = std::fs::read(s.cert_dir.join("client.crt")).unwrap();
-        let key_pem  = std::fs::read(s.cert_dir.join("client.key")).unwrap();
-        let ca_cert  = reqwest::Certificate::from_pem(&ca_pem).unwrap();
-        let identity = reqwest::Identity::from_pem(&[cert_pem, key_pem].concat()).unwrap();
-
-        let client = reqwest::blocking::Client::builder()
-            .add_root_certificate(ca_cert)
-            .identity(identity)
-            .use_rustls_tls()
-            .danger_accept_invalid_hostnames(true)
-            .timeout(std::time::Duration::from_secs(5))
-            .build()
-            .unwrap();
-
-        // Poll /events rather than sleeping a fixed 250 ms first. The CONNECT is
-        // sent from a background thread, so "has the server processed it yet" is
-        // a race against machine load, the same lesson `wait_for_port` already
-        // learned in this file. A single fixed sleep made this test fail roughly
-        // one run in six under a parallel suite while always passing alone.
-        let fetch_events = || -> String {
-            client
-                .get(format!("https://127.0.0.1:{}/events", s.port))
-                .header("X-Nanny-Session-Token", &s.session_token)
-                .send()
-                .expect("GET /events must succeed")
-                .text()
-                .expect("events body must read")
-        };
-        let has_event = |body: &str, name: &str| -> bool {
-            body.lines().any(|l| {
-                serde_json::from_str::<serde_json::Value>(l)
-                    .map(|v| v["event"] == name)
-                    .unwrap_or(false)
-            })
-        };
-
-        let mut body = String::new();
-        for _ in 0..200 {
-            body = fetch_events();
-            if has_event(&body, "ToolAllowed") {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-
-        let has_tool_allowed = has_event(&body, "ToolAllowed");
-        assert!(has_tool_allowed, "ToolAllowed event must appear after allowed CONNECT\ngot: {body}");
-
-        // A proxied call is real governed work — it must move the step
-        // counter and emit StepCompleted the same as an ordinary tool call
-        // does, not silently skip both the way this path used to.
-        let has_step_completed = body.lines().any(|l| {
-            serde_json::from_str::<serde_json::Value>(l)
-                .map(|v| v["event"] == "StepCompleted")
-                .unwrap_or(false)
-        });
-        assert!(has_step_completed, "StepCompleted event must appear after allowed CONNECT\ngot: {body}");
-    }
 
     #[test]
     fn no_client_cert_is_rejected_at_tls() {
@@ -2471,7 +1475,7 @@ mod tests {
         let ca2 = ca.clone();
         let tok2 = token.clone();
         std::thread::spawn(move || {
-            NetworkServer::start_blocking(addr, cert2, key2, ca2, test_components(), None, Some(tok2), 100, test_state_dir()).ok();
+            NetworkServer::start_blocking(addr, cert2, key2, ca2, test_components(), Some(tok2), 100, test_state_dir()).ok();
         });
         wait_for_port(port);
 
@@ -2552,8 +1556,6 @@ mod tests {
                 template,
                 registry,
                 session_token: tok,
-                proxy_token: Uuid::new_v4().to_string(),
-                proxy_allowed_hosts: None,
                 rate_limiter: RateLimiter::new(rps),
             };
             let rt = tokio::runtime::Builder::new_multi_thread()
@@ -2925,7 +1927,7 @@ mod tests {
         let ca    = dir_a.join("ca.crt");
         let tok2  = token.clone();
         std::thread::spawn(move || {
-            NetworkServer::start_blocking(addr, cert, key, ca, test_components(), None, Some(tok2), 100, test_state_dir()).ok();
+            NetworkServer::start_blocking(addr, cert, key, ca, test_components(), Some(tok2), 100, test_state_dir()).ok();
         });
         wait_for_port(port);
 
@@ -2978,7 +1980,7 @@ mod tests {
         let ca   = dir.join("ca.crt");
         let tok2 = correct_token.clone();
         std::thread::spawn(move || {
-            NetworkServer::start_blocking(addr, cert, key, ca, test_components(), None, Some(tok2), 100, test_state_dir()).ok();
+            NetworkServer::start_blocking(addr, cert, key, ca, test_components(), Some(tok2), 100, test_state_dir()).ok();
         });
         wait_for_port(port);
 
@@ -3027,7 +2029,6 @@ mod tests {
                 PathBuf::from("/dev/null/nanny-test-dummy.key"),
                 PathBuf::from("/dev/null/nanny-test-dummy-ca.crt"),
                 test_components(),
-                None,
                 Some(tok),
                 100,
                 thread_state_dir,
@@ -3158,7 +2159,6 @@ mod tests {
                     PathBuf::from("/dev/null/dummy.key"),
                     PathBuf::from("/dev/null/dummy-ca.crt"),
                     test_components_with_cost(25),
-                    None,
                     Some(tok),
                     100,
                     test_state_dir(),
@@ -3435,51 +2435,11 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    // ── T17–T18: RFC-1918 and IPv6 unique-local at the proxy handler ──────────
     //
     // is_blocked_host unit tests prove the logic. These integration tests prove
     // the handler actually calls is_blocked_host before forwarding.
 
-    // T17 — CONNECT to a private RFC-1918 address returns 403.
-    #[test]
-    fn proxy_blocks_rfc1918_private_range_at_handler() {
-        let s = start_proxy_server(Some(vec!["10.0.0.1".into()]));
 
-        let ca   = std::fs::read(s.cert_dir.join("ca.crt")).unwrap();
-        let cert = std::fs::read(s.cert_dir.join("client.crt")).unwrap();
-        let key  = std::fs::read(s.cert_dir.join("client.key")).unwrap();
-        let mut stream = tls_connect_raw(&format!("127.0.0.1:{}", s.port), &ca, &cert, &key);
-
-        // 10.0.0.1 is in the RFC-1918 private range — must be blocked even if allowlisted.
-        let (status, body) = send_connect(&mut stream, "10.0.0.1:80", &s.proxy_token);
-        assert_eq!(status, 403,
-            "RFC-1918 address must be blocked regardless of allowlist");
-        assert!(body.contains("blocked"),
-            "response must say 'blocked', not 'denied'; got: {body}");
-
-        std::fs::remove_dir_all(&s.cert_dir).ok();
-    }
-
-    // T18 — CONNECT to an IPv6 unique-local address (fc00::/7) returns 403.
-    #[test]
-    fn proxy_blocks_ipv6_unique_local_at_handler() {
-        let s = start_proxy_server(Some(vec!["fc00::1".into()]));
-
-        let ca   = std::fs::read(s.cert_dir.join("ca.crt")).unwrap();
-        let cert = std::fs::read(s.cert_dir.join("client.crt")).unwrap();
-        let key  = std::fs::read(s.cert_dir.join("client.key")).unwrap();
-        let mut stream = tls_connect_raw(&format!("127.0.0.1:{}", s.port), &ca, &cert, &key);
-
-        // fc00::1 is IPv6 unique-local — must be blocked even if allowlisted.
-        // RFC 7231 requires IPv6 literals to be bracketed in CONNECT targets.
-        let (status, body) = send_connect(&mut stream, "[fc00::1]:443", &s.proxy_token);
-        assert_eq!(status, 403,
-            "IPv6 unique-local address must be blocked regardless of allowlist");
-        assert!(body.contains("blocked"),
-            "response must say 'blocked'; got: {body}");
-
-        std::fs::remove_dir_all(&s.cert_dir).ok();
-    }
 
     // ── T19: In-flight request completes before graceful drain ────────────────
     //
