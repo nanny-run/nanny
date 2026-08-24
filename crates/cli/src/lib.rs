@@ -248,40 +248,87 @@ pub fn declare_rules() {
 
 // ── Run control ─────────────────────────────────────────────────────────────
 
-/// Start a new governed run in the current process. Returns the new run id.
+/// Scope a governed run to the current thread, not the whole process.
 ///
-/// A run is Nanny's real unit of governance: one cumulative token/step
-/// counter, one stop state, "a stop is final." A `#[nanny::agent(...)]`
-/// scope does *not* give you a second one of these — it only changes which
-/// ceiling that same, single, ever-growing counter is compared against
-/// while active. If your process runs several logically independent
-/// phases back to back (a research phase handing off to a drafting phase,
-/// one long-lived server giving each incoming request its own clean
-/// slate) and you want each one to start from a genuinely fresh budget
-/// rather than inherit whatever an earlier phase already spent, this is
-/// how you say that.
+/// A run is Nanny's real unit of governance: one stop state, one history, "a
+/// stop is final". A `#[nanny::agent(...)]` scope does not give you a second
+/// one, it only labels a phase within the current one. If your process runs
+/// several logically independent runs (one long-lived server giving each
+/// incoming request its own clean slate) this is how you say that.
 ///
 /// ```rust,ignore
-/// nanny::fresh_run();   // everything governed after this point is a fresh run
+/// {
+///     let _run = nanny::run_scope(None);
+///     // every governed call on this thread now belongs to a fresh run
+/// }   // previous scope restored here
 /// ```
 ///
-/// Only meaningful when governed through a network server (`nanny run
-/// --serve` / `--join`): the server keys independent state per run id, so
-/// a stop in the run you just left has zero effect on the one you're
-/// starting. Under local `nanny run` (no `--serve`), one process is
-/// already always exactly one run, so this is a safe no-op there — code
-/// that might run under either mode doesn't need to branch on which one
-/// it's in.
+/// Pass `Some(id)` to resume a specific run; pass `None` to mint one. The
+/// previous scope is restored on drop, so nesting is safe.
 ///
-/// Before this existed, the only way to do this was setting the
-/// `NANNY_RUN_ID` environment variable directly, an internal detail the
-/// client happens to read fresh on every call, never documented as
-/// something to rely on. This is that same mechanism, given a real,
-/// public name — mirrors `nanny_sdk.fresh_run()` on the Python side.
-pub fn fresh_run() -> String {
-    let id = uuid::Uuid::new_v4().to_string();
-    std::env::set_var("NANNY_RUN_ID", &id);
-    id
+/// # Threads and tasks
+///
+/// The scope is thread-local. Two threads each in their own `run_scope` never
+/// see each other's run id. **On a Tokio runtime use
+/// [`run_scope_async`] instead**: tasks are multiplexed onto shared threads and
+/// migrate between them, so a thread-local would leak across concurrent tasks,
+/// which is exactly the bug this exists to prevent.
+///
+/// Only meaningful when governed through a governance server (`nanny run
+/// --serve` / `--join`), which keys state per run id. Under local `nanny run`
+/// one process is always exactly one run, so this is a safe no-op there and
+/// code that runs under either mode does not need to branch.
+///
+/// Mirrors `nanny_sdk.run_scope()` on the Python side.
+#[must_use = "the scope ends when the guard is dropped; binding to `_` drops it immediately"]
+pub fn run_scope(run_id: Option<String>) -> RunScope {
+    let id = run_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let previous = runtime::scoped_run_id();
+    runtime::set_scoped_run_id(Some(id.clone()));
+    RunScope { id, previous }
+}
+
+/// The active run scope. Restores the previous scope when dropped.
+///
+/// Restoring rather than clearing is what makes nesting safe: an inner scope
+/// ending must not silently promote its caller to "no scope at all".
+pub struct RunScope {
+    id: String,
+    previous: Option<String>,
+}
+
+impl RunScope {
+    /// The run id this scope activated.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl Drop for RunScope {
+    fn drop(&mut self) {
+        runtime::set_scoped_run_id(self.previous.take());
+    }
+}
+
+/// Scope a governed run to the current Tokio task.
+///
+/// The async counterpart of [`run_scope`]. Tokio tasks share and migrate
+/// between threads, so a thread-local scope would leak between concurrent
+/// tasks; this binds the run id to the task instead.
+///
+/// ```rust,ignore
+/// let out = nanny::run_scope_async(None, async {
+///     // every governed call in this task belongs to its own run
+/// }).await;
+/// ```
+///
+/// Under the reframe this is a correctness property, not an accounting one:
+/// rules read tool call history, so a leaked run id means one tenant's
+/// untrusted read poisons another tenant's history, which is a wrong security
+/// verdict rather than a wrong number.
+pub async fn run_scope_async<F: std::future::Future>(run_id: Option<String>, f: F) -> F::Output {
+    let id = run_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    runtime::TASK_RUN_ID.scope(id, f).await
 }
 
 // ── Private runtime — for generated code only ─────────────────────────────────
@@ -383,12 +430,55 @@ mod runtime {
         std::env::var("NANNY_SESSION_TOKEN").unwrap_or_default()
     }
 
-    /// `NANNY_RUN_ID` — which run this process belongs to on the governance
-    /// server. Runs are independently budgeted and stop independently, so a
-    /// stop ends this run, not the server (G3). Absent → the server's default
-    /// run (shared-budget behaviour). The local bridge ignores it (one process
-    /// is always one run).
+    tokio::task_local! {
+        /// Task-local run id, set by `run_scope_async`.
+        pub(crate) static TASK_RUN_ID: String;
+    }
+
+    thread_local! {
+        /// Thread-local run id, set by `run_scope`.
+        static THREAD_RUN_ID: std::cell::RefCell<Option<String>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    pub(crate) fn scoped_run_id() -> Option<String> {
+        THREAD_RUN_ID.with(|c| c.borrow().clone())
+    }
+
+    pub(crate) fn set_scoped_run_id(id: Option<String>) {
+        THREAD_RUN_ID.with(|c| *c.borrow_mut() = id);
+    }
+
+    /// Which run this process belongs to on the governance server.
+    ///
+    /// Resolution order, most specific first:
+    ///   1. the current Tokio task's scope (`run_scope_async`)
+    ///   2. the current thread's scope (`run_scope`)
+    ///   3. `NANNY_RUN_ID`, how separate processes opt into a shared run
+    ///
+    /// Task before thread because a task is the narrower context: a task
+    /// running inside a thread that also has a scope means someone asked for
+    /// per-task isolation, and honouring the thread there would defeat it.
+    ///
+    /// Runs stop independently, so a stop ends this run, not the server (G3).
+    /// Absent → the server's default run. The local bridge ignores it: one
+    /// process is always one run.
+    /// Test-only view of the resolved run id. Not public API: tests need to
+    /// assert on resolution order, but nothing outside this crate should.
+    #[cfg(test)]
+    pub(crate) fn run_id_for_test() -> Option<String> {
+        run_id()
+    }
+
     fn run_id() -> Option<String> {
+        if let Ok(id) = TASK_RUN_ID.try_with(|id| id.clone()) {
+            if !id.is_empty() {
+                return Some(id);
+            }
+        }
+        if let Some(id) = scoped_run_id().filter(|s| !s.is_empty()) {
+            return Some(id);
+        }
         std::env::var("NANNY_RUN_ID").ok().filter(|s| !s.is_empty())
     }
 
@@ -1031,35 +1121,138 @@ mod tests {
         crate::set_harness(crate::Harness::default());
     }
 
-    // NANNY_RUN_ID is process-wide state, and cargo test runs tests in
-    // parallel by default — the other env-var tests in this module avoid
-    // reading state back after mutating it for exactly this reason (see the
-    // comment above `inactive_when_no_env_vars`). fresh_run() has to both set
-    // and be verifiable, so its tests are combined under one shared lock
-    // instead, guaranteeing no other fresh_run test can interleave.
-    static NEW_RUN_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    // ── run_scope ─────────────────────────────────────────────────────────────
+    //
+    // No shared mutex here, unlike the fresh_run tests these replace. That
+    // lock existed because fresh_run wrote a process-global env var, so its
+    // own tests corrupted each other under cargo's default parallelism. The
+    // scope is thread-local, so the tests are naturally isolated: the bug is
+    // gone rather than worked around.
 
     #[test]
-    fn fresh_run_behaves_correctly() {
-        let _guard = NEW_RUN_TEST_LOCK.lock().unwrap();
+    fn run_scope_mints_an_id_and_restores_on_drop() {
+        assert!(crate::runtime::scoped_run_id().is_none(), "no scope to start");
 
-        // Sets NANNY_RUN_ID to exactly its own return value.
-        let first = crate::fresh_run();
-        assert_eq!(std::env::var("NANNY_RUN_ID").unwrap(), first);
-
-        // A second call replaces it with a genuinely different id.
-        let second = crate::fresh_run();
-        assert_ne!(first, second);
-        assert_eq!(std::env::var("NANNY_RUN_ID").unwrap(), second);
-
-        // Replaces a run id that was already set by something else, too.
-        // SAFETY: guarded by NEW_RUN_TEST_LOCK, no other fresh_run test can
-        // observe or mutate NANNY_RUN_ID concurrently with this one.
-        unsafe {
-            std::env::set_var("NANNY_RUN_ID", "old-run");
+        {
+            let scope = crate::run_scope(None);
+            assert!(!scope.id().is_empty());
+            assert_eq!(crate::runtime::scoped_run_id().as_deref(), Some(scope.id()));
         }
-        let third = crate::fresh_run();
-        assert_ne!(third, "old-run");
-        assert_eq!(std::env::var("NANNY_RUN_ID").unwrap(), third);
+
+        assert!(crate::runtime::scoped_run_id().is_none(), "drop must restore");
+    }
+
+    #[test]
+    fn run_scope_accepts_an_explicit_id() {
+        let scope = crate::run_scope(Some("resumed-run".to_string()));
+        assert_eq!(scope.id(), "resumed-run");
+        assert_eq!(crate::runtime::scoped_run_id().as_deref(), Some("resumed-run"));
+    }
+
+    /// An inner scope ending must restore its caller, not clear the scope
+    /// entirely. Clearing would silently promote the outer run to "no scope".
+    #[test]
+    fn nested_scopes_restore_the_outer_one() {
+        let outer = crate::run_scope(Some("outer".to_string()));
+        {
+            let _inner = crate::run_scope(Some("inner".to_string()));
+            assert_eq!(crate::runtime::scoped_run_id().as_deref(), Some("inner"));
+        }
+        assert_eq!(
+            crate::runtime::scoped_run_id().as_deref(),
+            Some("outer"),
+            "the outer scope must survive the inner one ending"
+        );
+        drop(outer);
+    }
+
+    /// The bug fresh_run could not fix. Two threads each in their own scope
+    /// must never observe each other's run id; with a process-global env var
+    /// one would clobber the other.
+    #[test]
+    fn concurrent_scopes_on_two_threads_do_not_clobber() {
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let handles: Vec<_> = ["run-a", "run-b"]
+            .into_iter()
+            .map(|id| {
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    let _scope = crate::run_scope(Some(id.to_string()));
+                    // Both threads hold their scope at the same time.
+                    barrier.wait();
+                    crate::runtime::scoped_run_id()
+                })
+            })
+            .collect();
+
+        let seen: Vec<Option<String>> =
+            handles.into_iter().map(|h| h.join().expect("thread must not panic")).collect();
+
+        assert_eq!(seen[0].as_deref(), Some("run-a"));
+        assert_eq!(seen[1].as_deref(), Some("run-b"));
+    }
+
+    /// The case a thread-local alone gets wrong: many concurrent tasks
+    /// multiplexed onto shared runtime threads. Each task must keep its own
+    /// run id even when it yields and resumes on a different thread.
+    #[test]
+    fn concurrent_tasks_keep_their_own_run_id() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("runtime must build");
+
+        let seen: Vec<(String, String)> = rt.block_on(async {
+            let tasks: Vec<_> = (0..8)
+                .map(|i| {
+                    let want = format!("task-{i}");
+                    tokio::spawn(crate::run_scope_async(Some(want.clone()), async move {
+                        // Yield so the task can resume on another thread.
+                        tokio::task::yield_now().await;
+                        let got = crate::runtime::run_id_for_test().unwrap_or_default();
+                        (want, got)
+                    }))
+                })
+                .collect();
+
+            let mut out = Vec::new();
+            for t in tasks {
+                out.push(t.await.expect("task must not panic"));
+            }
+            out
+        });
+
+        for (want, got) in seen {
+            assert_eq!(got, want, "each task must keep its own run id across a yield");
+        }
+    }
+
+    /// Task scope beats thread scope: asking for per-task isolation inside a
+    /// thread that also has a scope must honour the narrower one.
+    #[test]
+    fn a_task_scope_wins_over_a_thread_scope() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime must build");
+
+        let _thread_scope = crate::run_scope(Some("thread".to_string()));
+        let got = rt.block_on(crate::run_scope_async(Some("task".to_string()), async {
+            crate::runtime::run_id_for_test()
+        }));
+
+        assert_eq!(got.as_deref(), Some("task"));
+    }
+
+    /// A scope on one thread is invisible to another. Scoping is per-thread,
+    /// never process-wide.
+    #[test]
+    fn a_scope_does_not_leak_to_another_thread() {
+        let _scope = crate::run_scope(Some("mine".to_string()));
+        let other = std::thread::spawn(crate::runtime::scoped_run_id)
+            .join()
+            .expect("thread must not panic");
+        assert!(other.is_none(), "another thread must not see this scope; got {other:?}");
     }
 }

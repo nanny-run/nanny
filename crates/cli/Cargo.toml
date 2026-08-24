@@ -40,6 +40,9 @@ base64       = { workspace = true }
 toml         = { workspace = true }
 # SIGINT/SIGTERM handling for `nanny run --serve`'s governor+child cleanup.
 ctrlc        = { version = "3.5.2", features = ["termination"] }
+# `run_scope_async`: task-local run ids for agents on a Tokio runtime. Already
+# an unconditional transitive dependency via nanny-bridge, so this is free.
+tokio        = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 self-replace = "1"
