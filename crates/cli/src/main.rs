@@ -498,8 +498,8 @@ fn build_governed_child(
 
 /// Tell the governor which app this run belongs to.
 ///
-/// Done from the CLI rather than the child because a black-box app governed
-/// only by the proxy has no SDK to declare with. Borrows the SDK's own client
+/// Done from the CLI rather than the child because an app that links no SDK
+/// has no way to declare for itself. Borrows the SDK's own client
 /// by setting the same env vars on this process that were staged onto the
 /// child, so all three transports (socket, loopback TCP, mTLS) stay one
 /// implementation rather than a second copy of the logic here.

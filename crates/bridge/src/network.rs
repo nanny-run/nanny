@@ -1004,14 +1004,6 @@ mod tests {
 
 
 
-    // validate_allowed_hosts ──────────────────────────────────────────────────
-
-
-
-
-
-
-
     // ── Test fixtures ─────────────────────────────────────────────────────────
 
     fn test_components() -> BridgeComponents {
