@@ -24,7 +24,6 @@ use std::sync::Mutex;
 
 use nanny::__private::{call_tool, evaluate_local_rules};
 use nanny_bridge::{Bridge, BridgeAddress, BridgeComponents};
-use nanny_core::agent::limits::Limits;
 use nanny_core::policy::PolicyContext;
 
 // ── Serialise env-var tests ───────────────────────────────────────────────────
@@ -76,11 +75,9 @@ fn deny_repeat_calls(ctx: &PolicyContext) -> bool {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn start_bridge(allowed: &[&str], budget: u64) -> Bridge {
+fn start_bridge(allowed: &[&str]) -> Bridge {
     let components = BridgeComponents {
         registry:           nanny_runtime::default_registry(),
-        limits:             Limits { max_steps: 100, max_tokens: budget, timeout_ms: 30_000 },
-        named_limits:       HashMap::new(),
         allowed_tools:      allowed.iter().map(|s| s.to_string()).collect(),
         per_tool_max_calls: HashMap::new(),
     };
@@ -120,7 +117,7 @@ fn args(pairs: &[(&str, &str)]) -> HashMap<String, String> {
 #[test]
 fn rule_denies_on_first_call_with_empty_history() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let bridge = start_bridge(&["forbidden_tool"], 1000);
+    let bridge = start_bridge(&["forbidden_tool"]);
     inject_env(&bridge);
 
     let denied = evaluate_local_rules("forbidden_tool", HashMap::new());
@@ -138,7 +135,7 @@ fn rule_denies_on_first_call_with_empty_history() {
 #[test]
 fn rules_allow_a_tool_none_of_them_govern() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let bridge = start_bridge(&["search_web"], 1000);
+    let bridge = start_bridge(&["search_web"]);
     inject_env(&bridge);
 
     let denied = evaluate_local_rules("search_web", HashMap::new());
@@ -153,7 +150,7 @@ fn rules_allow_a_tool_none_of_them_govern() {
 #[test]
 fn rule_receives_last_tool_args() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let bridge = start_bridge(&["search_web"], 1000);
+    let bridge = start_bridge(&["search_web"]);
     inject_env(&bridge);
 
     let denied = evaluate_local_rules("search_web", args(&[("api_key", "sk-live-1")]));
@@ -172,7 +169,7 @@ fn rule_receives_last_tool_args() {
 #[test]
 fn rule_receives_populated_tool_call_history() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let bridge = start_bridge(&["search_web", "privileged_tool"], 1000);
+    let bridge = start_bridge(&["search_web", "privileged_tool"]);
     inject_env(&bridge);
 
     // Clean history first: the privileged tool is allowed.
@@ -195,7 +192,7 @@ fn rule_receives_populated_tool_call_history() {
 #[test]
 fn rule_receives_tool_call_counts() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let bridge = start_bridge(&["counted_tool"], 1000);
+    let bridge = start_bridge(&["counted_tool"]);
     inject_env(&bridge);
 
     call_tool("counted_tool", 0);

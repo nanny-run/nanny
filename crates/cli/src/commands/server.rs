@@ -19,7 +19,6 @@ use std::path::{Path, PathBuf};
 
 use nanny_bridge::network::NetworkServer;
 use nanny_config;
-use nanny_core::agent::limits::Limits;
 
 use crate::identity::AppIdentity;
 use crate::runtime::build_bridge_components;
@@ -102,12 +101,7 @@ pub fn cmd_server_start(
     // If [proxy] exists but allowed_hosts is empty or omitted, proxy is treated as not configured.
 
     // Build BridgeComponents from config (no CLI ceiling — server uses config values).
-    let limits = Limits {
-        max_steps:      config.limits.max_steps,
-        max_tokens: config.limits.max_tokens,
-        timeout_ms:     config.limits.timeout_ms,
-    };
-    let components = build_bridge_components(&config, limits, false);
+    let components = build_bridge_components(&config);
 
     // Proxy is configured only when allowed_hosts is present and non-empty.
     let proxy_allowed_hosts = config

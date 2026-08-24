@@ -8,7 +8,7 @@ mod sync;
 //
 // Two commands exist:
 //   nanny init                        — write a starter nanny.toml in the current directory
-//   nanny run [--limits=<name>] <cmd> — run a command under nanny enforcement
+//   nanny run <cmd> — run a command under nanny governance
 //
 // No logic lives here. The CLI loads config and hands off to the runtime.
 // All enforcement happens in nanny-core, not here.
@@ -16,8 +16,7 @@ mod sync;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use nanny_bridge::{Bridge, BridgeAddress, ExecutionState};
-use nanny_core::agent::limits::Limits;
-use nanny_core::events::event::{ExecutionEvent, LimitsSnapshot, now_ms};
+use nanny_core::events::event::{ExecutionEvent, now_ms};
 use std::io::Write;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -29,7 +28,7 @@ use std::time::{Duration, Instant};
 #[command(
     name = "nanny",
     about = "Execution boundary for autonomous systems",
-    long_about = "Nanny enforces hard limits on agents and long-running processes.\nIt deterministically stops execution when a limit is reached.",
+    long_about = "Nanny enforces what agents and long-running processes are allowed to do.\nIt deterministically stops execution when a policy is violated.",
     version
 )]
 struct Cli {
@@ -53,18 +52,11 @@ enum Command {
     ///
     /// Reads [start].cmd from nanny.toml and runs it. With --serve, instead runs
     /// a headless governance server (no child of its own) that other processes
-    /// and machines join, sharing one budget.
+    /// and machines join, sharing one rule set.
     ///
     /// Example: nanny run
-    /// Example: nanny run --limits=researcher
     /// Example: nanny run --serve --addr 0.0.0.0:62669
     Run {
-        /// Named limits set to activate from nanny.toml [limits.<name>].
-        /// Inherits from [limits] defaults and overrides only declared fields.
-        /// Example: --limits=researcher activates [limits.researcher]
-        #[arg(long)]
-        limits: Option<String>,
-
         /// Do not forward events to Nanny Cloud for this run, even with a key set.
         /// Enforcement is unaffected. Also settable with NANNY_NO_SYNC=1.
         #[arg(long)]
@@ -159,12 +151,12 @@ fn main() {
 
     let result = match cli.command {
         Command::Init => cmd_init(),
-        Command::Run { limits, no_sync, env, join, serve, addr, cert, key, ca, extra_args } => {
+        Command::Run { no_sync, env, join, serve, addr, cert, key, ca, extra_args } => {
             if serve {
-                if limits.is_some() || join.is_some() {
+                if join.is_some() {
                     Err(anyhow::anyhow!(
-                        "`--serve` runs the governance server and takes neither --limits nor \
-                         --join. Its limits come from nanny.toml, and it *is* the governor, \
+                        "`--serve` runs the governance server and does not take --join. \
+                         Its rules come from nanny.toml, and it *is* the governor, \
                          so there is nothing to join."
                     ))
                 } else {
@@ -179,7 +171,7 @@ fn main() {
                     )
                 }
             } else {
-                cmd_run(&cli.config, limits.as_deref(), no_sync, env, join, extra_args)
+                cmd_run(&cli.config, no_sync, env, join, extra_args)
             }
         }
         Command::Uninstall => cmd_uninstall(),
@@ -292,7 +284,6 @@ fn cmd_init() -> Result<()> {
     println!();
     println!("Set [start] cmd to how you normally launch your agent, then:");
     println!("    nanny run");
-    println!("    nanny run --limits=researcher");
     println!();
     println!("Works with any language — Python, Rust, Go, Node, or any compiled binary.");
 
@@ -484,7 +475,7 @@ fn percent_encode_userinfo(value: &str) -> String {
 
 fn cmd_run_via_network_server(command: Vec<String>, server: NetworkServerInfo) -> Result<()> {
     println!("nanny: network server detected at {}", server.addr);
-    println!("nanny: governance enforced remotely — limits and rules apply");
+    println!("nanny: governance enforced remotely — tool permission and rules apply");
     println!();
 
     let (mut cmd, run_id) = build_governed_child(command, &server)?;
@@ -630,7 +621,6 @@ fn declare_app_to_governor(server: &NetworkServerInfo, dir: &Path, run_id: &str)
 
 fn cmd_run(
     config_path: &Path,
-    limits_name: Option<&str>,
     no_sync: bool,
     env: cloud::CloudEnv,
     join: Option<String>,
@@ -731,39 +721,25 @@ fn cmd_run(
     }
 
     // Build the wired runtime from config.
-    // If a named limits set was requested, resolve it with inheritance.
-    let components = if let Some(name) = limits_name {
-        runtime::build_from_config_named(&config, name)
-            .with_context(|| format!("failed to activate limits set '{name}'"))?
-    } else {
-        runtime::build_from_config(&config)
-    };
+    let components = runtime::build_from_config(&config);
 
-    // Print what limits are active before running anything.
-    let active_set = limits_name.unwrap_or("[limits]");
     println!("nanny: config loaded from '{}'", config_path.display());
-    println!("nanny: limits ({active_set}) — steps={} tokens={} timeout={}ms",
-        components.limits.max_steps,
-        components.limits.max_tokens,
-        components.limits.timeout_ms,
-    );
     println!("nanny: tools allowed — {:?}", config.tools.allowed);
 
     let registered = components.registry.registered_names();
     println!("nanny: registry — {} tool(s) registered: {:?}", registered.len(), registered);
     println!();
 
-    let timeout = Duration::from_millis(components.limits.timeout_ms);
     let started_at = Instant::now();
 
     // ── Open event log ────────────────────────────────────────────────────
     let mut log = events::EventWriter::from_config(&config.observability, config_dir)?;
 
-    let started_event = execution_started_event(&components.limits, active_set, &command.join(" "));
+    let started_event = execution_started_event(&command.join(" "));
     log.write(&started_event)?;
 
     // ── Start bridge ──────────────────────────────────────────────────────
-    let bridge_components = runtime::build_bridge_components(&config, components.limits.clone(), limits_name.is_some());
+    let bridge_components = runtime::build_bridge_components(&config);
     let bridge = Bridge::start(bridge_components)
         .context("failed to start bridge")?;
 
@@ -818,12 +794,11 @@ fn cmd_run(
         }
     };
 
-    // ── Poll until exit, timeout, or bridge-signaled stop ────────────────
+    // ── Poll until exit or a bridge-signaled stop ────────────────────────
     //
-    // We poll every 50 ms. Coarse enough to avoid busy-spinning;
-    // fine enough that a 30-second timeout fires within half a tick.
-    // The bridge signals stop (budget, rules, max-steps) independently
-    // of the child's own exit — we must check both.
+    // We poll every 50 ms. Coarse enough to avoid busy-spinning; fine enough
+    // that a stop is noticed promptly. The bridge signals stop (allowlist,
+    // rules) independently of the child's own exit — we must check both.
     //
     // Bridge events (ToolAllowed, RuleDenied, ToolDenied, …) are drained on every tick
     // so the NDJSON stream is written in near-real-time — `tail -f` on the
@@ -838,7 +813,7 @@ fn cmd_run(
             }
         }
 
-        // Check bridge first — it may have stopped execution (budget, rules, etc.)
+        // Check bridge first — it may have stopped execution (allowlist, rules).
         if let ExecutionState::Stopped { reason } = bridge.execution_state() {
             let _ = child.kill();
             let _ = child.wait(); // reap — avoid zombie
@@ -862,12 +837,6 @@ fn cmd_run(
                 break reason;
             }
             Ok(None) => {
-                if started_at.elapsed() >= timeout {
-                    let _ = child.kill();
-                    let _ = child.wait(); // reap — avoid zombie
-                    bridge.stop("TimeoutExpired");
-                    break "TimeoutExpired".to_string();
-                }
                 std::thread::sleep(poll_interval);
             }
             Err(e) => {
@@ -940,15 +909,9 @@ fn cmd_run(
 
 // ── Event constructors ────────────────────────────────────────────────────────
 
-fn execution_started_event(limits: &Limits, limits_set: &str, command: &str) -> ExecutionEvent {
+fn execution_started_event(command: &str) -> ExecutionEvent {
     ExecutionEvent::ExecutionStarted {
         ts: now_ms(),
-        limits: LimitsSnapshot {
-            steps: limits.max_steps,
-            tokens: limits.max_tokens,
-            timeout: limits.timeout_ms,
-        },
-        limits_set: limits_set.to_string(),
         command: command.to_string(),
     }
 }

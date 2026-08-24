@@ -644,7 +644,6 @@ mod runtime {
             elapsed_ms,
             step_count:    status.step_count,
             tokens_spent:  status.tokens_spent,
-            ..PolicyContext::default()
         };
 
         for rule in inventory::iter::<Rule> {

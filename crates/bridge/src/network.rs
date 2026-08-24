@@ -1330,7 +1330,6 @@ fn gen_certs_for_test(dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nanny_core::agent::limits::Limits;
     use nanny_runtime::ToolRegistry;
     use std::collections::HashMap;
     use std::sync::atomic::Ordering;
@@ -1506,8 +1505,6 @@ mod tests {
     fn test_components() -> BridgeComponents {
         BridgeComponents {
             registry: ToolRegistry::new(),
-            limits: Limits { max_steps: 100, max_tokens: 1000, timeout_ms: 30_000 },
-            named_limits: HashMap::new(),
             allowed_tools: vec!["echo".to_string()],
             per_tool_max_calls: HashMap::new(),
         }
@@ -2582,26 +2579,20 @@ mod tests {
         handle
     }
 
-    /// BridgeComponents with a custom max_tokens ceiling.
-    fn test_components_with_cost(max_tokens: u64) -> BridgeComponents {
+    /// BridgeComponents for cost-reporting tests. The parameter is vestigial:
+    /// tokens are measured, never enforced.
+    fn test_components_with_cost(_max_tokens: u64) -> BridgeComponents {
         BridgeComponents {
             registry:          ToolRegistry::new(),
-            limits:            Limits { max_steps: 100, max_tokens, timeout_ms: 30_000 },
-            named_limits:      HashMap::new(),
             allowed_tools:     vec!["http_get".to_string()],
             per_tool_max_calls: HashMap::new(),
         }
     }
 
-    /// BridgeComponents with a "researcher" named limit for enter/exit tests.
+    /// BridgeComponents for the agent enter/exit tests.
     fn test_components_with_named_limit() -> BridgeComponents {
-        let researcher = Limits { max_steps: 50, max_tokens: 500, timeout_ms: 60_000 };
-        let mut named  = HashMap::new();
-        named.insert("researcher".to_string(), researcher);
         BridgeComponents {
             registry:          ToolRegistry::new(),
-            limits:            Limits { max_steps: 100, max_tokens: 1000, timeout_ms: 30_000 },
-            named_limits:      named,
             allowed_tools:     vec!["http_get".to_string()],
             per_tool_max_calls: HashMap::new(),
         }
@@ -2777,24 +2768,13 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    // ── Day 9 tests: shared budget + agent scope + cross-client enforcement ──
+    // ── Day 9 tests: shared state + agent scope + cross-client enforcement ──
 
     #[test]
-    fn shared_budget_across_clients() {
-        // Two independent mTLS clients connect to ONE server (shared budget,
-        // max_tokens = 25).
-        //
-        // Call 1 (client 1, tokens 10) → allowed (total 10)
-        // Call 2 (client 2, tokens 10) → allowed (total 20, still below 25)
-        // Call 3 (client 1, tokens 10) → LimitsPolicy pre-check: 20+10=30 > 25
-        //                                → denied BudgetExhausted (returns 200 JSON "denied")
-        // Call 4 (client 2)            → 410 (execution stopped after call 3 denial)
-        //
-        // Note: using max_tokens=25 (not 20) is intentional.  With max_tokens=20,
-        // call 2 triggers the post-check boundary (20 >= 20 → mark_stopped, but
-        // returns "allowed").  Call 3 then receives 410 instead of a "denied" JSON
-        // body.  max_tokens=25 ensures call 3 hits the LimitsPolicy pre-check
-        // (30 > 25) which returns a proper denial response.
+    fn shared_state_across_clients() {
+        // Two independent mTLS clients connect to ONE server. Every call they
+        // make lands in the same execution state, so the token counter and the
+        // call history accumulate across both of them rather than per-client.
         let dir = test_certs_dir();
         gen_certs_for_test(&dir);
         let port  = next_port();
@@ -2823,22 +2803,23 @@ mod tests {
             };
         }
 
-        // Call 1 — client 1 allowed
-        let r1: serde_json::Value = tool_call!(c1).json().unwrap();
-        assert_eq!(r1["status"], "allowed", "call 1 must be allowed");
+        // Alternate clients; every call is allowed and every call is counted.
+        for (n, c) in [(1, &c1), (2, &c2), (3, &c1), (4, &c2)] {
+            let r: serde_json::Value = tool_call!(c).json().unwrap();
+            assert_eq!(r["status"], "allowed", "call {n} must be allowed");
+        }
 
-        // Call 2 — client 2 allowed (shared token count still within limit)
-        let r2: serde_json::Value = tool_call!(c2).json().unwrap();
-        assert_eq!(r2["status"], "allowed", "call 2 must be allowed");
-
-        // Call 3 — client 1 denied (budget exhausted)
-        let r3: serde_json::Value = tool_call!(c1).json().unwrap();
-        assert_eq!(r3["status"], "denied",        "call 3 must be denied");
-        assert_eq!(r3["reason"], "BudgetExhausted", "stop reason must be BudgetExhausted");
-
-        // Call 4 — client 2 gets 410 (execution already stopped)
-        let r4 = tool_call!(c2);
-        assert_eq!(r4.status(), 410, "client 2 must get 410 after execution stopped");
+        let status: serde_json::Value = c1
+            .get(format!("{base}/status"))
+            .header("X-Nanny-Session-Token", &token)
+            .send()
+            .expect("status must reach server")
+            .json()
+            .unwrap();
+        assert_eq!(
+            status["tokens_spent"], 40,
+            "both clients must accumulate into one shared token count"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -2846,7 +2827,6 @@ mod tests {
     #[test]
     fn agent_enter_exit_events_over_network() {
         // /agent/enter + /agent/exit round-trip over the network server.
-        // Uses test_components_with_named_limit() so "researcher" is a valid scope.
         let dir = test_certs_dir();
         gen_certs_for_test(&dir);
         let port  = next_port();
@@ -2912,25 +2892,6 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    #[test]
-    fn unknown_agent_scope_returns_404_over_network() {
-        // /agent/enter with an unknown name → 404 (not in named_limits).
-        let s = start_proxy_server(None);
-
-        let client = make_mtls_client(&s.cert_dir, s.port);
-        let base   = format!("https://127.0.0.1:{}", s.port);
-
-        let resp = client
-            .post(format!("{base}/agent/enter"))
-            .header("X-Nanny-Session-Token", &s.session_token)
-            .body(r#"{"name":"ghost"}"#)
-            .send()
-            .expect("request must complete");
-
-        assert_eq!(resp.status(), 404, "unknown scope must return 404");
-
-        std::fs::remove_dir_all(&s.cert_dir).ok();
-    }
 
     // ── Day 10 tests: security ────────────────────────────────────────────────
 
@@ -3180,17 +3141,12 @@ mod tests {
         }
     }
 
-    // T5 — Shared budget across two plain-HTTP clients.
-    // Two independent clients hit the same enforcement state; budget exhaustion
-    // on client 1's call blocks client 2's next call.
+    // T5 — Shared state across two plain-HTTP clients.
+    // Two independent clients hit the same enforcement state, so their calls
+    // accumulate into one token count rather than one per client.
     #[test]
-    fn loopback_plain_http_shared_budget_across_clients() {
-        // Use a budget of 25 with tokens=10 per call (same reasoning as mTLS test).
-        // Call 1 (c1, tokens 10) → allowed (10 spent)
-        // Call 2 (c2, tokens 10) → allowed (20 spent)
-        // Call 3 (c1, tokens 10) → LimitsPolicy pre-check: 30 > 25 → denied
-        // Call 4 (c2)          → 410 (execution stopped after call 3)
-        let token = format!("plain-budget-{}", next_port());
+    fn loopback_plain_http_shared_state_across_clients() {
+        let token = format!("plain-shared-{}", next_port());
         let port  = {
             let p = next_port();
             let addr: SocketAddr = format!("127.0.0.1:{p}").parse().unwrap();
@@ -3227,29 +3183,24 @@ mod tests {
             };
         }
 
-        let r1 = tool_call!(c1);
-        let r2 = tool_call!(c2);
-        let r3 = tool_call!(c1);
-        let r4 = tool_call!(c2);
+        for (n, c) in [(1, &c1), (2, &c2), (3, &c1), (4, &c2)] {
+            let r = tool_call!(c);
+            assert_eq!(r.status(), 200, "call {n} must succeed");
+            let b: serde_json::Value = r.json().unwrap();
+            assert_eq!(b["status"], "allowed", "call {n} must be allowed");
+        }
 
-        // r1 and r2: 200 + allowed
-        assert_eq!(r1.status(), 200, "c1 call 1 must succeed");
-        let b1: serde_json::Value = r1.json().unwrap();
-        assert_eq!(b1["status"], "allowed", "c1 call 1 must be allowed");
-
-        assert_eq!(r2.status(), 200, "c2 call 2 must succeed");
-        let b2: serde_json::Value = r2.json().unwrap();
-        assert_eq!(b2["status"], "allowed", "c2 call 2 must be allowed");
-
-        // r3: budget exceeded — must be denied (pre-check fires)
-        assert_eq!(r3.status(), 200, "c1 call 3 must return 200 (denied JSON)");
-        let b3: serde_json::Value = r3.json().unwrap();
-        assert_eq!(b3["status"], "denied",
-            "c1 call 3 must be denied — budget exhausted; got: {b3}");
-
-        // r4: execution stopped — must be 410
-        assert_eq!(r4.status(), 410,
-            "c2 call 4 must return 410 — execution stopped after c1's denial");
+        let status: serde_json::Value = c1
+            .get(format!("{base}/status"))
+            .header("X-Nanny-Session-Token", &token)
+            .send()
+            .expect("status must reach server")
+            .json()
+            .unwrap();
+        assert_eq!(
+            status["tokens_spent"], 40,
+            "both clients must accumulate into one shared token count"
+        );
     }
 
     // ── T10: /status field contract ───────────────────────────────────────────

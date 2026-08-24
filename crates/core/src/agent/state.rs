@@ -8,15 +8,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum StopReason {
-    /// The agent reached the maximum number of allowed steps.
-    MaxStepsReached,
-
-    /// The agent exhausted its cost budget before completing.
-    BudgetExhausted,
-
-    /// The wall-clock timeout expired.
-    TimeoutExpired,
-
     /// The agent attempted to call a tool not on the allowlist.
     /// Carries the name of the denied tool for audit purposes.
     ToolDenied { tool_name: String },
@@ -28,7 +19,7 @@ pub enum StopReason {
     /// Execution was stopped explicitly by the caller.
     ManualStop,
 
-    /// The agent declared itself complete within the allowed limits.
+    /// The agent declared itself complete.
     /// This is a successful, normal termination — not a constraint violation.
     AgentCompleted,
 }

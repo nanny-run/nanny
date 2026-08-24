@@ -4,11 +4,11 @@
 // nanny-runtime provides the concrete implementations used in local mode.
 //
 // Three implementation families live here:
-//   enforcement  — ToolPermissionPolicy, LimitsPolicy, RuleEvaluator, ChainPolicy
+//   enforcement  — ToolPermissionPolicy, RuleEvaluator, ChainPolicy
 //   tools        — ToolRegistry, HttpGet, default_registry
 
 pub mod enforcement;
 pub mod tools;
 
-pub use enforcement::{ChainPolicy, LimitsPolicy, RuleEvaluator, ToolPermissionPolicy};
+pub use enforcement::{ChainPolicy, RuleEvaluator, ToolPermissionPolicy};
 pub use tools::{default_registry, HttpGet, ToolRegistry};

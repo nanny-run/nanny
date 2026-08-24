@@ -1,18 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-// ── LimitsSnapshot ────────────────────────────────────────────────────────────
-
-/// Short-name snapshot of the active limits, matching nanny.toml field names.
-///
-/// Distinct from `Limits` (which uses descriptive Rust names).
-/// Written into `ExecutionStarted` so any reader can reconstruct enforcement context.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LimitsSnapshot {
-    pub steps: u32,
-    pub tokens: u64,
-    pub timeout: u64,
-}
-
 // ── now_ms ────────────────────────────────────────────────────────────────────
 
 /// Current time as milliseconds since the Unix epoch.
@@ -39,11 +26,9 @@ pub fn now_ms() -> u64 {
 #[serde(tag = "event")]
 pub enum ExecutionEvent {
     /// Emitted exactly once when execution begins.
-    /// Records the limits in effect and the command being run.
+    /// Records the command being run.
     ExecutionStarted {
         ts: u64,
-        limits: LimitsSnapshot,
-        limits_set: String,
         command: String,
     },
 
@@ -56,8 +41,8 @@ pub enum ExecutionEvent {
     /// Emitted when a tool call is blocked by the allowlist ([tools] allowed).
     ///
     /// The tool was not in the permitted set — execution stops immediately.
-    /// Distinct from `RuleDenied`: this fires from `LimitsPolicy`, before any
-    /// rule evaluation.
+    /// Distinct from `RuleDenied`: this fires from `ToolPermissionPolicy`,
+    /// before any rule evaluation.
     ToolDenied {
         ts: u64,
         tool: String,
@@ -141,7 +126,7 @@ pub enum ExecutionEvent {
     /// `name` is the harness identifier (e.g. `"opencode"`, `"langgraph"`);
     /// `version` is optional. This is our equivalent of OpenRouter's "app"
     /// column — an attribution label only, never content and never pricing.
-    /// Distinct from `AgentScopeEntered`, which names a `@nanny::agent` limits
+    /// Distinct from `AgentScopeEntered`, which names a `@nanny::agent`
     /// scope, not the harness.
     HarnessIdentified {
         ts: u64,
@@ -172,17 +157,16 @@ pub enum ExecutionEvent {
         name: String,
     },
 
-    /// Emitted when the agent activates a named limits set via `agent_enter`.
+    /// Emitted when the agent enters a named scope via `agent_enter`.
     ///
-    /// Records the name of the limits set and the limits now in effect,
-    /// so the audit log captures exactly which budget governed each scope.
+    /// Records which phase of the run the following events belong to, so the
+    /// audit log can attribute every verdict to the scope that produced it.
     AgentScopeEntered {
         ts: u64,
         name: String,
-        limits: LimitsSnapshot,
     },
 
-    /// Emitted when the agent exits a named limits scope via `agent_exit`.
+    /// Emitted when the agent exits a named scope via `agent_exit`.
     ///
     /// Paired with `AgentScopeEntered` — together they bracket the governed scope.
     AgentScopeExited {

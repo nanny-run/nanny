@@ -1,9 +1,9 @@
 // Integration tests for `nanny run` process lifecycle.
 //
 // These tests build and invoke the real `nanny` binary.
-// They verify the two core guarantees of v0.1.0:
-//   1. A process that exits cleanly produces exit code 0.
-//   2. A process that exceeds timeout_ms is killed and exits non-zero.
+// They verify that a process exiting cleanly produces exit code 0, that a
+// crash surfaces as a typed stop reason, and that the NDJSON stream is
+// well-formed and correctly bookended.
 //
 // `CARGO_BIN_EXE_nanny` is injected by Cargo automatically for integration tests.
 
@@ -45,28 +45,6 @@ cmd = "{cmd}"
 steps   = 100
 tokens  = 1000
 timeout = 30000
-
-[tools]
-allowed = ["http_get"]
-
-[observability]
-log = "stdout"
-"#
-    );
-    fs::write(dir.join("nanny.toml"), toml).unwrap();
-}
-
-/// Same shape, plus a `[limits]` block. Only the timeout tests need one; every
-/// other test is indifferent to limits and uses `write_config`.
-fn write_config_with_timeout(dir: &Path, timeout_ms: u64, cmd: &str) {
-    let toml = format!(
-        r#"[start]
-cmd = "{cmd}"
-
-[limits]
-steps   = 100
-tokens  = 1000
-timeout = {timeout_ms}
 
 [tools]
 allowed = ["http_get"]
@@ -163,110 +141,6 @@ fn fast_exit_completes_cleanly() {
     assert!(stdout.contains("ExecutionStarted"), "stdout must have ExecutionStarted event");
     assert!(stdout.contains("ExecutionStopped"), "stdout must have ExecutionStopped event");
     assert!(stdout.contains("AgentCompleted"), "stop reason must be AgentCompleted");
-}
-
-/// A process that runs past timeout_ms is killed — exit code non-zero,
-/// stderr carries the stop reason.
-///
-/// Uses a platform-specific long-running command so the test exercises
-/// the real kill path on every OS:
-/// - Unix:    `sleep 60`  — standard POSIX utility
-/// - Windows: `ping -n 65 127.0.0.1` — always available, native PE exe,
-///   ~64 s runtime (1-second intervals × 65 probes); `TerminateProcess()`
-///   kills it cleanly as a direct child.
-///
-/// On Windows this test requires T7 (server_start_loopback_does_not_require_cert_files)
-/// to be skipped. T7 writes `~/.nanny/server.addr` to the real home dir (because
-/// `dirs::home_dir()` ignores the HOME override), which would cause nanny to
-/// route through `cmd_run_via_network_server` — a path with no timeout kill.
-#[test]
-fn timeout_kills_process_and_exits_nonzero() {
-    let dir = temp_dir();
-    // 300 ms timeout — well below either slow command.
-    #[cfg(windows)]
-    write_config_with_timeout(&dir, 300, "ping -n 65 127.0.0.1");
-    #[cfg(not(windows))]
-    write_config_with_timeout(&dir, 300, "sleep 60");
-
-    let output = Command::new(nanny_bin())
-        .args(["--config", &config_arg(&dir), "run"])
-        .output()
-        .expect("failed to run nanny");
-
-    let _ = fs::remove_dir_all(&dir);
-
-    assert!(
-        !output.status.success(),
-        "nanny must exit non-zero when timeout fires"
-    );
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("TimeoutExpired"),
-        "stderr must contain 'TimeoutExpired'\ngot: {stderr}"
-    );
-
-    // stdout must still have both bookend events.
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("ExecutionStarted"), "stdout must have ExecutionStarted even on timeout");
-    assert!(stdout.contains("TimeoutExpired"), "ExecutionStopped reason must be TimeoutExpired");
-}
-
-/// Named limits are resolved and enforced — timeout from [limits.fast].
-#[test]
-fn named_limits_timeout_is_enforced() {
-    let dir = temp_dir();
-
-    // Use a platform-specific long-running command (same reasoning as
-    // `timeout_kills_process_and_exits_nonzero`).
-    #[cfg(windows)]
-    let slow_cmd = "ping -n 65 127.0.0.1";
-    #[cfg(not(windows))]
-    let slow_cmd = "sleep 60";
-
-    // Global limits have a generous timeout; the named set is tight.
-    let toml = format!(
-        "\
-[start]
-cmd = \"{slow_cmd}\"
-
-[limits]
-steps   = 100
-tokens  = 1000
-timeout = 30000
-
-[limits.fast]
-timeout = 300
-
-[tools]
-allowed = [\"http_get\"]
-
-[observability]
-log = \"stdout\"
-"
-    );
-    fs::write(dir.join("nanny.toml"), toml).unwrap();
-
-    let output = Command::new(nanny_bin())
-        .args([
-            "--config", &config_arg(&dir),
-            "run", "--limits=fast",
-        ])
-        .output()
-        .expect("failed to run nanny");
-
-    let _ = fs::remove_dir_all(&dir);
-
-    assert!(
-        !output.status.success(),
-        "nanny must exit non-zero when named limits timeout fires"
-    );
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("TimeoutExpired"),
-        "stderr must contain 'TimeoutExpired' for named limits timeout\ngot: {stderr}"
-    );
 }
 
 /// Bridge events (ToolAllowed, RuleDenied, ToolDenied, …) are flushed into the NDJSON

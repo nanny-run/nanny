@@ -17,12 +17,11 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
-use nanny_core::events::event::{ExecutionEvent, LimitsSnapshot};
-use nanny_core::agent::limits::Limits;
+use nanny_core::events::event::ExecutionEvent;
 use nanny_core::agent::state::StopReason;
 use nanny_core::policy::{Policy, PolicyContext, PolicyDecision};
 use nanny_core::tool::{ToolArgs, ToolCallError, ToolExecutor};
-use nanny_runtime::{LimitsPolicy, RuleEvaluator, ToolPermissionPolicy, ToolRegistry};
+use nanny_runtime::{RuleEvaluator, ToolPermissionPolicy, ToolRegistry};
 
 // ── Error ─────────────────────────────────────────────────────────────────────
 
@@ -89,10 +88,6 @@ pub enum BridgeAddress {
 /// Configuration the CLI passes to `Bridge::start`.
 pub struct BridgeComponents {
     pub registry: ToolRegistry,
-    pub limits: Limits,
-    /// All named limits sets, pre-resolved with inheritance applied.
-    /// Used by `POST /agent/enter` to switch active limits.
-    pub named_limits: HashMap<String, Limits>,
     pub allowed_tools: Vec<String>,
     /// Per-tool max call counts from `[tools.<name>] max_calls`.
     pub per_tool_max_calls: HashMap<String, u32>,
@@ -107,14 +102,9 @@ pub(crate) struct BridgeState {
     // Enforcement — stored separately so /rule/evaluate can access
     // rule_evaluator directly without evaluating the full policy chain.
     tool_permission_policy: ToolPermissionPolicy,
-    limits_policy: LimitsPolicy,
     rule_evaluator: RuleEvaluator,
 
     // Agent context switching ─────────────────────────────────────────────────
-    default_limits: Limits,
-    current_limits: Limits,
-    named_limits: HashMap<String, Limits>,
-    limits_stack: Vec<Limits>,
     agent_name_stack: Vec<String>,
     allowed_tools: Vec<String>,
 
@@ -164,19 +154,13 @@ impl Bridge {
 
         let tool_permission_policy =
             ToolPermissionPolicy::new(components.allowed_tools.clone());
-        let limits_policy = LimitsPolicy::new(components.limits.clone());
         let rule_evaluator = RuleEvaluator::new(components.per_tool_max_calls);
 
         let shared = Arc::new(Mutex::new(BridgeState {
             session_token: token.clone(),
             execution: ExecutionState::Running,
             tool_permission_policy,
-            limits_policy,
             rule_evaluator,
-            default_limits: components.limits.clone(),
-            current_limits: components.limits.clone(),
-            named_limits: components.named_limits,
-            limits_stack: Vec::new(),
             agent_name_stack: Vec::new(),
             allowed_tools: components.allowed_tools,
             tokens_spent: 0,
@@ -467,12 +451,6 @@ pub(crate) fn handle_tool_call(
         Err(_) => return BridgeResp::json(400, r#"{"error":"invalid request body"}"#),
     };
 
-    // Resolve token cost before locking — registry is immutable after init.
-    // For bridge tools (e.g. http_get) use the registry's declared cost;
-    // for user-defined tools fall back to the tokens the SDK sent in the request.
-    let next_cost = registry.declared_cost(&call.tool)
-        .unwrap_or_else(|| call.tokens.unwrap_or(0) as u64);
-
     // Build PolicyContext and evaluate — hold lock briefly, then release.
     let decision = {
         let guard = shared.lock().unwrap();
@@ -482,17 +460,13 @@ pub(crate) fn handle_tool_call(
             elapsed_ms,
             requested_tool: Some(call.tool.clone()),
             tokens_spent: guard.tokens_spent,
-            next_tool_tokens: next_cost,
             tool_call_counts: guard.tool_call_counts.clone(),
             tool_call_history: guard.tool_call_history.clone(),
             last_tool_args: HashMap::new(),
         };
-        // Chain: tool permission first, then limits, then per-tool rules.
+        // Chain: tool permission first, then per-tool rules.
         match guard.tool_permission_policy.evaluate(&ctx) {
-            PolicyDecision::Allow => match guard.limits_policy.evaluate(&ctx) {
-                PolicyDecision::Allow => guard.rule_evaluator.evaluate(&ctx),
-                deny => deny,
-            },
+            PolicyDecision::Allow => guard.rule_evaluator.evaluate(&ctx),
             deny => deny,
         }
     };
@@ -547,9 +521,6 @@ pub(crate) fn handle_tool_call(
                             ts: now_ms(),
                             step: step_now,
                         });
-                        if guard.tokens_spent >= guard.current_limits.max_tokens {
-                            mark_stopped(&mut guard, "BudgetExhausted");
-                        }
                     }
                     BridgeResp::json(200, serde_json::to_string(
                         &ToolCallResponse::Allowed { result: String::new() }
@@ -585,9 +556,6 @@ pub(crate) fn handle_tool_call(
                             ts: now_ms(),
                             step: step_now,
                         });
-                        if guard.tokens_spent >= guard.current_limits.max_tokens {
-                            mark_stopped(&mut guard, "BudgetExhausted");
-                        }
                     }
                     BridgeResp::json(200, serde_json::to_string(
                         &ToolCallResponse::Allowed { result: output.content }
@@ -609,7 +577,6 @@ pub(crate) fn handle_rule_evaluate(body: &[u8], shared: &Arc<Mutex<BridgeState>>
                 .unwrap_or_else(|| guard.start_time.elapsed().as_millis() as u64),
             requested_tool: req.tool.clone(),
             tokens_spent: req.tokens_spent.unwrap_or(guard.tokens_spent),
-            next_tool_tokens: 0,
             tool_call_counts: if req.tool_call_counts.is_empty() {
                 guard.tool_call_counts.clone()
             } else {
@@ -642,46 +609,20 @@ pub(crate) fn handle_agent_enter(body: &[u8], shared: &Arc<Mutex<BridgeState>>) 
         Err(_) => return BridgeResp::json(400, r#"{"error":"invalid request body"}"#),
     };
 
-    let result = {
+    {
         let mut guard = shared.lock().unwrap();
-        if let Some(new_limits) = guard.named_limits.get(&req.name).cloned() {
-            let prev = guard.current_limits.clone();
-            guard.limits_stack.push(prev);
-            guard.agent_name_stack.push(req.name.clone());
-            guard.current_limits = new_limits.clone();
-            guard.limits_policy = LimitsPolicy::new(new_limits.clone());
-            let snapshot = LimitsSnapshot {
-                steps: new_limits.max_steps,
-                tokens: new_limits.max_tokens,
-                timeout: new_limits.timeout_ms,
-            };
-            append_event(&mut guard, ExecutionEvent::AgentScopeEntered {
-                ts: now_ms(),
-                name: req.name.clone(),
-                limits: snapshot,
-            });
-            Ok(new_limits)
-        } else {
-            Err(req.name.clone())
-        }
-    };
-
-    match result {
-        Ok(limits) => BridgeResp::json(200, format!(
-            r#"{{"status":"ok","limits":{{"steps":{},"tokens":{},"timeout":{}}}}}"#,
-            limits.max_steps, limits.max_tokens, limits.timeout_ms
-        )),
-        Err(name) => BridgeResp::json(404, format!(
-            r#"{{"error":"named limits set '{}' not found"}}"#, name
-        )),
+        guard.agent_name_stack.push(req.name.clone());
+        append_event(&mut guard, ExecutionEvent::AgentScopeEntered {
+            ts: now_ms(),
+            name: req.name.clone(),
+        });
     }
+
+    BridgeResp::json(200, r#"{"status":"ok"}"#)
 }
 
 pub(crate) fn handle_agent_exit(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
     let mut guard = shared.lock().unwrap();
-    let prev = guard.limits_stack.pop().unwrap_or_else(|| guard.default_limits.clone());
-    guard.current_limits = prev.clone();
-    guard.limits_policy = LimitsPolicy::new(prev);
     let name = guard.agent_name_stack.pop().unwrap_or_default();
     append_event(&mut guard, ExecutionEvent::AgentScopeExited {
         ts: now_ms(),
@@ -693,16 +634,15 @@ pub(crate) fn handle_agent_exit(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp 
 /// POST /llm/usage {"input": N, "output": N, "model"?: "...", "provider"?: "..."}
 ///
 /// Submits LLM token usage from `nanny::report_usage` (Rust) or a
-/// nanny.instrument()-wrapped client (Python). Debits `input + output` tokens
+/// nanny.instrument()-wrapped client (Python). Records `input + output` tokens
 /// and emits an `LlmUsageRecorded` audit event. The
 /// optional `model`/`provider` are recorded as labels only — no pricing.
 /// The optional `cache_read`/`cache_write` are a finer split of `input` for
 /// providers that report prompt-caching usage — reporting only, never
-/// debited separately from `input`.
+/// counted separately from `input`.
 ///
-/// Returns `{"status":"ok"}` if accepted.
-/// Returns `{"status":"denied","reason":"BudgetExhausted"}` if the submission
-/// pushes `tokens_spent >= max_tokens`. The next tool call will also fail.
+/// Returns `{"status":"ok"}`. Usage is measured, never enforced: no token
+/// count stops an execution.
 pub(crate) fn handle_llm_usage(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
     #[derive(serde::Deserialize)]
     struct HarnessLabel {
@@ -766,17 +706,7 @@ pub(crate) fn handle_llm_usage(body: &[u8], shared: &Arc<Mutex<BridgeState>>) ->
         cache_write: req.cache_write,
     });
 
-    let max_tokens = guard.current_limits.max_tokens;
-    if guard.tokens_spent >= max_tokens {
-        let reason = "BudgetExhausted";
-        mark_stopped(&mut guard, reason);
-        BridgeResp::json(200, format!(
-            r#"{{"status":"denied","reason":"{}"}}"#,
-            reason
-        ))
-    } else {
-        BridgeResp::json(200, r#"{"status":"ok"}"#)
-    }
+    BridgeResp::json(200, r#"{"status":"ok"}"#)
 }
 
 /// POST /harness {"name": "...", "version"?: "..."}
@@ -1031,9 +961,6 @@ fn denial_from(reason: &StopReason) -> ToolCallResponse {
 
 fn stop_reason_name(reason: &StopReason) -> &'static str {
     match reason {
-        StopReason::MaxStepsReached   => "MaxStepsReached",
-        StopReason::BudgetExhausted   => "BudgetExhausted",
-        StopReason::TimeoutExpired    => "TimeoutExpired",
         StopReason::ToolDenied { .. } => "ToolDenied",
         StopReason::RuleDenied { .. } => "RuleDenied",
         StopReason::ManualStop        => "ManualStop",
@@ -1049,8 +976,7 @@ pub(crate) fn handle_stop(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> Brid
     // accepting arbitrary strings would let a misbehaving agent falsify the
     // event log (e.g. claim "AgentCompleted" while actually crashing).
     let reason = match raw.as_str() {
-        "RuleDenied" | "ToolDenied" | "BudgetExhausted" | "MaxStepsReached"
-        | "TimeoutExpired" | "AgentCompleted" | "ManualStop" | "ToolFailed" => raw,
+        "RuleDenied" | "ToolDenied" | "AgentCompleted" | "ManualStop" | "ToolFailed" => raw,
         _ => "ProcessCrashed".to_string(),
     };
     let mut guard = shared.lock().unwrap();
@@ -1148,7 +1074,7 @@ pub(crate) fn now_ms() -> u64 {
 /// Return the typed stop reason if this run has stopped, else `None`.
 ///
 /// Used to build the 410 Gone body so a stopped run tells the client *why* it
-/// stopped (BudgetExhausted, MaxStepsReached, …) instead of a generic message.
+/// stopped (ToolDenied, RuleDenied, …) instead of a generic message.
 pub(crate) fn stopped_reason(shared: &Arc<Mutex<BridgeState>>) -> Option<String> {
     match &shared.lock().unwrap().execution {
         ExecutionState::Stopped { reason } => Some(reason.clone()),
@@ -1172,13 +1098,11 @@ pub(crate) fn stopped_response(reason: &str) -> BridgeResp {
 ///
 /// The governance server keeps one [`BridgeState`] per run id (see G3 —
 /// "Nanny stops the run, not the host"). All runs share one immutable
-/// [`ToolRegistry`]; everything else — counters, stop state, limits
+/// [`ToolRegistry`]; everything else — counters, stop state, scope
 /// stacks — is cloned per run from this template so each run is independently
-/// budgeted and independently stoppable.
+/// governed and independently stoppable.
 pub(crate) struct RunTemplate {
     session_token: String,
-    limits: Limits,
-    named_limits: HashMap<String, Limits>,
     allowed_tools: Vec<String>,
     per_tool_max_calls: HashMap<String, u32>,
 }
@@ -1186,24 +1110,18 @@ pub(crate) struct RunTemplate {
 impl RunTemplate {
     /// Build a fresh, running [`BridgeState`] for a new run.
     ///
-    /// Each call produces a distinct execution with zeroed counters and
-    /// counters, so a stop on one run never touches another.
+    /// Each call produces a distinct execution with zeroed counters, so a
+    /// stop on one run never touches another.
     pub(crate) fn build_state(&self) -> Arc<Mutex<BridgeState>> {
         let tool_permission_policy =
             ToolPermissionPolicy::new(self.allowed_tools.clone());
-        let limits_policy = LimitsPolicy::new(self.limits.clone());
         let rule_evaluator = RuleEvaluator::new(self.per_tool_max_calls.clone());
 
         Arc::new(Mutex::new(BridgeState {
             session_token: self.session_token.clone(),
             execution: ExecutionState::Running,
             tool_permission_policy,
-            limits_policy,
             rule_evaluator,
-            default_limits: self.limits.clone(),
-            current_limits: self.limits.clone(),
-            named_limits: self.named_limits.clone(),
-            limits_stack: Vec::new(),
             agent_name_stack: Vec::new(),
             allowed_tools: self.allowed_tools.clone(),
             tokens_spent: 0,
@@ -1227,8 +1145,6 @@ pub(crate) fn init_run_template(
 ) -> (RunTemplate, Arc<ToolRegistry>) {
     let template = RunTemplate {
         session_token: token,
-        limits: components.limits,
-        named_limits: components.named_limits,
         allowed_tools: components.allowed_tools,
         per_tool_max_calls: components.per_tool_max_calls,
     };
@@ -1263,13 +1179,11 @@ mod tests {
         }
     }
 
-    fn echo_components(max_tokens: u64) -> BridgeComponents {
+    fn echo_components(_max_tokens: u64) -> BridgeComponents {
         let mut registry = ToolRegistry::new();
         registry.register(Box::new(EchoTool));
         BridgeComponents {
             registry,
-            limits: Limits { max_steps: 100, max_tokens, timeout_ms: 30_000 },
-            named_limits: Default::default(),
             allowed_tools: vec!["echo".to_string()],
             per_tool_max_calls: Default::default(),
         }
@@ -1284,11 +1198,9 @@ mod tests {
 
     /// Bridge with custom allowed tools and an empty registry — exercises
     /// the user-defined tool path (NotFound → charge tokens → return allowed).
-    fn started_with_tools(allowed_tools: Vec<String>, max_tokens: u64) -> Bridge {
+    fn started_with_tools(allowed_tools: Vec<String>, _max_tokens: u64) -> Bridge {
         let components = BridgeComponents {
             registry: ToolRegistry::new(),
-            limits: Limits { max_steps: 100, max_tokens, timeout_ms: 30_000 },
-            named_limits: Default::default(),
             allowed_tools,
             per_tool_max_calls: Default::default(),
         };
@@ -1495,8 +1407,6 @@ mod tests {
     fn denied_tool_returns_denied_with_tool_name() {
         let b = Bridge::start(BridgeComponents {
             registry: ToolRegistry::new(),
-            limits: Limits { max_steps: 100, max_tokens: 1000, timeout_ms: 30_000 },
-            named_limits: Default::default(),
             allowed_tools: vec![],   // empty allowlist — all tools denied
             per_tool_max_calls: Default::default(),
         }).unwrap();
@@ -1514,8 +1424,6 @@ mod tests {
     fn denied_tool_stops_execution() {
         let b = Bridge::start(BridgeComponents {
             registry: ToolRegistry::new(),
-            limits: Limits { max_steps: 100, max_tokens: 1000, timeout_ms: 30_000 },
-            named_limits: Default::default(),
             allowed_tools: vec![],
             per_tool_max_calls: Default::default(),
         }).unwrap();
@@ -1526,15 +1434,15 @@ mod tests {
     }
 
     #[test]
-    fn budget_exhaustion_stops_execution_and_returns_denied() {
-        let b = started(10); // budget = 10, echo costs 10
-        let (_, body) = post(&b, "/tool/call", r#"{"tool":"echo","args":{"message":"x"}}"#);
-        let v = json_val(&body);
-        // First call succeeds, charges 10, exhausts budget.
-        // Subsequent calls see BudgetExhausted.
-        let _ = post(&b, "/tool/call", r#"{"tool":"echo","args":{"message":"y"}}"#);
-        assert!(matches!(b.execution_state(), ExecutionState::Stopped { .. }));
-        drop(v);
+    fn tokens_accumulate_without_stopping_execution() {
+        // Tokens are measured, never enforced: no count ends a run.
+        let b = started(10); // echo costs 10
+        post(&b, "/tool/call", r#"{"tool":"echo","args":{"message":"x"}}"#);
+        post(&b, "/tool/call", r#"{"tool":"echo","args":{"message":"y"}}"#);
+
+        assert!(matches!(b.execution_state(), ExecutionState::Running));
+        let (_, status) = get(&b, "/status");
+        assert_eq!(json_val(&status)["tokens_spent"], 20);
     }
 
     #[test]
@@ -1575,8 +1483,6 @@ mod tests {
         per_tool_max_calls.insert("echo".to_string(), 1u32);
         let b = Bridge::start(BridgeComponents {
             registry,
-            limits: Limits { max_steps: 100, max_tokens: 10_000, timeout_ms: 30_000 },
-            named_limits: Default::default(),
             allowed_tools: vec!["echo".to_string()],
             per_tool_max_calls,
         }).unwrap();
@@ -1608,8 +1514,6 @@ mod tests {
         per_tool_max_calls.insert("echo".to_string(), 2u32);
         let b = Bridge::start(BridgeComponents {
             registry: ToolRegistry::new(),
-            limits: Limits { max_steps: 100, max_tokens: 1000, timeout_ms: 30_000 },
-            named_limits: Default::default(),
             allowed_tools: vec!["echo".to_string()],
             per_tool_max_calls,
         }).unwrap();
@@ -1630,8 +1534,6 @@ mod tests {
         registry.register(Box::new(EchoTool));
         let b = Bridge::start(BridgeComponents {
             registry,
-            limits: Limits { max_steps: 100, max_tokens: 10_000, timeout_ms: 30_000 },
-            named_limits: Default::default(),
             allowed_tools: vec!["echo".to_string()],
             per_tool_max_calls,
         }).unwrap();
@@ -1658,71 +1560,32 @@ mod tests {
     // ── Day 4 tests ───────────────────────────────────────────────────────────
 
     #[test]
-    fn agent_enter_switches_limits() {
-        let mut named = HashMap::new();
-        named.insert("researcher".to_string(), Limits {
-            max_steps: 200, max_tokens: 5000, timeout_ms: 60_000,
-        });
-        let b = Bridge::start(BridgeComponents {
-            registry: ToolRegistry::new(),
-            limits: Limits { max_steps: 10, max_tokens: 100, timeout_ms: 5_000 },
-            named_limits: named,
-            allowed_tools: vec![],
-            per_tool_max_calls: Default::default(),
-        }).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(20));
+    fn agent_enter_records_the_scope() {
+        let b = started(1000);
 
         let (s, body) = post(&b, "/agent/enter", r#"{"name":"researcher"}"#);
         assert_eq!(s, 200);
-        let v = json_val(&body);
-        assert_eq!(v["status"], "ok");
-        assert_eq!(v["limits"]["steps"], 200);
+        assert_eq!(json_val(&body)["status"], "ok");
+
+        let guard = b.shared.lock().unwrap();
+        assert_eq!(guard.agent_name_stack, vec!["researcher".to_string()]);
     }
 
     #[test]
-    fn agent_exit_reverts_to_previous_limits() {
-        let mut named = HashMap::new();
-        named.insert("researcher".to_string(), Limits {
-            max_steps: 200, max_tokens: 5000, timeout_ms: 60_000,
-        });
-        let b = Bridge::start(BridgeComponents {
-            registry: ToolRegistry::new(),
-            limits: Limits { max_steps: 10, max_tokens: 100, timeout_ms: 5_000 },
-            named_limits: named,
-            allowed_tools: vec![],
-            per_tool_max_calls: Default::default(),
-        }).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(20));
+    fn agent_exit_pops_the_scope() {
+        let b = started(1000);
 
         post(&b, "/agent/enter", r#"{"name":"researcher"}"#);
         let (s, _) = post(&b, "/agent/exit", "{}");
         assert_eq!(s, 200);
 
-        // Verify limits reverted by checking step limit is back to 10.
         let guard = b.shared.lock().unwrap();
-        assert_eq!(guard.current_limits.max_steps, 10);
-    }
-
-    #[test]
-    fn agent_enter_missing_set_returns_404() {
-        let b = started(1000);
-        let (s, _) = post(&b, "/agent/enter", r#"{"name":"ghost"}"#);
-        assert_eq!(s, 404);
+        assert!(guard.agent_name_stack.is_empty());
     }
 
     #[test]
     fn nested_agent_enter_exit_round_trip() {
-        let mut named = HashMap::new();
-        named.insert("a".to_string(), Limits { max_steps: 50, max_tokens: 200, timeout_ms: 10_000 });
-        named.insert("b".to_string(), Limits { max_steps: 99, max_tokens: 300, timeout_ms: 20_000 });
-        let b = Bridge::start(BridgeComponents {
-            registry: ToolRegistry::new(),
-            limits: Limits { max_steps: 10, max_tokens: 100, timeout_ms: 5_000 },
-            named_limits: named,
-            allowed_tools: vec![],
-            per_tool_max_calls: Default::default(),
-        }).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        let b = started(1000);
 
         post(&b, "/agent/enter", r#"{"name":"a"}"#);
         post(&b, "/agent/enter", r#"{"name":"b"}"#);
@@ -1730,7 +1593,7 @@ mod tests {
         post(&b, "/agent/exit",  "{}");
 
         let guard = b.shared.lock().unwrap();
-        assert_eq!(guard.current_limits.max_steps, 10); // back to root
+        assert!(guard.agent_name_stack.is_empty(), "every scope must be popped");
     }
 
     // ── Day 5 tests ───────────────────────────────────────────────────────────
@@ -1748,30 +1611,6 @@ mod tests {
         assert_eq!(v["step"], 1);
     }
 
-    #[test]
-    fn tool_call_stops_at_max_steps() {
-        // max_steps is evaluated against the step count *before* the current
-        // call (see handle_tool_call: ctx.step_count = guard.step_count,
-        // read prior to that call's own increment), so with max_steps=1 the
-        // first call is allowed (0 >= 1 is false) and the second is denied
-        // (1 >= 1 is true) — not denied on the very first call.
-        let b = Bridge::start(BridgeComponents {
-            limits: Limits { max_steps: 1, max_tokens: 1000, timeout_ms: 30_000 },
-            ..echo_components(1000)
-        }).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(20));
-
-        let (_, first) = post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);
-        assert_eq!(json_val(&first)["status"], "allowed");
-        assert!(matches!(b.execution_state(), ExecutionState::Running));
-
-        let (_, second) = post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);
-        assert_eq!(json_val(&second)["status"], "denied");
-        assert!(matches!(b.execution_state(), ExecutionState::Stopped { .. }));
-
-        let (_, status) = get(&b, "/status");
-        assert_eq!(json_val(&status)["reason"], "MaxStepsReached");
-    }
 
     #[test]
     fn llm_usage_debits_tokens_and_records_event() {
@@ -2000,14 +1839,15 @@ mod tests {
     }
 
     #[test]
-    fn llm_usage_exhausts_budget() {
+    fn llm_usage_records_without_stopping_execution() {
         let b = started(50);
         let (s, body) = post(&b, "/llm/usage", r#"{"input":40,"output":20}"#);
         assert_eq!(s, 200);
-        let v = json_val(&body);
-        assert_eq!(v["status"], "denied");
-        assert_eq!(v["reason"], "BudgetExhausted");
-        assert!(matches!(b.execution_state(), ExecutionState::Stopped { .. }));
+        assert_eq!(json_val(&body)["status"], "ok");
+        assert!(matches!(b.execution_state(), ExecutionState::Running));
+
+        let (_, status) = get(&b, "/status");
+        assert_eq!(json_val(&status)["tokens_spent"], 60);
     }
 
     #[test]
@@ -2074,8 +1914,6 @@ mod tests {
         registry.register(Box::new(FailingTool));
         let b = Bridge::start(BridgeComponents {
             registry,
-            limits: Limits { max_steps: 100, max_tokens: 1000, timeout_ms: 30_000 },
-            named_limits: Default::default(),
             allowed_tools: vec!["fail".to_string()],
             per_tool_max_calls: Default::default(),
         }).unwrap();

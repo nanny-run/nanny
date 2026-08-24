@@ -66,13 +66,10 @@ impl EventWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nanny_core::events::event::LimitsSnapshot;
 
     fn started_event() -> ExecutionEvent {
         ExecutionEvent::ExecutionStarted {
             ts: 0,
-            limits: LimitsSnapshot { steps: 100, tokens: 1000, timeout: 30_000 },
-            limits_set: "[limits]".to_string(),
             command: "python agent.py".to_string(),
         }
     }
@@ -94,11 +91,7 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         assert_eq!(v["event"], "ExecutionStarted");
-        assert_eq!(v["limits_set"], "[limits]");
         assert_eq!(v["command"], "python agent.py");
-        assert_eq!(v["limits"]["steps"], 100);
-        assert_eq!(v["limits"]["tokens"], 1000);
-        assert_eq!(v["limits"]["timeout"], 30_000u64);
         assert!(v["ts"].is_number());
     }
 
