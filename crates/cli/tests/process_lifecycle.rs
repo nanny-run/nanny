@@ -36,7 +36,29 @@ fn temp_dir() -> PathBuf {
     dir
 }
 
-fn write_config(dir: &Path, timeout_ms: u64, cmd: &str) {
+fn write_config(dir: &Path, cmd: &str) {
+    let toml = format!(
+        r#"[start]
+cmd = "{cmd}"
+
+[limits]
+steps   = 100
+tokens  = 1000
+timeout = 30000
+
+[tools]
+allowed = ["http_get"]
+
+[observability]
+log = "stdout"
+"#
+    );
+    fs::write(dir.join("nanny.toml"), toml).unwrap();
+}
+
+/// Same shape, plus a `[limits]` block. Only the timeout tests need one; every
+/// other test is indifferent to limits and uses `write_config`.
+fn write_config_with_timeout(dir: &Path, timeout_ms: u64, cmd: &str) {
     let toml = format!(
         r#"[start]
 cmd = "{cmd}"
@@ -120,7 +142,7 @@ fn wait_for_port(port: u16, attempts: u32) -> bool {
 #[test]
 fn fast_exit_completes_cleanly() {
     let dir = temp_dir();
-    write_config(&dir, 30_000, "echo hello");
+    write_config(&dir, "echo hello");
 
     let output = Command::new(nanny_bin())
         .args(["--config", &config_arg(&dir), "run"])
@@ -162,9 +184,9 @@ fn timeout_kills_process_and_exits_nonzero() {
     let dir = temp_dir();
     // 300 ms timeout — well below either slow command.
     #[cfg(windows)]
-    write_config(&dir, 300, "ping -n 65 127.0.0.1");
+    write_config_with_timeout(&dir, 300, "ping -n 65 127.0.0.1");
     #[cfg(not(windows))]
-    write_config(&dir, 300, "sleep 60");
+    write_config_with_timeout(&dir, 300, "sleep 60");
 
     let output = Command::new(nanny_bin())
         .args(["--config", &config_arg(&dir), "run"])
@@ -256,7 +278,7 @@ log = \"stdout\"
 #[test]
 fn execution_stopped_is_always_last_line() {
     let dir = temp_dir();
-    write_config(&dir, 30_000, "echo nanny-test");
+    write_config(&dir, "echo nanny-test");
 
     let output = Command::new(nanny_bin())
         .args(["--config", &config_arg(&dir), "run"])
@@ -296,7 +318,7 @@ fn execution_stopped_is_always_last_line() {
 #[test]
 fn execution_stopped_has_accounting_fields() {
     let dir = temp_dir();
-    write_config(&dir, 30_000, "echo nanny-accounting-test");
+    write_config(&dir, "echo nanny-accounting-test");
 
     let output = Command::new(nanny_bin())
         .args(["--config", &config_arg(&dir), "run"])
@@ -337,7 +359,7 @@ fn execution_stopped_has_accounting_fields() {
 fn process_crash_emits_process_crashed_stop_reason() {
     let dir = temp_dir();
     // `false` is the POSIX command that always exits with code 1.
-    write_config(&dir, 30_000, "false");
+    write_config(&dir, "false");
 
     let output = Command::new(nanny_bin())
         .args(["--config", &config_arg(&dir), "run"])
