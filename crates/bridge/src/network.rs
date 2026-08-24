@@ -2,7 +2,7 @@
 //
 // Started by `nanny run --serve`. Multiple agents on the same or different
 // machines connect to it. All connections share one execution context —
-// shared ledger, shared step count, shared tool call history. This is
+// shared token count, shared step count, shared tool call history. This is
 // cross-process budget enforcement without cloud dependency.
 //
 // Transport: axum (HTTP routing) + rustls (mTLS, both sides present certs).
@@ -2827,7 +2827,7 @@ mod tests {
         let r1: serde_json::Value = tool_call!(c1).json().unwrap();
         assert_eq!(r1["status"], "allowed", "call 1 must be allowed");
 
-        // Call 2 — client 2 allowed (shared ledger still within limit)
+        // Call 2 — client 2 allowed (shared token count still within limit)
         let r2: serde_json::Value = tool_call!(c2).json().unwrap();
         assert_eq!(r2["status"], "allowed", "call 2 must be allowed");
 

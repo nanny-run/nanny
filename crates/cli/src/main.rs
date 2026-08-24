@@ -18,7 +18,6 @@ use clap::{Parser, Subcommand};
 use nanny_bridge::{Bridge, BridgeAddress, ExecutionState};
 use nanny_core::agent::limits::Limits;
 use nanny_core::events::event::{ExecutionEvent, LimitsSnapshot, now_ms};
-use nanny_core::ledger::Ledger;
 use std::io::Write;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -752,7 +751,6 @@ fn cmd_run(
 
     let registered = components.registry.registered_names();
     println!("nanny: registry — {} tool(s) registered: {:?}", registered.len(), registered);
-    println!("nanny: ledger — {} units", components.ledger.balance());
     println!();
 
     let timeout = Duration::from_millis(components.limits.timeout_ms);

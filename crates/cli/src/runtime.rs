@@ -7,12 +7,12 @@
 use nanny_bridge::BridgeComponents;
 use nanny_config::{resolve_named_limits, ConfigError, NannyConfig};
 use nanny_core::agent::limits::Limits;
-use nanny_runtime::{FakeLedger, ToolRegistry};
+use nanny_runtime::ToolRegistry;
 use std::collections::HashMap;
 
 // ── RuntimeComponents ─────────────────────────────────────────────────────────
 
-/// The fully wired runtime — limits, ledger, and tool registry — ready to run.
+/// The fully wired runtime — limits and tool registry — ready to run.
 ///
 /// Every field is derived directly from `NannyConfig`.
 /// Nothing is hardcoded. Nothing comes from ambient state.
@@ -20,9 +20,6 @@ use std::collections::HashMap;
 pub struct RuntimeComponents {
     /// Hard limits passed to the Executor.
     pub limits: Limits,
-
-    /// In-memory budget ledger. Starts at `max_tokens` and counts down.
-    pub ledger: FakeLedger,
 
     /// All registered built-in tools. The policy controls which are permitted.
     pub registry: ToolRegistry,
@@ -39,7 +36,6 @@ pub struct RuntimeComponents {
 ///
 /// ```text
 /// config.limits.*      → Limits     (passed to bridge for enforcement)
-/// config.limits.*      → FakeLedger (starting balance)
 /// config.tools.*       → ToolRegistry (built-in tool set + cost overrides)
 /// ```
 pub fn build_from_config(config: &NannyConfig) -> RuntimeComponents {
@@ -80,9 +76,6 @@ pub fn build_from_config_named(
 /// Construct components from a resolved Limits value.
 /// Shared by both build_from_config and build_from_config_named.
 fn build_components(config: &NannyConfig, limits: Limits) -> RuntimeComponents {
-    // Ledger starts at the full budget.
-    let ledger = FakeLedger::new(limits.max_tokens);
-
     // Registry with tokens_per_call overrides from [tools.<name>].
     let mut registry = nanny_runtime::default_registry();
     for (tool_name, tool_cfg) in &config.tools.per_tool {
@@ -91,7 +84,7 @@ fn build_components(config: &NannyConfig, limits: Limits) -> RuntimeComponents {
         }
     }
 
-    RuntimeComponents { limits, ledger, registry }
+    RuntimeComponents { limits, registry }
 }
 
 // ── build_bridge_components ───────────────────────────────────────────────────
@@ -169,7 +162,6 @@ mod tests {
         LimitsConfig, NannyConfig, ObservabilityConfig, PartialLimitsConfig,
         ToolsConfig,
     };
-    use nanny_core::ledger::Ledger;
     use std::collections::HashMap;
 
     fn test_config() -> NannyConfig {
@@ -226,14 +218,6 @@ mod tests {
     }
 
     #[test]
-    fn ledger_starts_at_max_tokens() {
-        let config = test_config();
-        let components = build_from_config(&config);
-
-        assert_eq!(components.ledger.balance(), config.limits.max_tokens);
-    }
-
-    #[test]
     fn registry_contains_http_get() {
         let components = build_from_config(&test_config());
 
@@ -244,7 +228,7 @@ mod tests {
     }
 
     #[test]
-    fn same_config_produces_same_limits_and_balance() {
+    fn same_config_produces_same_limits() {
         let config = test_config();
         let c1 = build_from_config(&config);
         let c2 = build_from_config(&config);
@@ -252,7 +236,6 @@ mod tests {
         assert_eq!(c1.limits.max_steps, c2.limits.max_steps);
         assert_eq!(c1.limits.max_tokens, c2.limits.max_tokens);
         assert_eq!(c1.limits.timeout_ms, c2.limits.timeout_ms);
-        assert_eq!(c1.ledger.balance(), c2.ledger.balance());
     }
 
     #[test]
@@ -274,7 +257,7 @@ mod tests {
 
         let components = build_from_config(&config);
         assert_eq!(components.limits.max_steps, 10);
-        assert_eq!(components.ledger.balance(), 100);
+        assert_eq!(components.limits.max_tokens, 100);
     }
 
     #[test]
@@ -289,9 +272,6 @@ mod tests {
 
         // Inherited field (timeout_ms is None in partial, inherits from global 15_000)
         assert_eq!(components.limits.timeout_ms, 15_000);
-
-        // Ledger synced to named budget
-        assert_eq!(components.ledger.balance(), 2000);
     }
 
     #[test]

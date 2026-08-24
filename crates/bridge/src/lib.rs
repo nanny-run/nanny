@@ -20,10 +20,9 @@ use uuid::Uuid;
 use nanny_core::events::event::{ExecutionEvent, LimitsSnapshot};
 use nanny_core::agent::limits::Limits;
 use nanny_core::agent::state::StopReason;
-use nanny_core::ledger::Ledger;
 use nanny_core::policy::{Policy, PolicyContext, PolicyDecision};
 use nanny_core::tool::{ToolArgs, ToolCallError, ToolExecutor};
-use nanny_runtime::{FakeLedger, LimitsPolicy, RuleEvaluator, ToolPermissionPolicy, ToolRegistry};
+use nanny_runtime::{LimitsPolicy, RuleEvaluator, ToolPermissionPolicy, ToolRegistry};
 
 // ── Error ─────────────────────────────────────────────────────────────────────
 
@@ -110,7 +109,6 @@ pub(crate) struct BridgeState {
     tool_permission_policy: ToolPermissionPolicy,
     limits_policy: LimitsPolicy,
     rule_evaluator: RuleEvaluator,
-    ledger: FakeLedger,
 
     // Agent context switching ─────────────────────────────────────────────────
     default_limits: Limits,
@@ -168,7 +166,6 @@ impl Bridge {
             ToolPermissionPolicy::new(components.allowed_tools.clone());
         let limits_policy = LimitsPolicy::new(components.limits.clone());
         let rule_evaluator = RuleEvaluator::new(components.per_tool_max_calls);
-        let max_tokens = components.limits.max_tokens;
 
         let shared = Arc::new(Mutex::new(BridgeState {
             session_token: token.clone(),
@@ -176,7 +173,6 @@ impl Bridge {
             tool_permission_policy,
             limits_policy,
             rule_evaluator,
-            ledger: FakeLedger::new(max_tokens),
             default_limits: components.limits.clone(),
             current_limits: components.limits.clone(),
             named_limits: components.named_limits,
@@ -539,7 +535,6 @@ pub(crate) fn handle_tool_call(
                     {
                         let mut guard = shared.lock().unwrap();
                         guard.step_count += 1;
-                        let _ = guard.ledger.debit(cost);
                         guard.tokens_spent += cost;
                         *guard.tool_call_counts.entry(call.tool.clone()).or_insert(0) += 1;
                         guard.tool_call_history.push(call.tool.clone());
@@ -578,7 +573,6 @@ pub(crate) fn handle_tool_call(
                     {
                         let mut guard = shared.lock().unwrap();
                         guard.step_count += 1;
-                        let _ = guard.ledger.debit(cost);
                         guard.tokens_spent += cost;
                         *guard.tool_call_counts.entry(call.tool.clone()).or_insert(0) += 1;
                         guard.tool_call_history.push(call.tool.clone());
@@ -700,7 +694,7 @@ pub(crate) fn handle_agent_exit(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp 
 ///
 /// Submits LLM token usage from `nanny::report_usage` (Rust) or a
 /// nanny.instrument()-wrapped client (Python). Debits `input + output` tokens
-/// from the shared ledger and emits an `LlmUsageRecorded` audit event. The
+/// and emits an `LlmUsageRecorded` audit event. The
 /// optional `model`/`provider` are recorded as labels only — no pricing.
 /// The optional `cache_read`/`cache_write` are a finer split of `input` for
 /// providers that report prompt-caching usage — reporting only, never
@@ -760,7 +754,6 @@ pub(crate) fn handle_llm_usage(body: &[u8], shared: &Arc<Mutex<BridgeState>>) ->
         return BridgeResp::json(200, r#"{"status":"ok"}"#);
     }
 
-    let _ = guard.ledger.debit(total);
     guard.tokens_spent += total;
 
     append_event(&mut guard, ExecutionEvent::LlmUsageRecorded {
@@ -791,7 +784,7 @@ pub(crate) fn handle_llm_usage(body: &[u8], shared: &Arc<Mutex<BridgeState>>) ->
 /// Records the agentic harness that ran the loop (opencode, langgraph, …),
 /// declared via `nanny::set_harness`. Emits a `HarnessIdentified` audit event —
 /// our equivalent of OpenRouter's "app" column. Attribution label only: never
-/// content, never pricing, and it does not touch the ledger.
+/// content and never pricing.
 ///
 /// Returns `{"status":"ok"}` if accepted, `400` for a missing/empty name.
 pub(crate) fn handle_harness(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
@@ -1179,7 +1172,7 @@ pub(crate) fn stopped_response(reason: &str) -> BridgeResp {
 ///
 /// The governance server keeps one [`BridgeState`] per run id (see G3 —
 /// "Nanny stops the run, not the host"). All runs share one immutable
-/// [`ToolRegistry`]; everything else — ledger, counters, stop state, limits
+/// [`ToolRegistry`]; everything else — counters, stop state, limits
 /// stacks — is cloned per run from this template so each run is independently
 /// budgeted and independently stoppable.
 pub(crate) struct RunTemplate {
@@ -1193,14 +1186,13 @@ pub(crate) struct RunTemplate {
 impl RunTemplate {
     /// Build a fresh, running [`BridgeState`] for a new run.
     ///
-    /// Each call produces a distinct execution with a zeroed ledger and
+    /// Each call produces a distinct execution with zeroed counters and
     /// counters, so a stop on one run never touches another.
     pub(crate) fn build_state(&self) -> Arc<Mutex<BridgeState>> {
         let tool_permission_policy =
             ToolPermissionPolicy::new(self.allowed_tools.clone());
         let limits_policy = LimitsPolicy::new(self.limits.clone());
         let rule_evaluator = RuleEvaluator::new(self.per_tool_max_calls.clone());
-        let max_tokens = self.limits.max_tokens;
 
         Arc::new(Mutex::new(BridgeState {
             session_token: self.session_token.clone(),
@@ -1208,7 +1200,6 @@ impl RunTemplate {
             tool_permission_policy,
             limits_policy,
             rule_evaluator,
-            ledger: FakeLedger::new(max_tokens),
             default_limits: self.limits.clone(),
             current_limits: self.limits.clone(),
             named_limits: self.named_limits.clone(),
@@ -1855,7 +1846,7 @@ mod tests {
     }
 
     #[test]
-    fn harness_records_event_and_does_not_touch_ledger() {
+    fn harness_records_event_does_not_charge_tokens() {
         let b = started(1000);
         let (s, body) = post(&b, "/harness", r#"{"name":"opencode","version":"0.3.2"}"#);
         assert_eq!(s, 200);
@@ -1982,7 +1973,7 @@ mod tests {
         let before = b.metrics();
         post(&b, "/app", r#"{"app_id":"app_abc","name":"gotm-nanny"}"#);
         let after = b.metrics();
-        assert_eq!(before.tokens_spent, after.tokens_spent, "must not debit the ledger");
+        assert_eq!(before.tokens_spent, after.tokens_spent, "must not charge tokens");
         assert_eq!(before.step_count, after.step_count, "must not count a step");
     }
 

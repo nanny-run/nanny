@@ -60,7 +60,7 @@ impl Tool for HttpGet {
     }
 
     /// Cost charged on success only.
-    /// The ledger is never debited for a failed request.
+    /// Tokens are never charged for a failed request.
     fn declared_cost(&self) -> u64 {
         HTTP_GET_COST
     }

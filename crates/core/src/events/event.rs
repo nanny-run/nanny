@@ -165,7 +165,7 @@ pub enum ExecutionEvent {
     /// none inherits the governor's.
     ///
     /// Attribution label only, exactly like `HarnessIdentified`: never content,
-    /// never pricing, never touches the ledger, never affects a stop.
+    /// never pricing, never affects a stop.
     AppIdentified {
         ts: u64,
         app_id: String,
