@@ -103,7 +103,7 @@ mod tests {
         let mut config = test_config();
         config.tools.per_tool.insert(
             "http_get".to_string(),
-            nanny_config::ToolConfig { max_calls: Some(3) },
+            nanny_config::ToolConfig { max_calls: Some(3), ..Default::default() },
         );
 
         let components = build_bridge_components(&config);

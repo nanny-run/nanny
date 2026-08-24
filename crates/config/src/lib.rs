@@ -82,10 +82,70 @@ pub struct ToolsConfig {
 }
 
 /// Per-tool configuration.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+///
+/// Beyond `max_calls`, this is where the operator declares what a tool *is*.
+/// Rules reference these labels rather than tool names, which is what lets a
+/// rule written elsewhere govern an app whose tools it has never heard of:
+/// the rule holds the logic, the config holds the facts about this app.
+///
+/// `deny_unknown_fields` is load-bearing, not tidiness: a misspelled label
+/// would otherwise parse silently and the operator would believe they had
+/// declared a control they do not have. Fail closed on the typo instead.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ToolConfig {
     /// Maximum number of times this tool may be called in one execution.
     pub max_calls: Option<u32>,
+
+    /// This tool ingests content the operator does not control.
+    #[serde(default)]
+    pub reads_untrusted: bool,
+
+    /// This tool acts on the outside world.
+    #[serde(default)]
+    pub external_effect: bool,
+
+    /// This tool's effect is irreversible.
+    #[serde(default)]
+    pub destructive: bool,
+
+    /// This tool moves money.
+    #[serde(default)]
+    pub moves_money: bool,
+
+    /// This tool touches secrets or personal data.
+    #[serde(default)]
+    pub reads_sensitive: bool,
+}
+
+/// The classification labels an operator may declare on a tool.
+///
+/// A closed set on purpose: rules are written against these five names, so
+/// adding a sixth is a deliberate, versioned decision rather than something
+/// a config file can invent.
+pub const TOOL_LABELS: [&str; 5] = [
+    "reads_untrusted",
+    "external_effect",
+    "destructive",
+    "moves_money",
+    "reads_sensitive",
+];
+
+impl ToolConfig {
+    /// The labels declared on this tool, in [`TOOL_LABELS`] order.
+    ///
+    /// Order is fixed rather than incidental so the audit log and `/status`
+    /// stay byte-comparable across runs.
+    pub fn labels(&self) -> Vec<&'static str> {
+        let set = [
+            (self.reads_untrusted, "reads_untrusted"),
+            (self.external_effect, "external_effect"),
+            (self.destructive,     "destructive"),
+            (self.moves_money,     "moves_money"),
+            (self.reads_sensitive, "reads_sensitive"),
+        ];
+        set.iter().filter(|(on, _)| *on).map(|(_, name)| *name).collect()
+    }
 }
 
 // ── ObservabilityConfig ───────────────────────────────────────────────────────
@@ -306,8 +366,19 @@ allowed = ["http_get"]
 #
 # max_calls caps how many times one tool may be called in a single run.
 #
+# The five labels below describe what a tool IS. Rules reference labels, never
+# tool names, so a rule written for any app can govern yours once its tools are
+# labelled. Declare only the ones that are true; all default to false.
+#
+#   reads_untrusted  ingests content you do not control
+#   external_effect  acts on the outside world
+#   destructive      irreversible
+#   moves_money      a financial transaction
+#   reads_sensitive  touches secrets or personal data
+#
 # [tools.http_get]
-# max_calls = 10
+# max_calls       = 10
+# reads_untrusted = true
 
 [observability]
 # Where to write the structured NDJSON event log.
@@ -366,6 +437,77 @@ log = "stdout"
 cmd = "true"
 "#).expect("a [start]-only config must parse");
         assert!(config.tools.allowed.is_empty(), "an undeclared allowlist denies everything");
+    }
+
+    #[test]
+    fn tool_labels_are_parsed() {
+        let config: NannyConfig = toml::from_str(r#"
+[tools]
+allowed = ["web_search", "send_outreach"]
+
+[tools.web_search]
+reads_untrusted = true
+
+[tools.send_outreach]
+external_effect = true
+moves_money     = true
+"#).expect("labelled tools must parse");
+
+        let search = &config.tools.per_tool["web_search"];
+        assert_eq!(search.labels(), vec!["reads_untrusted"]);
+
+        let outreach = &config.tools.per_tool["send_outreach"];
+        assert_eq!(outreach.labels(), vec!["external_effect", "moves_money"]);
+    }
+
+    /// Labels default to false, so an unlabelled tool carries none rather than
+    /// failing to parse. Silence means "not declared", never "unknown".
+    #[test]
+    fn unlabelled_tool_has_no_labels() {
+        let config: NannyConfig = toml::from_str(r#"
+[tools]
+allowed = ["http_get"]
+
+[tools.http_get]
+max_calls = 3
+"#).expect("must parse");
+
+        assert!(config.tools.per_tool["http_get"].labels().is_empty());
+    }
+
+    /// Label order follows TOOL_LABELS, not declaration order, so the audit
+    /// log and /status stay byte-comparable across runs.
+    #[test]
+    fn label_order_is_fixed_not_declaration_order() {
+        let config: NannyConfig = toml::from_str(r#"
+[tools]
+allowed = ["t"]
+
+[tools.t]
+reads_sensitive = true
+moves_money     = true
+reads_untrusted = true
+"#).expect("must parse");
+
+        assert_eq!(
+            config.tools.per_tool["t"].labels(),
+            vec!["reads_untrusted", "moves_money", "reads_sensitive"],
+        );
+    }
+
+    /// An unknown key in [tools.<name>] is rejected rather than ignored. A
+    /// misspelled label that parses silently is a control the operator thinks
+    /// they declared and does not have.
+    #[test]
+    fn a_misspelled_label_is_rejected() {
+        let result: Result<NannyConfig, _> = toml::from_str(r#"
+[tools]
+allowed = ["t"]
+
+[tools.t]
+reads_untrused = true
+"#);
+        assert!(result.is_err(), "a misspelled label must not parse silently");
     }
 
     #[test]
