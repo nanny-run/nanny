@@ -102,6 +102,21 @@ fn free_port() -> u16 {
 /// loopback port blocks for roughly two seconds on SYN retries instead of
 /// failing immediately, which stretches the poll interval from 100 ms to ~2 s
 /// and turns a short readiness window into a false negative.
+/// Polls until `path` exists, or `attempts` × 100 ms elapse.
+///
+/// Used where "the port is listening" is not the property under test. The
+/// governor binds its listener before it spawns `[start].cmd`, so a test that
+/// asserts the app ran has to wait for the app, not for the socket.
+fn wait_for_file(path: &Path, attempts: u32) -> bool {
+    for _ in 0..attempts {
+        if path.exists() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    false
+}
+
 fn wait_for_port(port: u16, attempts: u32) -> bool {
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     for _ in 0..attempts {
@@ -677,10 +692,14 @@ fn serve_runs_the_start_command_and_remains_joinable() {
     let home = temp_dir();
 
     let server_dir = temp_dir();
+    // The app touches a marker before sleeping, so the test can wait for the
+    // app itself rather than for the governor's socket.
+    let app_marker = server_dir.join("app-started");
     fs::write(
         server_dir.join("nanny.toml"),
-        r#"[start]
-cmd = "sh -c \"echo SERVE-RAN-THE-APP; sleep 5\""
+        format!(
+            r#"[start]
+cmd = "sh -c \"echo SERVE-RAN-THE-APP; touch {}; sleep 5\""
 
 [limits]
 steps   = 100
@@ -690,6 +709,8 @@ timeout = 60000
 [observability]
 log = "file"
 "#,
+            app_marker.display()
+        ),
     )
     .unwrap();
     let governor_id = write_app_identity(&server_dir);
@@ -705,6 +726,14 @@ log = "file"
 
     let ready = wait_for_port(server_port, 100);
     assert!(ready, "governor must become ready within 10 s");
+
+    // Binding the listener and launching [start].cmd are separate steps, and
+    // this test is about the second one. Waiting only on the port kills the
+    // governor in the gap between them.
+    assert!(
+        wait_for_file(&app_marker, 100),
+        "--serve must launch [start].cmd within 10 s of becoming ready"
+    );
 
     // While the governor's own app is still running, a separate process must
     // still be able to join. Launching an app does not close the door.
