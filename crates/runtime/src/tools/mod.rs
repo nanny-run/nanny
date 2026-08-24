@@ -29,10 +29,6 @@ pub struct ToolRegistry {
     /// `Box<dyn Tool>` means any type implementing `Tool` can be stored here —
     /// regardless of its concrete type. This is Rust's runtime polymorphism.
     tools: HashMap<String, Box<dyn Tool>>,
-
-    /// Token overrides from nanny.toml [tools.<name>] tokens_per_call.
-    /// When set, this value replaces the tool's own declared_cost().
-    cost_overrides: HashMap<String, u64>,
 }
 
 impl ToolRegistry {
@@ -40,17 +36,7 @@ impl ToolRegistry {
     pub fn new() -> Self {
         Self {
             tools: HashMap::new(),
-            cost_overrides: HashMap::new(),
         }
-    }
-
-    /// Override the declared token cost for a tool.
-    ///
-    /// Reads from nanny.toml `[tools.<name>] tokens_per_call`.
-    /// When set, `declared_cost()` returns this value instead of the
-    /// tool's own declared cost.
-    pub fn set_cost_override(&mut self, tool_name: &str, cost: u64) {
-        self.cost_overrides.insert(tool_name.to_string(), cost);
     }
 
     /// Register a tool.
@@ -105,18 +91,10 @@ impl ToolExecutor for ToolRegistry {
         }
     }
 
-    /// Return the cost of a registered tool.
-    ///
-    /// If a cost override was set via `set_cost_override`, that value is used.
-    /// Otherwise falls back to the tool's own declared cost.
-    /// Returns `None` if the tool is not registered.
+    /// Return the declared cost of a registered tool, or `None` if it is not
+    /// registered. Reported for attribution only; no cost stops a run.
     fn declared_cost(&self, name: &str) -> Option<u64> {
-        if self.tools.contains_key(name) {
-            Some(self.cost_overrides.get(name).copied()
-                .unwrap_or_else(|| self.tools[name].declared_cost()))
-        } else {
-            None
-        }
+        self.tools.get(name).map(|t| t.declared_cost())
     }
 }
 
@@ -185,22 +163,6 @@ mod tests {
 
         assert_eq!(registry.declared_cost("echo"), Some(5));
         assert_eq!(registry.declared_cost("unknown"), None);
-    }
-
-    #[test]
-    fn cost_override_replaces_declared_cost() {
-        let mut registry = ToolRegistry::new();
-        registry.register(Box::new(EchoTool)); // declared_cost = 5
-        registry.set_cost_override("echo", 99);
-
-        assert_eq!(registry.declared_cost("echo"), Some(99));
-    }
-
-    #[test]
-    fn cost_override_does_not_affect_unregistered_tool() {
-        let mut registry = ToolRegistry::new();
-        registry.set_cost_override("ghost", 50); // tool not registered
-        assert_eq!(registry.declared_cost("ghost"), None);
     }
 
     #[test]

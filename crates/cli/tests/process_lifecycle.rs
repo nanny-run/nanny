@@ -825,35 +825,4 @@ timeout = 60000
     );
 }
 
-// ── T9b: plain `nanny run` refuses a proxy allowlist it cannot enforce ───────
-//
-// The in-process bridge listens on a Unix socket and has no CONNECT proxy;
-// HTTPS_PROXY can only name a host:port, so this path can never honor
-// [proxy] allowed_hosts. Before this guard the section was silently inert:
-// no injection, no enforcement, no warning, traffic leaving ungoverned while
-// nanny.toml said otherwise, the same fail-open G8 fixed on the --join path
-// while leaving it open on this one.
-
-
-// ── T10: proxy env vars are auto-injected when the SERVER has [proxy] configured ─
-//
-// The server's own nanny.toml (not the client's) decides whether [proxy]
-// allowed_hosts is active. When it is, cmd_run_via_network_server must set
-// HTTPS_PROXY / HTTP_PROXY (and lowercase) on the child pointing at the
-// governor, plus NO_PROXY for the loopback address — without the dev setting
-// anything by hand. Uses a different directory/nanny.toml for the server vs.
-// the client on purpose, matching how these are used in practice.
-//
-// Sandboxed via NANNY_HOME, not HOME (see T7's comment for why).
-
-
-// ── T11: proxy env vars are NOT injected when the server has no [proxy] ──────
-//
-// Regression guard for the opposite case: a server with no [proxy] section
-// (or an empty allowed_hosts) must not cause the child to get HTTPS_PROXY/
-// HTTP_PROXY pointed at it — that would route all outbound traffic into a
-// proxy that immediately 404s every CONNECT ("proxy not configured"),
-// breaking legitimate calls.
-//
-// Sandboxed via NANNY_HOME, not HOME (see T7's comment for why).
 

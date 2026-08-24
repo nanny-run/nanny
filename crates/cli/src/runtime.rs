@@ -28,18 +28,10 @@ pub struct RuntimeComponents {
 /// The mapping is intentionally explicit — every field traces back to config:
 ///
 /// ```text
-/// config.tools.*       → ToolRegistry (built-in tool set + cost overrides)
+/// config.tools.*       → allowlist + per-tool max_calls
 /// ```
-pub fn build_from_config(config: &NannyConfig) -> RuntimeComponents {
-    // Registry with tokens_per_call overrides from [tools.<name>].
-    let mut registry = nanny_runtime::default_registry();
-    for (tool_name, tool_cfg) in &config.tools.per_tool {
-        if let Some(cost) = tool_cfg.tokens_per_call {
-            registry.set_cost_override(tool_name, cost);
-        }
-    }
-
-    RuntimeComponents { registry }
+pub fn build_from_config(_config: &NannyConfig) -> RuntimeComponents {
+    RuntimeComponents { registry: nanny_runtime::default_registry() }
 }
 
 // ── build_bridge_components ───────────────────────────────────────────────────
@@ -54,15 +46,8 @@ pub fn build_bridge_components(config: &NannyConfig) -> BridgeComponents {
         .filter_map(|(name, cfg)| cfg.max_calls.map(|n| (name.clone(), n)))
         .collect();
 
-    let mut registry = nanny_runtime::default_registry();
-    for (tool_name, tool_cfg) in &config.tools.per_tool {
-        if let Some(cost) = tool_cfg.tokens_per_call {
-            registry.set_cost_override(tool_name, cost);
-        }
-    }
-
     BridgeComponents {
-        registry,
+        registry: nanny_runtime::default_registry(),
         allowed_tools: config.tools.allowed.clone(),
         per_tool_max_calls,
     }
@@ -73,24 +58,17 @@ pub fn build_bridge_components(config: &NannyConfig) -> BridgeComponents {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nanny_config::{LimitsConfig, NannyConfig, ObservabilityConfig, ToolsConfig};
+    use nanny_config::{NannyConfig, ObservabilityConfig, ToolsConfig};
     use std::collections::HashMap;
 
     fn test_config() -> NannyConfig {
         NannyConfig {
             start: None,
-            limits: LimitsConfig {
-                max_steps: 42,
-                max_tokens: 500,
-                timeout_ms: 15_000,
-                named: HashMap::new(),
-            },
             tools: ToolsConfig {
                 allowed: vec!["http_get".to_string()],
                 per_tool: HashMap::new(),
             },
             observability: ObservabilityConfig::default(),
-            proxy: None,
         }
     }
 
@@ -125,7 +103,7 @@ mod tests {
         let mut config = test_config();
         config.tools.per_tool.insert(
             "http_get".to_string(),
-            nanny_config::ToolConfig { tokens_per_call: None, max_calls: Some(3) },
+            nanny_config::ToolConfig { max_calls: Some(3) },
         );
 
         let components = build_bridge_components(&config);

@@ -28,9 +28,6 @@ pub enum ConfigError {
 
     #[error("invalid config: {0}")]
     Parse(String),
-
-    #[error("named limits '{name}' not found in config — available: {available:?}")]
-    NamedLimitsNotFound { name: String, available: Vec<String> },
 }
 
 // ── Top-level config ──────────────────────────────────────────────────────────
@@ -43,9 +40,6 @@ pub struct NannyConfig {
     #[serde(default)]
     pub start: Option<StartConfig>,
 
-    /// Hard limits that govern every execution under this config.
-    pub limits: LimitsConfig,
-
     /// Tool permission policy.
     #[serde(default)]
     pub tools: ToolsConfig,
@@ -53,11 +47,6 @@ pub struct NannyConfig {
     /// Event log output settings.
     #[serde(default)]
     pub observability: ObservabilityConfig,
-
-    /// HTTP CONNECT proxy settings for the network server.
-    /// Only active on `nanny run --serve` when `[proxy] allowed_hosts` is set.
-    #[serde(default)]
-    pub proxy: Option<ProxyConfig>,
 }
 
 // ── StartConfig ───────────────────────────────────────────────────────────────
@@ -78,57 +67,6 @@ pub struct StartConfig {
     pub cmd: String,
 }
 
-// ── LimitsConfig ─────────────────────────────────────────────────────────────
-
-/// Global execution limits — applied to all runs unless a named set is selected.
-///
-/// TOML field names are short: steps, tokens, timeout.
-/// Rust field names are descriptive: max_steps, max_tokens, timeout_ms.
-///
-/// Named limit sets live as subtables: [limits.researcher], [limits.writer], etc.
-/// A named set inherits all fields from [limits] and overrides only what it declares.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LimitsConfig {
-    /// Maximum number of steps before the agent is stopped.
-    /// TOML key: steps
-    #[serde(rename = "steps")]
-    pub max_steps: u32,
-
-    /// Maximum LLM tokens before the agent is stopped.
-    /// Charged per tool call via `tokens_per_call` or measured via `nanny.instrument`.
-    /// TOML key: tokens
-    #[serde(rename = "tokens")]
-    pub max_tokens: u64,
-
-    /// Wall-clock timeout in milliseconds.
-    /// TOML key: timeout
-    #[serde(rename = "timeout")]
-    pub timeout_ms: u64,
-
-    /// Named limit sets. Each key is a set name (e.g., "researcher").
-    /// Each value overrides only the fields it declares — rest inherit from [limits].
-    /// In TOML these appear as [limits.researcher], [limits.writer], etc.
-    #[serde(flatten, default)]
-    pub named: HashMap<String, PartialLimitsConfig>,
-}
-
-/// A partial limit set used in named overrides.
-/// All fields are optional — only declared fields override the parent [limits] defaults.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct PartialLimitsConfig {
-    /// Override for max_steps. If None, inherits from [limits].
-    #[serde(rename = "steps", default)]
-    pub max_steps: Option<u32>,
-
-    /// Override for max_tokens. If None, inherits from [limits].
-    #[serde(rename = "tokens", default)]
-    pub max_tokens: Option<u64>,
-
-    /// Override for timeout_ms. If None, inherits from [limits].
-    #[serde(rename = "timeout", default)]
-    pub timeout_ms: Option<u64>,
-}
-
 // ── ToolsConfig ───────────────────────────────────────────────────────────────
 
 /// Tool permission and per-tool configuration.
@@ -145,14 +83,11 @@ pub struct ToolsConfig {
     pub per_tool: HashMap<String, ToolConfig>,
 }
 
-/// Per-tool execution limits.
+/// Per-tool configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ToolConfig {
     /// Maximum number of times this tool may be called in one execution.
     pub max_calls: Option<u32>,
-
-    /// Tokens charged per call to this tool.
-    pub tokens_per_call: Option<u64>,
 }
 
 // ── ObservabilityConfig ───────────────────────────────────────────────────────
@@ -264,33 +199,6 @@ pub enum LogTarget {
     File,
 }
 
-// ── ProxyConfig ───────────────────────────────────────────────────────────────
-
-/// HTTP CONNECT proxy configuration for the network server.
-///
-/// Only active on `nanny run --serve` when `[proxy] allowed_hosts` is set.
-/// The proxy forwards HTTPS traffic from agents to allowed hosts,
-/// intercepting all outbound HTTP regardless of `#[nanny::tool]` decoration.
-///
-/// ```toml
-/// [proxy]
-/// allowed_hosts = ["api.openai.com", "api.groq.com", "*.anthropic.com"]
-/// ```
-///
-/// Proxy is opt-in. If `allowed_hosts` is missing or empty, the proxy is treated as not configured.
-/// Configure at least one host to activate it.
-/// Loopback (127.x.x.x, ::1) and RFC-1918 private ranges are always
-/// blocked in code regardless of this list.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ProxyConfig {
-    /// Hostnames the proxy may forward to.
-    ///
-    /// Supports exact names (`"api.openai.com"`) and glob patterns (`"*.anthropic.com"`).
-    /// Loopback and RFC-1918 private ranges are blocked regardless of this list.
-    #[serde(default)]
-    pub allowed_hosts: Vec<String>,
-}
-
 // ── Cloud sync ─────────────────────────────────────────────────────────────────
 
 /// Environment variable holding the cloud API key. **The single input that
@@ -352,40 +260,6 @@ pub fn load(path: &Path) -> Result<NannyConfig, ConfigError> {
     })
 }
 
-// ── Named limits resolution ───────────────────────────────────────────────────
-
-/// Resolve a named limit set from config, inheriting from [limits] defaults.
-///
-/// Returns `Err(ConfigError::NamedLimitsNotFound)` if the name does not exist.
-/// Returns the fully resolved limits with inheritance applied.
-pub fn resolve_named_limits(
-    config: &NannyConfig,
-    name: &str,
-) -> Result<ResolvedLimits, ConfigError> {
-    let partial = config.limits.named.get(name).ok_or_else(|| {
-        let available: Vec<String> = config.limits.named.keys().cloned().collect();
-        ConfigError::NamedLimitsNotFound {
-            name: name.to_string(),
-            available,
-        }
-    })?;
-
-    Ok(ResolvedLimits {
-        max_steps: partial.max_steps.unwrap_or(config.limits.max_steps),
-        max_tokens: partial.max_tokens.unwrap_or(config.limits.max_tokens),
-        timeout_ms: partial.timeout_ms.unwrap_or(config.limits.timeout_ms),
-    })
-}
-
-/// A fully resolved limit set — no Option fields, no inheritance needed.
-/// Returned by `resolve_named_limits`. Safe to hand directly to the runtime.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ResolvedLimits {
-    pub max_steps: u32,
-    pub max_tokens: u64,
-    pub timeout_ms: u64,
-}
-
 // ── Default TOML template ─────────────────────────────────────────────────────
 
 /// The canonical starter nanny.toml written by `nanny init`.
@@ -422,29 +296,6 @@ pub fn default_toml() -> &'static str {
 #   Node:    cmd = "node agent.js"
 cmd = "python agent.py"
 
-[limits]
-# Hard ceilings applied to every run. When any limit is crossed, nanny stops
-# the agent immediately and emits a structured ExecutionStopped event.
-
-# Maximum number of tool calls before the agent is stopped.
-steps = 100
-
-# Maximum LLM tokens before the agent is stopped.
-# Tokens are charged per tool call via @tool(tokens=N) or #[tool(tokens = N)],
-# or measured automatically via nanny.instrument(client).
-tokens = 50000
-
-# Wall-clock timeout in milliseconds.
-timeout = 30000
-
-# Named limit sets inherit from [limits] and override only what they declare.
-# Useful for giving specific roles or workloads their own ceilings.
-# Activate with: nanny run --limits=researcher
-# [limits.researcher]
-# steps   = 500
-# tokens  = 200000
-# timeout = 600000
-
 [tools]
 # Explicit allowlist of tools the agent is permitted to call.
 # Any tool not listed here causes an immediate ToolDenied stop.
@@ -453,12 +304,12 @@ timeout = 30000
 # http_get is a built-in Rust SDK tool. Replace or extend with your own names.
 allowed = ["http_get"]
 
-# Per-tool limits. Override token cost and max calls per tool.
-# Keys must match an entry in the allowed list above.
+# Per-tool configuration. Keys must match an entry in the allowed list above.
+#
+# max_calls caps how many times one tool may be called in a single run.
 #
 # [tools.http_get]
-# max_calls      = 10
-# tokens_per_call = 200
+# max_calls = 10
 
 [observability]
 # Where to write the structured NDJSON event log.
@@ -474,11 +325,6 @@ log = "stdout"
 # the directory is always .nanny/logs/, owned by nanny, never
 # configurable here. file = "events" writes .nanny/logs/events.ndjson.
 # file = "events"
-
-[proxy]
-# HTTP CONNECT proxy allowlist for the network governance server.
-# Uncomment and add hosts to activate the proxy:
-# allowed_hosts = ["api.openai.com", "api.groq.com"]
 "#
 }
 
@@ -490,132 +336,54 @@ mod tests {
 
     fn full_config_toml() -> &'static str {
         r#"
-[limits]
-steps   = 100
-tokens  = 50000
-timeout = 30000
-
-[limits.researcher]
-steps   = 500
-tokens  = 200000
-timeout = 600000
-
-[limits.writer]
-tokens = 80000
-
 [tools]
 allowed = ["http_get", "send_email"]
 
 [tools.http_get]
-max_calls       = 10
-tokens_per_call = 200
+max_calls = 10
 
 [tools.send_email]
-max_calls       = 2
-tokens_per_call = 500
+max_calls = 2
 
 [observability]
 log = "stdout"
 "#
     }
 
+
     #[test]
     fn default_toml_is_valid() {
         let config: NannyConfig =
             toml::from_str(default_toml()).expect("default_toml() must always be valid TOML");
-
-        assert_eq!(config.limits.max_steps, 100);
-        assert_eq!(config.limits.max_tokens, 50000);
-        assert_eq!(config.limits.timeout_ms, 30000);
-        assert_eq!(config.tools.allowed, vec!["http_get"]);
-        assert_eq!(config.observability.log, LogTarget::Stdout);
-        assert!(
-            config.proxy.is_some(),
-            "default_toml() must include a [proxy] section as a discoverable template"
-        );
-        assert!(
-            config.proxy.unwrap().allowed_hosts.is_empty(),
-            "default proxy allowlist must default to empty (opt-in)"
-        );
+        assert_eq!(config.tools.allowed, vec!["http_get".to_string()]);
     }
 
+    /// A config carrying nothing but [start] parses. Nothing is mandatory now
+    /// that [limits] is gone, and an undeclared allowlist denies every tool
+    /// rather than failing to load.
     #[test]
-    fn missing_limits_is_rejected() {
-        let bad = r#"
+    fn a_config_with_only_start_is_valid() {
+        let config: NannyConfig = toml::from_str(r#"
 [start]
 cmd = "true"
-"#;
-        assert!(
-            toml::from_str::<NannyConfig>(bad).is_err(),
-            "config without [limits] must be rejected"
-        );
+"#).expect("a [start]-only config must parse");
+        assert!(config.tools.allowed.is_empty(), "an undeclared allowlist denies everything");
     }
 
     #[test]
-    fn named_limits_are_parsed() {
-        let config: NannyConfig = toml::from_str(full_config_toml()).expect("must parse");
+    fn per_tool_max_calls_is_parsed() {
+        let config: NannyConfig =
+            toml::from_str(full_config_toml()).expect("fixture must parse");
 
-        assert!(
-            config.limits.named.contains_key("researcher"),
-            "researcher limits must be parsed"
-        );
-        let r = &config.limits.named["researcher"];
-        assert_eq!(r.max_steps, Some(500));
-        assert_eq!(r.max_tokens, Some(200_000));
-        assert_eq!(r.timeout_ms, Some(600_000));
+        assert_eq!(config.tools.per_tool.len(), 2);
+        assert_eq!(config.tools.per_tool["http_get"].max_calls, Some(10));
+        assert_eq!(config.tools.per_tool["send_email"].max_calls, Some(2));
     }
 
-    #[test]
-    fn named_limits_partial_override() {
-        // [limits.writer] only overrides cost — steps and timeout should be None
-        let config: NannyConfig = toml::from_str(full_config_toml()).expect("must parse");
 
-        let writer = &config.limits.named["writer"];
-        assert_eq!(writer.max_tokens, Some(80_000));
-        assert_eq!(writer.max_steps, None, "writer does not override steps");
-        assert_eq!(writer.timeout_ms, None, "writer does not override timeout");
-    }
 
-    #[test]
-    fn resolve_named_limits_inherits_correctly() {
-        let config: NannyConfig = toml::from_str(full_config_toml()).expect("must parse");
 
-        // researcher overrides all three
-        let r = resolve_named_limits(&config, "researcher").expect("must resolve");
-        assert_eq!(r.max_steps, 500);
-        assert_eq!(r.max_tokens, 200_000);
-        assert_eq!(r.timeout_ms, 600_000);
 
-        // writer only overrides tokens — steps and timeout inherit from [limits]
-        let w = resolve_named_limits(&config, "writer").expect("must resolve");
-        assert_eq!(w.max_steps, 100, "inherits from [limits]");
-        assert_eq!(w.max_tokens, 80_000, "overridden by [limits.writer]");
-        assert_eq!(w.timeout_ms, 30000, "inherits from [limits]");
-    }
-
-    #[test]
-    fn resolve_named_limits_not_found_errors() {
-        let config: NannyConfig = toml::from_str(full_config_toml()).expect("must parse");
-
-        let result = resolve_named_limits(&config, "nonexistent");
-        assert!(
-            matches!(result, Err(ConfigError::NamedLimitsNotFound { .. })),
-            "missing named set must return NamedLimitsNotFound"
-        );
-    }
-
-    #[test]
-    fn per_tool_config_is_parsed() {
-        let config: NannyConfig = toml::from_str(full_config_toml()).expect("must parse");
-
-        let http = config.tools.per_tool.get("http_get").expect("http_get must be present");
-        assert_eq!(http.max_calls, Some(10));
-        assert_eq!(http.tokens_per_call, Some(200));
-
-        let email = config.tools.per_tool.get("send_email").expect("send_email must be present");
-        assert_eq!(email.max_calls, Some(2));
-        assert_eq!(email.tokens_per_call, Some(500));
-    }
 
     #[test]
     fn observability_defaults_to_stdout() {
@@ -725,78 +493,9 @@ timeout = 5000
         assert_eq!(start.cmd, "python agent.py");
     }
 
-    #[test]
-    fn proxy_config_is_optional() {
-        let config: NannyConfig = toml::from_str(
-            r#"
-[limits]
-steps   = 10
-tokens  = 5000
-timeout = 5000
-"#,
-        )
-        .expect("must parse");
 
-        assert!(config.proxy.is_none());
-    }
 
-    #[test]
-    fn proxy_config_parses_allowed_hosts() {
-        let config: NannyConfig = toml::from_str(
-            r#"
-[limits]
-steps   = 10
-tokens  = 5000
-timeout = 5000
 
-[proxy]
-allowed_hosts = ["api.openai.com", "*.anthropic.com"]
-"#,
-        )
-        .expect("must parse");
-
-        let proxy = config.proxy.expect("[proxy] must be present");
-        assert_eq!(proxy.allowed_hosts, vec!["api.openai.com", "*.anthropic.com"]);
-    }
-
-    #[test]
-    fn proxy_config_empty_allowed_hosts_parses() {
-        // Empty list is valid TOML — startup validates it at runtime, not parse time.
-        let config: NannyConfig = toml::from_str(
-            r#"
-[limits]
-steps   = 10
-tokens  = 5000
-timeout = 5000
-
-[proxy]
-allowed_hosts = []
-"#,
-        )
-        .expect("must parse — empty allowed_hosts is rejected at server startup, not config parse");
-
-        let proxy = config.proxy.expect("[proxy] must be present");
-        assert!(proxy.allowed_hosts.is_empty());
-    }
-
-    #[test]
-    fn proxy_config_without_allowed_hosts_defaults_to_empty() {
-        // [proxy] section present but allowed_hosts omitted → defaults to empty vec.
-        let config: NannyConfig = toml::from_str(
-            r#"
-[limits]
-steps   = 10
-tokens  = 5000
-timeout = 5000
-
-[proxy]
-"#,
-        )
-        .expect("must parse");
-
-        let proxy = config.proxy.expect("[proxy] must be present");
-        assert!(proxy.allowed_hosts.is_empty());
-    }
 
     #[test]
     fn legacy_managed_section_is_ignored_but_detectable() {
