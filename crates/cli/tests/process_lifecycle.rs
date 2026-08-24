@@ -95,6 +95,25 @@ fn free_port() -> u16 {
         .port()
 }
 
+/// Polls a loopback port until something accepts a connection, `attempts`
+/// times at 100 ms apart.
+///
+/// `connect_timeout`, not plain `connect`: on Windows a connect to a closed
+/// loopback port blocks for roughly two seconds on SYN retries instead of
+/// failing immediately, which stretches the poll interval from 100 ms to ~2 s
+/// and turns a short readiness window into a false negative.
+fn wait_for_port(port: u16, attempts: u32) -> bool {
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    for _ in 0..attempts {
+        if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(200)).is_ok()
+        {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    false
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 /// A process that exits on its own completes cleanly — exit code 0.
@@ -439,6 +458,13 @@ log = "stdout"
 // Regression guard: if the cert check accidentally runs for loopback, the
 // server would fail to start and this test would catch it.
 //
+// Deliberately no [start]: `--serve` runs [start] under the governor and tears
+// the governor down the moment that app exits, so a fixture like
+// `cmd = "echo hello"` leaves the listener open for only a few milliseconds.
+// This test is about the bind, not about running an app, so it keeps the
+// governor headless and therefore alive until the test kills it. T8c covers
+// the serve-plus-app path.
+//
 // Sandboxed via NANNY_HOME, not HOME: `dirs::home_dir()` ignores the `HOME`
 // env override on Windows, so `nanny_server_state_dir` reads `NANNY_HOME`
 // first (see `commands::server::nanny_home_dir`), which works identically on
@@ -451,10 +477,7 @@ fn server_start_loopback_does_not_require_cert_files() {
 
     fs::write(
         dir.join("nanny.toml"),
-        r#"[start]
-cmd = "echo hello"
-
-[limits]
+        r#"[limits]
 steps   = 10
 tokens  = 100
 timeout = 5000
@@ -477,14 +500,7 @@ log = "stdout"
         .expect("nanny run --serve must spawn");
 
     // Poll until the port accepts connections (up to 5s).
-    let mut ready = false;
-    for _ in 0..50 {
-        if std::net::TcpStream::connect(format!("127.0.0.1:{port}")).is_ok() {
-            ready = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
+    let ready = wait_for_port(port, 50);
 
     // Kill the server process.
     let _ = child.kill();
@@ -559,14 +575,7 @@ log = "stdout"
         .expect("governance server must spawn");
 
     // Wait for the server to be ready.
-    let mut ready = false;
-    for _ in 0..50 {
-        if std::net::TcpStream::connect(format!("127.0.0.1:{server_port}")).is_ok() {
-            ready = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
+    let ready = wait_for_port(server_port, 50);
     assert!(ready, "governance server must become ready within 5 s");
 
     // Join it explicitly by id.
@@ -654,14 +663,7 @@ timeout = 10000
         .spawn()
         .expect("governance server must spawn");
 
-    let mut ready = false;
-    for _ in 0..50 {
-        if std::net::TcpStream::connect(format!("127.0.0.1:{server_port}")).is_ok() {
-            ready = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
+    let ready = wait_for_port(server_port, 50);
     assert!(ready, "governance server must become ready within 5 s");
 
     let output = Command::new(nanny_bin())
@@ -805,14 +807,7 @@ log = "file"
         .spawn()
         .expect("governor must spawn");
 
-    let mut ready = false;
-    for _ in 0..100 {
-        if std::net::TcpStream::connect(format!("127.0.0.1:{server_port}")).is_ok() {
-            ready = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
+    let ready = wait_for_port(server_port, 100);
     assert!(ready, "governor must become ready within 10 s");
 
     // While the governor's own app is still running, a separate process must
@@ -890,14 +885,7 @@ timeout = 60000
         .spawn()
         .expect("governor must spawn");
 
-    let mut ready = false;
-    for _ in 0..100 {
-        if std::net::TcpStream::connect(format!("127.0.0.1:{server_port}")).is_ok() {
-            ready = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
+    let ready = wait_for_port(server_port, 100);
 
     let _ = server.kill();
     let out = server.wait_with_output().expect("governor must be reaped");
@@ -1040,14 +1028,7 @@ log = "stdout"
         .spawn()
         .expect("governance server must spawn");
 
-    let mut ready = false;
-    for _ in 0..50 {
-        if std::net::TcpStream::connect(format!("127.0.0.1:{server_port}")).is_ok() {
-            ready = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
+    let ready = wait_for_port(server_port, 50);
     assert!(ready, "governance server must become ready within 5 s");
 
     // proxy_token, a separate CONNECT-only credential from the session token,
@@ -1161,14 +1142,7 @@ log = "stdout"
         .spawn()
         .expect("governance server must spawn");
 
-    let mut ready = false;
-    for _ in 0..50 {
-        if std::net::TcpStream::connect(format!("127.0.0.1:{server_port}")).is_ok() {
-            ready = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
+    let ready = wait_for_port(server_port, 50);
     assert!(ready, "governance server must become ready within 5 s");
 
     let output = Command::new(nanny_bin())
