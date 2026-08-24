@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 // ── now_ms ────────────────────────────────────────────────────────────────────
 
@@ -26,10 +27,24 @@ pub fn now_ms() -> u64 {
 #[serde(tag = "event")]
 pub enum ExecutionEvent {
     /// Emitted exactly once when execution begins.
-    /// Records the command being run.
+    ///
+    /// Records the command and the **declared authority** of this run: exactly
+    /// what the agent was permitted to do before it did anything. Refusals are
+    /// recorded as they happen, but a log of refusals alone cannot answer "what
+    /// was this agent allowed to do", which is the question an auditor actually
+    /// asks. Writing the grant at the start makes the answer a fact in the log
+    /// rather than an inference from absence.
+    ///
+    /// This carries the half of the grant the governor knows: the config. The
+    /// rules half lives in the agent's own process and arrives separately, as
+    /// [`ExecutionEvent::RulesDeclared`].
     ExecutionStarted {
         ts: u64,
         command: String,
+        /// The tool allowlist, as declared in `[tools] allowed`.
+        allowed_tools: Vec<String>,
+        /// Operator-declared labels per tool, for every allowlisted tool.
+        tool_labels: BTreeMap<String, Vec<String>>,
     },
 
     /// Emitted when a tool call is evaluated and allowed by policy.
@@ -149,6 +164,23 @@ pub enum ExecutionEvent {
         ts: u64,
         app_id: String,
         name: String,
+    },
+
+    /// Emitted once when a process declares the rules it has registered.
+    ///
+    /// The second half of declared authority. `ExecutionStarted` records the
+    /// config-side grant (allowlist and labels), which the governor reads from
+    /// nanny.toml; rules are compiled into the agent's own process and the
+    /// governor cannot see them, so the agent declares them here.
+    ///
+    /// Split across two events on purpose rather than guessed at in one: the
+    /// governor emitting `rules: []` because it cannot see them would read as
+    /// "no rules registered", which is worse than saying nothing.
+    ///
+    /// Deduped bridge-side, so a caller may safely redeclare.
+    RulesDeclared {
+        ts: u64,
+        rules: Vec<String>,
     },
 
     /// Emitted when the agent enters a named scope via `agent_enter`.

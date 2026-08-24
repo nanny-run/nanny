@@ -225,6 +225,27 @@ pub fn set_app(app_id: impl Into<String>, name: impl Into<String>) {
     runtime::set_app(app_id.into(), name.into());
 }
 
+/// Declare the rules registered in this process to the governor.
+///
+/// Records a `RulesDeclared` audit event listing every `#[nanny::rule]` name
+/// compiled into this binary. Normally you never call this: the first governed
+/// tool call declares them for you.
+///
+/// It exists because rules are the half of declared authority the governor
+/// cannot see. It reads nanny.toml, not your binary, so without this the audit
+/// log records every refusal but never what *could* have refused, which is the
+/// difference between "nothing was blocked" and "nothing was watching".
+///
+/// Declaration only: naming a rule here never enforces it. Enforcement stays
+/// with the rule body.
+///
+/// # Passthrough mode
+///
+/// When running outside `nanny run` (no bridge active) this is a no-op.
+pub fn declare_rules() {
+    runtime::declare_rules();
+}
+
 // ── Run control ─────────────────────────────────────────────────────────────
 
 /// Start a new governed run in the current process. Returns the new run id.
@@ -614,6 +635,12 @@ mod runtime {
         tool_name: &str,
         args: HashMap<String, String>,
     ) -> Option<&'static str> {
+        // Declare once, on the first governed call, so the audit log records
+        // what could have refused without the operator having to remember to
+        // call declare_rules() by hand. Bridge-side dedupe makes the repeat
+        // calls free; this guard just avoids the HTTP round trip.
+        declare_rules_once();
+
         let elapsed_ms = client_state().lock().unwrap().start.elapsed().as_millis() as u64;
 
         // Fetch all tracked counters from the bridge (authoritative state).
@@ -879,6 +906,34 @@ mod runtime {
         }
         let body = serde_json::json!({"app_id": app_id, "name": name});
         let _ = http_post("/app", &body.to_string());
+    }
+
+    /// POST /rules: declare the rules registered in this process.
+    ///
+    /// Reads the same `inventory` registry `evaluate_local_rules` enforces
+    /// from, so the declaration cannot drift from what actually runs.
+    ///
+    /// No-op in passthrough mode (no bridge) and when nothing is registered.
+    /// Fire-and-forget on the same contract as `set_harness`.
+    /// Declare registered rules the first time anything is governed.
+    ///
+    /// `Once` rather than a bridge round trip per call: the bridge already
+    /// dedupes, but the cheapest request is the one never sent.
+    pub(crate) fn declare_rules_once() {
+        static DECLARED: std::sync::Once = std::sync::Once::new();
+        DECLARED.call_once(declare_rules);
+    }
+
+    pub fn declare_rules() {
+        if !is_active() {
+            return;
+        }
+        let names: Vec<&str> = inventory::iter::<Rule>.into_iter().map(|r| r.name).collect();
+        if names.is_empty() {
+            return;
+        }
+        let body = serde_json::json!({"rules": names});
+        let _ = http_post("/rules", &body.to_string());
     }
 
     // ── Agent enter / exit ────────────────────────────────────────────────────

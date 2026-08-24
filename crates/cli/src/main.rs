@@ -609,7 +609,7 @@ fn cmd_run(
     // ── Open event log ────────────────────────────────────────────────────
     let mut log = events::EventWriter::from_config(&config.observability, config_dir)?;
 
-    let started_event = execution_started_event(&command.join(" "));
+    let started_event = execution_started_event(&command.join(" "), &config.tools);
     log.write(&started_event)?;
 
     // ── Start bridge ──────────────────────────────────────────────────────
@@ -779,10 +779,32 @@ fn cmd_run(
 
 // ── Event constructors ────────────────────────────────────────────────────────
 
-fn execution_started_event(command: &str) -> ExecutionEvent {
+/// The declared authority of this run, written before the agent does anything.
+///
+/// Carries the config-side half of the grant: what the governor knows from
+/// nanny.toml. The rules half lives in the agent's process and arrives as
+/// `RulesDeclared` once it contacts the bridge.
+fn execution_started_event(command: &str, tools: &nanny_config::ToolsConfig) -> ExecutionEvent {
+    // Every allowlisted tool appears, unlabelled ones with an empty list, so a
+    // reader can tell "declared, no labels" from "never declared".
+    let tool_labels = tools
+        .allowed
+        .iter()
+        .map(|name| {
+            let labels = tools
+                .per_tool
+                .get(name)
+                .map(|cfg| cfg.labels().iter().map(|l| l.to_string()).collect())
+                .unwrap_or_default();
+            (name.clone(), labels)
+        })
+        .collect();
+
     ExecutionEvent::ExecutionStarted {
         ts: now_ms(),
         command: command.to_string(),
+        allowed_tools: tools.allowed.clone(),
+        tool_labels,
     }
 }
 

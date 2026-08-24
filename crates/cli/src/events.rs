@@ -71,6 +71,10 @@ mod tests {
         ExecutionEvent::ExecutionStarted {
             ts: 0,
             command: "python agent.py".to_string(),
+            allowed_tools: vec!["http_get".to_string()],
+            tool_labels: [("http_get".to_string(), vec!["reads_untrusted".to_string()])]
+                .into_iter()
+                .collect(),
         }
     }
 
@@ -92,6 +96,8 @@ mod tests {
         assert_eq!(v["event"], "ExecutionStarted");
         assert_eq!(v["command"], "python agent.py");
         assert!(v["ts"].is_number());
+        assert_eq!(v["allowed_tools"][0], "http_get");
+        assert_eq!(v["tool_labels"]["http_get"][0], "reads_untrusted");
     }
 
     #[test]

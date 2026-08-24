@@ -125,6 +125,7 @@ pub(crate) struct BridgeState {
     // `HarnessIdentified`: the SDK may resend the harness on every LLM call, so
     // we only append an event when it actually changes.
     last_harness: Option<(String, Option<String>)>,
+    last_rules: Option<Vec<String>>,
 
     // Last-recorded app attribution `(app_id, name)`. Dedups `AppIdentified`
     // the same way, so a caller may safely (re)declare its identity on every
@@ -173,6 +174,7 @@ impl Bridge {
             start_time: std::time::Instant::now(),
             events: Vec::new(),
             last_harness: None,
+            last_rules: None,
             last_app: None,
         }));
 
@@ -394,6 +396,7 @@ fn dispatch(
         ("POST", "/agent/exit")    => handle_agent_exit(shared),
         ("POST", "/llm/usage")     => handle_llm_usage(&req.body, shared),
         ("POST", "/harness")       => handle_harness(&req.body, shared),
+        ("POST", "/rules")         => handle_rules(&req.body, shared),
         ("POST", "/app")           => handle_app(&req.body, shared),
         _                          => BridgeResp::json(404, r#"{"error":"Not Found"}"#),
     }
@@ -731,6 +734,58 @@ pub(crate) fn handle_harness(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> B
     record_harness(&mut guard, req.name, req.version);
 
     BridgeResp::json(200, r#"{"status":"ok"}"#)
+}
+
+/// POST /rules {"rules": ["no_send_after_read", ...]}
+///
+/// Records the rules this process has registered. Emits a `RulesDeclared`
+/// audit event, deduped bridge-side, so a caller may safely redeclare.
+///
+/// This is the half of declared authority the governor cannot see for itself:
+/// rules are compiled into the agent's process, not into nanny.toml. Without
+/// it, the audit log records every refusal but never what could have refused,
+/// which is the difference between "nothing was blocked" and "nothing was
+/// watching".
+///
+/// Declaration only, exactly like `/harness` and `/app`: registering a rule
+/// name here never enforces anything. Enforcement stays where the rule body
+/// is.
+///
+/// Returns `{"status":"ok"}`, `400` for a malformed body.
+pub(crate) fn handle_rules(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
+    #[derive(serde::Deserialize)]
+    struct RulesRequest {
+        #[serde(default)]
+        rules: Vec<String>,
+    }
+
+    let req: RulesRequest = match serde_json::from_slice(body) {
+        Ok(r) => r,
+        Err(_) => return BridgeResp::json(400, r#"{"error":"invalid request body"}"#),
+    };
+
+    let mut guard = shared.lock().unwrap();
+    record_rules(&mut guard, req.rules);
+
+    BridgeResp::json(200, r#"{"status":"ok"}"#)
+}
+
+/// Append a `RulesDeclared` event only when the rule set actually changes.
+///
+/// Sorted and de-duplicated first, so the same set declared in a different
+/// order is the same declaration and does not produce a second event. Rust
+/// rule registration order is link order, which is not stable across builds,
+/// so without this the log would churn for no reason.
+pub(crate) fn record_rules(state: &mut BridgeState, rules: Vec<String>) {
+    let mut rules: Vec<String> =
+        rules.into_iter().map(|r| r.trim().to_string()).filter(|r| !r.is_empty()).collect();
+    rules.sort();
+    rules.dedup();
+    if rules.is_empty() || state.last_rules.as_ref() == Some(&rules) {
+        return;
+    }
+    state.last_rules = Some(rules.clone());
+    append_event(state, ExecutionEvent::RulesDeclared { ts: now_ms(), rules });
 }
 
 /// POST /app {"app_id": "app_...", "name": "..."}
@@ -1124,6 +1179,7 @@ impl RunTemplate {
             start_time: std::time::Instant::now(),
             events: Vec::new(),
             last_harness: None,
+            last_rules: None,
             last_app: None,
         }))
     }
@@ -1547,6 +1603,46 @@ mod tests {
         let (_, body) = post(&b, "/rule/evaluate", r#"{"tool":"echo"}"#);
         let v = json_val(&body);
         assert_eq!(v["status"], "denied");
+    }
+
+    #[test]
+    fn rules_declaration_emits_one_event_and_dedupes() {
+        let b = started(1000);
+
+        let (s, body) = post(&b, "/rules", r#"{"rules":["b_rule","a_rule"]}"#);
+        assert_eq!(s, 200);
+        assert_eq!(json_val(&body)["status"], "ok");
+
+        // Same set, different order, plus a duplicate: still the same
+        // declaration, so no second event.
+        post(&b, "/rules", r#"{"rules":["a_rule","b_rule","a_rule"]}"#);
+
+        let (_, events) = get(&b, "/events");
+        let declared: Vec<serde_json::Value> = events
+            .lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .filter(|v| v["event"] == "RulesDeclared")
+            .collect();
+
+        assert_eq!(declared.len(), 1, "redeclaring the same set must not re-emit");
+        assert_eq!(
+            declared[0]["rules"],
+            serde_json::json!(["a_rule", "b_rule"]),
+            "rules must be sorted: Rust registration order is link order, which \
+             is not stable across builds"
+        );
+    }
+
+    /// An empty declaration is not an event. "No rules registered" is the
+    /// absence of a grant, not a grant of nothing.
+    #[test]
+    fn empty_rules_declaration_emits_nothing() {
+        let b = started(1000);
+        let (s, _) = post(&b, "/rules", r#"{"rules":[]}"#);
+        assert_eq!(s, 200);
+
+        let (_, events) = get(&b, "/events");
+        assert!(!events.contains("RulesDeclared"));
     }
 
     /// `/status` carries tool labels. This is the wire contract every

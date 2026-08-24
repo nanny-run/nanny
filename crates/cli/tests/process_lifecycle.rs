@@ -726,10 +726,11 @@ log = "file"
     // Binding the listener and launching [start].cmd are separate steps, and
     // this test is about the second one. Waiting only on the port kills the
     // governor in the gap between them.
-    assert!(
-        wait_for_file(&app_marker, 100),
-        "--serve must launch [start].cmd within 10 s of becoming ready"
-    );
+    //
+    // Recorded, not asserted here: a panic before `server.kill()` below leaks
+    // a live governor that outlives the test run and holds its port, which
+    // then breaks unrelated tests. Assert after the process is reaped.
+    let app_started = wait_for_file(&app_marker, 100);
 
     // While the governor's own app is still running, a separate process must
     // still be able to join. Launching an app does not close the door.
@@ -761,6 +762,11 @@ timeout = 10000
     let _ = fs::remove_dir_all(&client_dir);
     let _ = fs::remove_dir_all(&server_dir);
     let _ = fs::remove_dir_all(&home);
+
+    assert!(
+        app_started,
+        "--serve must launch [start].cmd within 10 s of becoming ready"
+    );
 
     let server_stdout = String::from_utf8_lossy(&server_out.stdout);
     assert!(
