@@ -632,6 +632,7 @@ mod runtime {
                 tokens_spent:      0,
                 tool_call_counts:  HashMap::new(),
                 tool_call_history: Vec::new(),
+                tool_labels:       HashMap::new(),
             },
         };
 
@@ -639,6 +640,7 @@ mod runtime {
             requested_tool:    Some(tool_name.to_string()),
             tool_call_counts:  status.tool_call_counts,
             tool_call_history: status.tool_call_history,
+            tool_labels:       status.tool_labels,
             last_tool_args:    args,
             elapsed_ms,
             tokens_spent:  status.tokens_spent,
@@ -657,6 +659,7 @@ mod runtime {
         tokens_spent:      u64,
         tool_call_counts:  HashMap<String, u32>,
         tool_call_history: Vec<String>,
+        tool_labels:       HashMap<String, Vec<String>>,
     }
 
     /// Fetch all live counters from the bridge /status endpoint.
@@ -681,7 +684,10 @@ mod runtime {
         let tool_call_history = v.get("tool_call_history")
             .and_then(|h| serde_json::from_value(h.clone()).ok())
             .unwrap_or_default();
-        Some(BridgeStatus { tokens_spent, tool_call_counts, tool_call_history })
+        let tool_labels = v.get("tool_labels")
+            .and_then(|l| serde_json::from_value(l.clone()).ok())
+            .unwrap_or_default();
+        Some(BridgeStatus { tokens_spent, tool_call_counts, tool_call_history, tool_labels })
     }
 
     // ── Tool call ─────────────────────────────────────────────────────────────

@@ -40,6 +40,19 @@ pub struct PolicyContext {
     /// Custom rules use this to detect sequences and patterns.
     pub tool_call_history: Vec<String>,
 
+    /// Operator-declared labels for **every** tool in the allowlist, not only
+    /// the one being requested.
+    ///
+    /// Key: tool name. Value: that tool's labels, in a fixed order.
+    ///
+    /// Every tool, because taint rules read `tool_call_history` and need to
+    /// ask what an *already-called* tool was: "did anything that reads
+    /// untrusted content run before this?" cannot be answered from the
+    /// pending call alone.
+    ///
+    /// Prefer [`PolicyContext::tool_has`] over indexing this directly.
+    pub tool_labels: HashMap<String, Vec<String>>,
+
     /// The arguments of the tool call currently being evaluated.
     /// Key: parameter name. Value: string representation of the argument.
     /// Empty when no tool call is in flight (e.g. during step evaluation).
@@ -55,6 +68,47 @@ pub struct PolicyContext {
     /// ```
     pub last_tool_args: HashMap<String, String>,
 }
+
+impl PolicyContext {
+    /// Does `tool` carry `label`?
+    ///
+    /// The way rules are meant to read labels. Returns false for an unknown
+    /// tool and for an unknown label, which is the correct default in both
+    /// directions: a rule asking about a tool the operator never declared
+    /// should not fire, and a rule asking about a label that does not exist
+    /// should not silently match everything.
+    ///
+    /// ```ignore
+    /// #[nanny::rule("no_external_effect_after_untrusted_read")]
+    /// fn taint(ctx: &PolicyContext) -> bool {
+    ///     let Some(pending) = ctx.requested_tool.as_deref() else { return true };
+    ///     if !ctx.tool_has(pending, "external_effect") { return true; }
+    ///     !ctx.tool_call_history.iter().any(|t| ctx.tool_has(t, "reads_untrusted"))
+    /// }
+    /// ```
+    pub fn tool_has(&self, tool: &str, label: &str) -> bool {
+        self.tool_labels
+            .get(tool)
+            .is_some_and(|labels| labels.iter().any(|l| l == label))
+    }
+
+    /// Every tool in the allowlist carrying `label`.
+    ///
+    /// For rules that need the set rather than a yes/no on one tool, e.g.
+    /// "cap the total calls across all money-moving tools". Sorted, so a rule
+    /// built on it behaves identically run to run.
+    pub fn tools_with(&self, label: &str) -> Vec<&str> {
+        let mut out: Vec<&str> = self
+            .tool_labels
+            .iter()
+            .filter(|(_, labels)| labels.iter().any(|l| l == label))
+            .map(|(name, _)| name.as_str())
+            .collect();
+        out.sort_unstable();
+        out
+    }
+}
+
 
 // ── PolicyDecision ────────────────────────────────────────────────────────────
 
@@ -79,4 +133,90 @@ pub enum PolicyDecision {
 /// No side effects. No network calls. No randomness.
 pub trait Policy {
     fn evaluate(&self, context: &PolicyContext) -> PolicyDecision;
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ctx_with_labels() -> PolicyContext {
+        let mut tool_labels = HashMap::new();
+        tool_labels.insert(
+            "web_search".to_string(),
+            vec!["reads_untrusted".to_string()],
+        );
+        tool_labels.insert(
+            "send_outreach".to_string(),
+            vec!["external_effect".to_string(), "moves_money".to_string()],
+        );
+        tool_labels.insert("save_findings".to_string(), Vec::new());
+        PolicyContext { tool_labels, ..Default::default() }
+    }
+
+    #[test]
+    fn tool_has_finds_a_declared_label() {
+        let ctx = ctx_with_labels();
+        assert!(ctx.tool_has("web_search", "reads_untrusted"));
+        assert!(ctx.tool_has("send_outreach", "moves_money"));
+    }
+
+    #[test]
+    fn tool_has_is_false_for_a_label_the_tool_lacks() {
+        assert!(!ctx_with_labels().tool_has("web_search", "moves_money"));
+    }
+
+    /// An unlabelled tool is a real answer, not a missing one.
+    #[test]
+    fn tool_has_is_false_for_an_unlabelled_tool() {
+        assert!(!ctx_with_labels().tool_has("save_findings", "external_effect"));
+    }
+
+    /// A rule asking about a tool the operator never declared must not fire.
+    #[test]
+    fn tool_has_is_false_for_an_unknown_tool() {
+        assert!(!ctx_with_labels().tool_has("ghost", "reads_untrusted"));
+    }
+
+    /// A rule asking about a label that does not exist must not match
+    /// everything. This is the direction that would fail open.
+    #[test]
+    fn tool_has_is_false_for_an_unknown_label() {
+        assert!(!ctx_with_labels().tool_has("web_search", "reads_untrused"));
+    }
+
+    /// Labels are absent in passthrough mode, and a rule reading them must
+    /// still evaluate rather than panic.
+    #[test]
+    fn tool_has_is_false_on_a_default_context() {
+        assert!(!PolicyContext::default().tool_has("anything", "destructive"));
+    }
+
+    #[test]
+    fn tools_with_collects_every_tool_carrying_a_label() {
+        let mut ctx = ctx_with_labels();
+        ctx.tool_labels
+            .insert("charge_card".to_string(), vec!["moves_money".to_string()]);
+
+        assert_eq!(ctx.tools_with("moves_money"), vec!["charge_card", "send_outreach"]);
+    }
+
+    /// Sorted, not HashMap order, so a rule built on it behaves identically
+    /// run to run. Determinism is invariant 1.
+    #[test]
+    fn tools_with_is_sorted() {
+        let mut tool_labels = HashMap::new();
+        for name in ["zeta", "alpha", "mid"] {
+            tool_labels.insert(name.to_string(), vec!["destructive".to_string()]);
+        }
+        let ctx = PolicyContext { tool_labels, ..Default::default() };
+
+        assert_eq!(ctx.tools_with("destructive"), vec!["alpha", "mid", "zeta"]);
+    }
+
+    #[test]
+    fn tools_with_is_empty_for_an_unknown_label() {
+        assert!(ctx_with_labels().tools_with("nonexistent").is_empty());
+    }
 }

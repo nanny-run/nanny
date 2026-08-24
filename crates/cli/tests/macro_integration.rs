@@ -35,6 +35,7 @@ fn start_bridge(allowed: &[&str]) -> Bridge {
         registry:          nanny_runtime::default_registry(),
         allowed_tools:     allowed.iter().map(|s| s.to_string()).collect(),
         per_tool_max_calls: HashMap::new(),
+        tool_labels: Default::default(),
     };
     Bridge::start(components).expect("bridge must start in tests")
 }

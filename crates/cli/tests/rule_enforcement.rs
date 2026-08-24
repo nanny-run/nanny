@@ -73,6 +73,19 @@ fn deny_repeat_calls(ctx: &PolicyContext) -> bool {
     ctx.tool_call_counts.get("counted_tool").copied().unwrap_or(0) < 2
 }
 
+/// The label-driven form of `deny_after_untrusted_read`: identical logic, but
+/// it names no tool at all. This is the rule shape a shared corpus can ship,
+/// because it governs whatever the operator labelled rather than whatever this
+/// app happens to call its tools.
+#[nanny::rule("deny_external_effect_after_untrusted_read")]
+fn deny_external_effect_after_untrusted_read(ctx: &PolicyContext) -> bool {
+    let Some(pending) = ctx.requested_tool.as_deref() else { return true };
+    if !ctx.tool_has(pending, "external_effect") {
+        return true;
+    }
+    !ctx.tool_call_history.iter().any(|t| ctx.tool_has(t, "reads_untrusted"))
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn start_bridge(allowed: &[&str]) -> Bridge {
@@ -80,6 +93,24 @@ fn start_bridge(allowed: &[&str]) -> Bridge {
         registry:           nanny_runtime::default_registry(),
         allowed_tools:      allowed.iter().map(|s| s.to_string()).collect(),
         per_tool_max_calls: HashMap::new(),
+        tool_labels: Default::default(),
+    };
+    Bridge::start(components).expect("bridge must start in tests")
+}
+
+/// A bridge whose allowlist carries operator-declared labels, mirroring what
+/// `build_bridge_components` derives from `[tools.<name>]`.
+fn start_labelled_bridge(tools: &[(&str, &[&str])]) -> Bridge {
+    let components = BridgeComponents {
+        registry:           nanny_runtime::default_registry(),
+        allowed_tools:      tools.iter().map(|(n, _)| n.to_string()).collect(),
+        per_tool_max_calls: HashMap::new(),
+        tool_labels:        tools
+            .iter()
+            .map(|(n, labels)| {
+                (n.to_string(), labels.iter().map(|l| l.to_string()).collect())
+            })
+            .collect(),
     };
     Bridge::start(components).expect("bridge must start in tests")
 }
@@ -226,5 +257,71 @@ fn rules_still_evaluate_in_passthrough_mode() {
         denied,
         Some("deny_forbidden_tool"),
         "rules must still run with no bridge present"
+    );
+}
+
+// ── Tool labels reach rules ───────────────────────────────────────────────────
+
+/// The end-to-end path for the one addition in this release: labels declared in
+/// config reach a rule through bridge state and `/status`, and a rule that
+/// names no tool still denies. Without this, labels are decoration.
+#[test]
+fn a_label_driven_rule_denies_using_history() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let bridge = start_labelled_bridge(&[
+        ("search_web",    &["reads_untrusted"]),
+        ("send_outreach", &["external_effect"]),
+    ]);
+    inject_env(&bridge);
+
+    // Clean history: the external-effect tool is allowed.
+    let before = evaluate_local_rules("send_outreach", HashMap::new());
+
+    // The untrusted read actually happens through the bridge.
+    call_tool("search_web", 0);
+    let after = evaluate_local_rules("send_outreach", HashMap::new());
+
+    clear_env();
+    assert!(before.is_none(), "external-effect tool must be allowed before any untrusted read");
+    assert_eq!(
+        after,
+        Some("deny_external_effect_after_untrusted_read"),
+        "a rule referencing only labels must deny once tainted history exists"
+    );
+}
+
+/// The same rule over the same tool names, with the labels removed, allows.
+/// Proves the denial came from the labels and not from the tool names.
+#[test]
+fn the_same_rule_allows_when_the_tools_are_unlabelled() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let bridge = start_labelled_bridge(&[
+        ("search_web",    &[]),
+        ("send_outreach", &[]),
+    ]);
+    inject_env(&bridge);
+
+    call_tool("search_web", 0);
+    let denied = evaluate_local_rules("send_outreach", HashMap::new());
+
+    clear_env();
+    assert!(
+        denied.is_none(),
+        "with no labels declared the label-driven rule must not fire; got {denied:?}"
+    );
+}
+
+/// In passthrough mode there is no bridge and therefore no labels, so a
+/// label-driven rule allows rather than panicking or denying everything.
+#[test]
+fn a_label_driven_rule_allows_in_passthrough_mode() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    clear_env();
+
+    let denied = evaluate_local_rules("send_outreach", HashMap::new());
+
+    assert!(
+        denied.is_none(),
+        "no labels means no label-driven denial; got {denied:?}"
     );
 }

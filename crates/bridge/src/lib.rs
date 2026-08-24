@@ -90,6 +90,10 @@ pub struct BridgeComponents {
     pub allowed_tools: Vec<String>,
     /// Per-tool max call counts from `[tools.<name>] max_calls`.
     pub per_tool_max_calls: HashMap<String, u32>,
+    /// Operator-declared labels per tool, from `[tools.<name>]`.
+    /// Carried into every `PolicyContext` so rules can reason about what a
+    /// tool is rather than what it is called.
+    pub tool_labels: HashMap<String, Vec<String>>,
 }
 
 // ── Internal state ────────────────────────────────────────────────────────────
@@ -106,6 +110,7 @@ pub(crate) struct BridgeState {
     // Agent context switching ─────────────────────────────────────────────────
     agent_name_stack: Vec<String>,
     allowed_tools: Vec<String>,
+    tool_labels: HashMap<String, Vec<String>>,
 
     // Execution tracking ──────────────────────────────────────────────────────
     tokens_spent: u64,
@@ -161,6 +166,7 @@ impl Bridge {
             rule_evaluator,
             agent_name_stack: Vec::new(),
             allowed_tools: components.allowed_tools,
+            tool_labels: components.tool_labels,
             tokens_spent: 0,
             tool_call_counts: HashMap::new(),
             tool_call_history: Vec::new(),
@@ -411,14 +417,17 @@ pub(crate) fn handle_status(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
     let elapsed_ms = guard.start_time.elapsed().as_millis() as u64;
     let counts_json = serde_json::to_string(&guard.tool_call_counts).unwrap_or_else(|_| "{}".to_string());
     let history_json = serde_json::to_string(&guard.tool_call_history).unwrap_or_else(|_| "[]".to_string());
+    // Labels ride on /status because an out-of-process SDK has no other way to
+    // learn them: it never reads nanny.toml, only the governor does.
+    let labels_json = serde_json::to_string(&guard.tool_labels).unwrap_or_else(|_| "{}".to_string());
     let body = match &guard.execution {
         ExecutionState::Running => format!(
-            r#"{{"state":"running","tokens_spent":{},"elapsed_ms":{},"tool_call_counts":{},"tool_call_history":{}}}"#,
-            guard.tokens_spent, elapsed_ms, counts_json, history_json
+            r#"{{"state":"running","tokens_spent":{},"elapsed_ms":{},"tool_call_counts":{},"tool_call_history":{},"tool_labels":{}}}"#,
+            guard.tokens_spent, elapsed_ms, counts_json, history_json, labels_json
         ),
         ExecutionState::Stopped { reason } => format!(
-            r#"{{"state":"stopped","reason":"{}","tokens_spent":{},"elapsed_ms":{},"tool_call_counts":{},"tool_call_history":{}}}"#,
-            reason, guard.tokens_spent, elapsed_ms, counts_json, history_json
+            r#"{{"state":"stopped","reason":"{}","tokens_spent":{},"elapsed_ms":{},"tool_call_counts":{},"tool_call_history":{},"tool_labels":{}}}"#,
+            reason, guard.tokens_spent, elapsed_ms, counts_json, history_json, labels_json
         ),
     };
     BridgeResp::json(200, body)
@@ -454,6 +463,7 @@ pub(crate) fn handle_tool_call(
         let ctx = PolicyContext {
             elapsed_ms,
             requested_tool: Some(call.tool.clone()),
+            tool_labels: guard.tool_labels.clone(),
             tokens_spent: guard.tokens_spent,
             tool_call_counts: guard.tool_call_counts.clone(),
             tool_call_history: guard.tool_call_history.clone(),
@@ -555,6 +565,7 @@ pub(crate) fn handle_rule_evaluate(body: &[u8], shared: &Arc<Mutex<BridgeState>>
     let decision = {
         let guard = shared.lock().unwrap();
         let ctx = PolicyContext {
+            tool_labels: guard.tool_labels.clone(),
             elapsed_ms: req.elapsed
                 .unwrap_or_else(|| guard.start_time.elapsed().as_millis() as u64),
             requested_tool: req.tool.clone(),
@@ -1086,6 +1097,7 @@ pub(crate) struct RunTemplate {
     session_token: String,
     allowed_tools: Vec<String>,
     per_tool_max_calls: HashMap<String, u32>,
+    tool_labels: HashMap<String, Vec<String>>,
 }
 
 impl RunTemplate {
@@ -1105,6 +1117,7 @@ impl RunTemplate {
             rule_evaluator,
             agent_name_stack: Vec::new(),
             allowed_tools: self.allowed_tools.clone(),
+            tool_labels: self.tool_labels.clone(),
             tokens_spent: 0,
             tool_call_counts: HashMap::new(),
             tool_call_history: Vec::new(),
@@ -1127,6 +1140,7 @@ pub(crate) fn init_run_template(
         session_token: token,
         allowed_tools: components.allowed_tools,
         per_tool_max_calls: components.per_tool_max_calls,
+        tool_labels: components.tool_labels,
     };
     let registry = Arc::new(components.registry);
     (template, registry)
@@ -1166,6 +1180,7 @@ mod tests {
             registry,
             allowed_tools: vec!["echo".to_string()],
             per_tool_max_calls: Default::default(),
+            tool_labels: Default::default(),
         }
     }
 
@@ -1183,6 +1198,7 @@ mod tests {
             registry: ToolRegistry::new(),
             allowed_tools,
             per_tool_max_calls: Default::default(),
+            tool_labels: Default::default(),
         };
         let b = Bridge::start(components).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
@@ -1389,6 +1405,7 @@ mod tests {
             registry: ToolRegistry::new(),
             allowed_tools: vec![],   // empty allowlist — all tools denied
             per_tool_max_calls: Default::default(),
+            tool_labels: Default::default(),
         }).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
 
@@ -1406,6 +1423,7 @@ mod tests {
             registry: ToolRegistry::new(),
             allowed_tools: vec![],
             per_tool_max_calls: Default::default(),
+            tool_labels: Default::default(),
         }).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
 
@@ -1465,6 +1483,7 @@ mod tests {
             registry,
             allowed_tools: vec!["echo".to_string()],
             per_tool_max_calls,
+            tool_labels: Default::default(),
         }).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
 
@@ -1496,6 +1515,7 @@ mod tests {
             registry: ToolRegistry::new(),
             allowed_tools: vec!["echo".to_string()],
             per_tool_max_calls,
+            tool_labels: Default::default(),
         }).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
 
@@ -1516,6 +1536,7 @@ mod tests {
             registry,
             allowed_tools: vec!["echo".to_string()],
             per_tool_max_calls,
+            tool_labels: Default::default(),
         }).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
 
@@ -1526,6 +1547,43 @@ mod tests {
         let (_, body) = post(&b, "/rule/evaluate", r#"{"tool":"echo"}"#);
         let v = json_val(&body);
         assert_eq!(v["status"], "denied");
+    }
+
+    /// `/status` carries tool labels. This is the wire contract every
+    /// out-of-process SDK depends on: it never reads nanny.toml, so this
+    /// response is the only place it can learn what a tool is.
+    #[test]
+    fn status_returns_tool_labels() {
+        let mut tool_labels = HashMap::new();
+        tool_labels.insert(
+            "echo".to_string(),
+            vec!["external_effect".to_string(), "moves_money".to_string()],
+        );
+        tool_labels.insert("quiet".to_string(), Vec::new());
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(EchoTool));
+        let b = Bridge::start(BridgeComponents {
+            registry,
+            allowed_tools: vec!["echo".to_string(), "quiet".to_string()],
+            per_tool_max_calls: Default::default(),
+            tool_labels,
+        }).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        let (_, body) = get(&b, "/status");
+        let v = json_val(&body);
+
+        assert_eq!(v["tool_labels"]["echo"][0], "external_effect");
+        assert_eq!(v["tool_labels"]["echo"][1], "moves_money");
+        assert!(
+            v["tool_labels"]["quiet"].as_array().unwrap().is_empty(),
+            "a declared-but-unlabelled tool must appear with an empty list, \
+             so a reader can tell it apart from one never declared; got: {v}"
+        );
+        assert!(
+            v["tool_labels"].get("ghost").is_none(),
+            "an undeclared tool must be absent entirely; got: {v}"
+        );
     }
 
     #[test]
@@ -1885,6 +1943,7 @@ mod tests {
             registry,
             allowed_tools: vec!["fail".to_string()],
             per_tool_max_calls: Default::default(),
+            tool_labels: Default::default(),
         }).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
 

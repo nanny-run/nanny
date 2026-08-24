@@ -46,10 +46,29 @@ pub fn build_bridge_components(config: &NannyConfig) -> BridgeComponents {
         .filter_map(|(name, cfg)| cfg.max_calls.map(|n| (name.clone(), n)))
         .collect();
 
+    // Every allowlisted tool gets an entry, including the unlabelled ones.
+    // "declared with no labels" and "never declared" are different answers,
+    // and `tool_has` must be able to tell them apart.
+    let tool_labels: HashMap<String, Vec<String>> = config
+        .tools
+        .allowed
+        .iter()
+        .map(|name| {
+            let labels = config
+                .tools
+                .per_tool
+                .get(name)
+                .map(|cfg| cfg.labels().iter().map(|l| l.to_string()).collect())
+                .unwrap_or_default();
+            (name.clone(), labels)
+        })
+        .collect();
+
     BridgeComponents {
         registry: nanny_runtime::default_registry(),
         allowed_tools: config.tools.allowed.clone(),
         per_tool_max_calls,
+        tool_labels,
     }
 }
 

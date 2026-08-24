@@ -1019,6 +1019,7 @@ mod tests {
             registry: ToolRegistry::new(),
             allowed_tools: vec!["echo".to_string()],
             per_tool_max_calls: HashMap::new(),
+            tool_labels: Default::default(),
         }
     }
 
@@ -1588,6 +1589,7 @@ mod tests {
             registry:          ToolRegistry::new(),
             allowed_tools:     vec!["http_get".to_string()],
             per_tool_max_calls: HashMap::new(),
+            tool_labels: Default::default(),
         }
     }
 
@@ -1597,6 +1599,7 @@ mod tests {
             registry:          ToolRegistry::new(),
             allowed_tools:     vec!["http_get".to_string()],
             per_tool_max_calls: HashMap::new(),
+            tool_labels: Default::default(),
         }
     }
 
@@ -2243,6 +2246,8 @@ mod tests {
             "/status must have object 'tool_call_counts' field; got: {body}");
         assert!(body["tool_call_history"].is_array(),
             "/status must have array 'tool_call_history' field; got: {body}");
+        assert!(body["tool_labels"].is_object(),
+            "/status must have object 'tool_labels' field; got: {body}");
 
         // Verify the values reflect the call we just made.
         assert_eq!(body["tokens_spent"], 7,
