@@ -227,10 +227,6 @@ fn execution_stopped_has_accounting_fields() {
         serde_json::from_str(stopped_line).expect("ExecutionStopped must be valid JSON");
 
     assert!(
-        v["steps"].is_number(),
-        "ExecutionStopped must have a numeric `steps` field; got: {v}"
-    );
-    assert!(
         v["tokens_spent"].is_number(),
         "ExecutionStopped must have a numeric `tokens_spent` field; got: {v}"
     );

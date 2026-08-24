@@ -663,7 +663,7 @@ fn cmd_run(
         Err(e) => {
             // ExecutionStarted was emitted — always pair it with ExecutionStopped.
             let elapsed_ms = started_at.elapsed().as_millis() as u64;
-            let _ = log.write(&execution_stopped_event("SpawnFailed", 0, 0, elapsed_ms));
+            let _ = log.write(&execution_stopped_event("SpawnFailed", 0, elapsed_ms));
             return Err(e).with_context(|| format!("failed to spawn '{}'", program));
         }
     };
@@ -716,7 +716,7 @@ fn cmd_run(
             Err(e) => {
                 // Polling failed — emit stopped before surfacing the error.
                 let elapsed_ms = started_at.elapsed().as_millis() as u64;
-                let _ = log.write(&execution_stopped_event("InternalError", 0, 0, elapsed_ms));
+                let _ = log.write(&execution_stopped_event("InternalError", 0, elapsed_ms));
                 return Err(e).context("failed to poll child process");
             }
         }
@@ -740,11 +740,8 @@ fn cmd_run(
     // This usually means the model ignored its tool definitions — a common
     // sign of a model that is too small or a prompt that needs improvement.
     // Suppress the warning when execution was stopped by a governance decision
-    // (rule denial, tool denial, budget) — in that case 0 calls is expected.
-    let is_governance_stop = matches!(
-        stop_reason.as_str(),
-        "RuleDenied" | "ToolDenied" | "BudgetExhausted" | "MaxStepsReached" | "TimeoutExpired"
-    );
+    // (rule denial, tool denial) — in that case 0 calls is expected.
+    let is_governance_stop = matches!(stop_reason.as_str(), "RuleDenied" | "ToolDenied");
     if metrics.allowed_tool_count > 0 && metrics.tool_call_count == 0 && !is_governance_stop {
         eprintln!(
             "nanny: warning — execution completed with 0 tool calls \
@@ -756,7 +753,6 @@ fn cmd_run(
 
     let stopped_event = execution_stopped_event(
         &stop_reason,
-        metrics.step_count,
         metrics.tokens_spent,
         elapsed_ms,
     );
@@ -790,11 +786,10 @@ fn execution_started_event(command: &str) -> ExecutionEvent {
     }
 }
 
-fn execution_stopped_event(reason: &str, steps: u32, tokens_spent: u64, elapsed_ms: u64) -> ExecutionEvent {
+fn execution_stopped_event(reason: &str, tokens_spent: u64, elapsed_ms: u64) -> ExecutionEvent {
     ExecutionEvent::ExecutionStopped {
         ts: now_ms(),
         reason: reason.to_string(),
-        steps,
         tokens_spent,
         elapsed_ms,
     }

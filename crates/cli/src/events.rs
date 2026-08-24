@@ -52,8 +52,8 @@ impl EventWriter {
 
     /// Write a pre-serialised JSON line, flushed immediately.
     ///
-    /// Used to forward raw event lines from the bridge (e.g. `StepCompleted`,
-    /// `ToolAllowed`, `ToolDenied`) without re-parsing or re-serialising them.
+    /// Used to forward raw event lines from the bridge (e.g. `ToolAllowed`,
+    /// `ToolDenied`, `RuleDenied`) without re-parsing or re-serialising them.
     pub fn write_raw(&mut self, line: &str) -> Result<()> {
         writeln!(self.out, "{line}").context("failed to write event")?;
         self.out.flush().context("failed to flush event log")?;
@@ -74,11 +74,10 @@ mod tests {
         }
     }
 
-    fn stopped_event(reason: &str, steps: u32, tokens_spent: u64, elapsed_ms: u64) -> ExecutionEvent {
+    fn stopped_event(reason: &str, tokens_spent: u64, elapsed_ms: u64) -> ExecutionEvent {
         ExecutionEvent::ExecutionStopped {
             ts: 0,
             reason: reason.to_string(),
-            steps,
             tokens_spent,
             elapsed_ms,
         }
@@ -97,13 +96,12 @@ mod tests {
 
     #[test]
     fn execution_stopped_is_valid_json() {
-        let event = stopped_event("TimeoutExpired", 7, 0, 5_432);
+        let event = stopped_event("ToolDenied", 0, 5_432);
         let json = serde_json::to_string(&event).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         assert_eq!(v["event"], "ExecutionStopped");
-        assert_eq!(v["reason"], "TimeoutExpired");
-        assert_eq!(v["steps"], 7);
+        assert_eq!(v["reason"], "ToolDenied");
         assert_eq!(v["tokens_spent"], 0u64);
         assert_eq!(v["elapsed_ms"], 5_432u64);
     }
@@ -112,7 +110,7 @@ mod tests {
     fn both_event_types_serialize_with_event_field() {
         let events = [
             started_event(),
-            stopped_event("AgentCompleted", 0, 0, 0),
+            stopped_event("AgentCompleted", 0, 0),
         ];
         let names = ["ExecutionStarted", "ExecutionStopped"];
 
@@ -147,7 +145,7 @@ mod tests {
     fn event_writer_produces_ndjson_lines() {
         let output = write_to_buf([
             started_event(),
-            stopped_event("AgentCompleted", 1, 0, 100),
+            stopped_event("AgentCompleted", 0, 100),
         ]);
 
         let lines: Vec<&str> = output.lines().collect();
@@ -162,7 +160,7 @@ mod tests {
     fn execution_started_is_first_line() {
         let output = write_to_buf([
             started_event(),
-            stopped_event("AgentCompleted", 0, 0, 0),
+            stopped_event("AgentCompleted", 0, 0),
         ]);
         let first: serde_json::Value =
             serde_json::from_str(output.lines().next().unwrap()).unwrap();
@@ -173,7 +171,7 @@ mod tests {
     fn execution_stopped_is_last_line() {
         let output = write_to_buf([
             started_event(),
-            stopped_event("MaxStepsReached", 100, 0, 200),
+            stopped_event("RuleDenied", 0, 200),
         ]);
         let last: serde_json::Value =
             serde_json::from_str(output.lines().last().unwrap()).unwrap();
@@ -189,7 +187,7 @@ mod tests {
         {
             let mut writer = EventWriter::file(&path).unwrap();
             writer.write(&started_event()).unwrap();
-            writer.write(&stopped_event("AgentCompleted", 0, 0, 50)).unwrap();
+            writer.write(&stopped_event("AgentCompleted", 0, 50)).unwrap();
         }
 
         let content = std::fs::read_to_string(&path).unwrap();

@@ -771,7 +771,7 @@ mod tests {
         let sender =
             CloudSync::start("http://127.0.0.1:1/v1/ingest".to_string(), "k".to_string(), "s", &dir)
                 .expect("sender starts");
-        sender.enqueue(r#"{"event":"StepCompleted"}"#.to_string());
+        sender.enqueue(r#"{"event":"ToolAllowed"}"#.to_string());
         sender.flush_and_join(); // returns (bounded by connect timeout + backoff)
     }
 
@@ -810,7 +810,7 @@ mod tests {
         // a whole history into a single bogus run. Attribution has to survive
         // the outage, not just the bytes.
         let dir = temp_app_dir();
-        Spool::new(&dir).store("original-session", r#"{"event":"StepCompleted"}"#);
+        Spool::new(&dir).store("original-session", r#"{"event":"ToolAllowed"}"#);
 
         let (port, rx_srv) = mock_ingest_server();
         let client = reqwest::blocking::Client::builder()

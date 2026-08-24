@@ -46,7 +46,6 @@ pub enum ExecutionState {
 /// Final accounting snapshot read by the CLI when writing `ExecutionStopped`.
 #[derive(Debug, Clone, Default)]
 pub struct BridgeMetrics {
-    pub step_count:    u32,
     pub tokens_spent:  u64,
     /// Total number of tool calls made during execution.
     pub tool_call_count:  usize,
@@ -112,7 +111,6 @@ pub(crate) struct BridgeState {
     tokens_spent: u64,
     tool_call_counts: HashMap<String, u32>,
     tool_call_history: Vec<String>,
-    step_count: u32,
     start_time: std::time::Instant,
 
     // Append-only event log ───────────────────────────────────────────────────
@@ -166,7 +164,6 @@ impl Bridge {
             tokens_spent: 0,
             tool_call_counts: HashMap::new(),
             tool_call_history: Vec::new(),
-            step_count: 0,
             start_time: std::time::Instant::now(),
             events: Vec::new(),
             last_harness: None,
@@ -256,14 +253,13 @@ impl Bridge {
         self.shared.lock().unwrap().execution.clone()
     }
 
-    /// Return the current step count and cost spent.
+    /// Return the tokens measured and tool calls made so far.
     ///
     /// Called by the CLI just before emitting `ExecutionStopped` so the event
     /// carries accurate accounting rather than hardcoded zeros.
     pub fn metrics(&self) -> BridgeMetrics {
         let guard = self.shared.lock().unwrap();
         BridgeMetrics {
-            step_count:         guard.step_count,
             tokens_spent:       guard.tokens_spent,
             tool_call_count:    guard.tool_call_history.len(),
             allowed_tool_count: guard.allowed_tools.len(),
@@ -417,12 +413,12 @@ pub(crate) fn handle_status(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
     let history_json = serde_json::to_string(&guard.tool_call_history).unwrap_or_else(|_| "[]".to_string());
     let body = match &guard.execution {
         ExecutionState::Running => format!(
-            r#"{{"state":"running","step":{},"tokens_spent":{},"elapsed_ms":{},"tool_call_counts":{},"tool_call_history":{}}}"#,
-            guard.step_count, guard.tokens_spent, elapsed_ms, counts_json, history_json
+            r#"{{"state":"running","tokens_spent":{},"elapsed_ms":{},"tool_call_counts":{},"tool_call_history":{}}}"#,
+            guard.tokens_spent, elapsed_ms, counts_json, history_json
         ),
         ExecutionState::Stopped { reason } => format!(
-            r#"{{"state":"stopped","reason":"{}","step":{},"tokens_spent":{},"elapsed_ms":{},"tool_call_counts":{},"tool_call_history":{}}}"#,
-            reason, guard.step_count, guard.tokens_spent, elapsed_ms, counts_json, history_json
+            r#"{{"state":"stopped","reason":"{}","tokens_spent":{},"elapsed_ms":{},"tool_call_counts":{},"tool_call_history":{}}}"#,
+            reason, guard.tokens_spent, elapsed_ms, counts_json, history_json
         ),
     };
     BridgeResp::json(200, body)
@@ -456,7 +452,6 @@ pub(crate) fn handle_tool_call(
         let guard = shared.lock().unwrap();
         let elapsed_ms = guard.start_time.elapsed().as_millis() as u64;
         let ctx = PolicyContext {
-            step_count: guard.step_count,
             elapsed_ms,
             requested_tool: Some(call.tool.clone()),
             tokens_spent: guard.tokens_spent,
@@ -508,18 +503,12 @@ pub(crate) fn handle_tool_call(
                     let cost = call.tokens.unwrap_or(0);
                     {
                         let mut guard = shared.lock().unwrap();
-                        guard.step_count += 1;
                         guard.tokens_spent += cost;
                         *guard.tool_call_counts.entry(call.tool.clone()).or_insert(0) += 1;
                         guard.tool_call_history.push(call.tool.clone());
                         append_event(&mut guard, ExecutionEvent::ToolAllowed {
                             ts: now_ms(),
                             tool: call.tool.clone(),
-                        });
-                        let step_now = guard.step_count;
-                        append_event(&mut guard, ExecutionEvent::StepCompleted {
-                            ts: now_ms(),
-                            step: step_now,
                         });
                     }
                     BridgeResp::json(200, serde_json::to_string(
@@ -543,18 +532,12 @@ pub(crate) fn handle_tool_call(
                 Ok(output) => {
                     {
                         let mut guard = shared.lock().unwrap();
-                        guard.step_count += 1;
                         guard.tokens_spent += cost;
                         *guard.tool_call_counts.entry(call.tool.clone()).or_insert(0) += 1;
                         guard.tool_call_history.push(call.tool.clone());
                         append_event(&mut guard, ExecutionEvent::ToolAllowed {
                             ts: now_ms(),
                             tool: call.tool.clone(),
-                        });
-                        let step_now = guard.step_count;
-                        append_event(&mut guard, ExecutionEvent::StepCompleted {
-                            ts: now_ms(),
-                            step: step_now,
                         });
                     }
                     BridgeResp::json(200, serde_json::to_string(
@@ -572,7 +555,6 @@ pub(crate) fn handle_rule_evaluate(body: &[u8], shared: &Arc<Mutex<BridgeState>>
     let decision = {
         let guard = shared.lock().unwrap();
         let ctx = PolicyContext {
-            step_count: req.step.unwrap_or(guard.step_count),
             elapsed_ms: req.elapsed
                 .unwrap_or_else(|| guard.start_time.elapsed().as_millis() as u64),
             requested_tool: req.tool.clone(),
@@ -911,7 +893,6 @@ struct ToolCallRequest {
 
 #[derive(serde::Deserialize, Default)]
 struct RuleEvalRequest {
-    #[serde(default)] step:              Option<u32>,
     #[serde(default)] elapsed:           Option<u64>,
     #[serde(default)] tool:              Option<String>,
     #[serde(default)] tool_call_counts:  HashMap<String, u32>,
@@ -1127,7 +1108,6 @@ impl RunTemplate {
             tokens_spent: 0,
             tool_call_counts: HashMap::new(),
             tool_call_history: Vec::new(),
-            step_count: 0,
             start_time: std::time::Instant::now(),
             events: Vec::new(),
             last_harness: None,
@@ -1355,13 +1335,13 @@ mod tests {
     #[test]
     fn stop_reflects_in_health_response() {
         let b = started(1000);
-        b.stop("TimeoutExpired");
+        b.stop("ToolDenied");
         std::thread::sleep(std::time::Duration::from_millis(10));
         let (s, body) = get(&b, "/health");
         assert_eq!(s, 200);
         let v = json_val(&body);
         assert_eq!(v["state"], "stopped");
-        assert_eq!(v["reason"], "TimeoutExpired");
+        assert_eq!(v["reason"], "ToolDenied");
     }
 
     // ── Day 2 tests ───────────────────────────────────────────────────────────
@@ -1387,20 +1367,20 @@ mod tests {
         assert_eq!(v["tokens_spent"], 20); // 2 calls × tokens 10
     }
 
-    /// Each allowed tool call increments step_count and charges cost.
+    /// Each allowed tool call is counted and its token cost measured.
     ///
     /// This is the bridge-level regression guard for the bug where
-    /// ExecutionStopped emitted steps=0 and tokens_spent=0. metrics() must
-    /// reflect the real accounting state so the CLI can emit accurate values.
+    /// ExecutionStopped emitted zeros. metrics() must reflect the real
+    /// accounting state so the CLI can emit accurate values.
     #[test]
-    fn tool_call_increments_step_and_charges_cost_in_metrics() {
+    fn tool_call_is_counted_and_charged_in_metrics() {
         let b = started(1000);
         post(&b, "/tool/call", r#"{"tool":"echo","args":{"message":"x"}}"#);
         post(&b, "/tool/call", r#"{"tool":"echo","args":{"message":"y"}}"#);
 
         let m = b.metrics();
-        assert_eq!(m.step_count,    2,  "each tool call must increment step_count");
-        assert_eq!(m.tokens_spent, 20, "each tool call must charge declared token cost");
+        assert_eq!(m.tool_call_count, 2,  "every tool call must be recorded");
+        assert_eq!(m.tokens_spent,   20, "each tool call must charge declared token cost");
     }
 
     #[test]
@@ -1448,23 +1428,23 @@ mod tests {
     #[test]
     fn tool_call_on_stopped_execution_returns_410() {
         let b = started(1000);
-        b.stop("TimeoutExpired");
+        b.stop("ToolDenied");
         std::thread::sleep(std::time::Duration::from_millis(10));
         let (s, _) = post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);
         assert_eq!(s, 410);
     }
 
     /// G7: the 410 body carries the typed stop reason so the client reports the
-    /// true cause (here TimeoutExpired) rather than a generic "execution stopped".
+    /// true cause (here ToolDenied) rather than a generic "execution stopped".
     #[test]
     fn stopped_410_body_carries_typed_reason() {
         let b = started(1000);
-        b.stop("TimeoutExpired");
+        b.stop("ToolDenied");
         std::thread::sleep(std::time::Duration::from_millis(10));
         let (s, body) = post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);
         assert_eq!(s, 410);
         let v = json_val(&body);
-        assert_eq!(v["reason"], "TimeoutExpired");
+        assert_eq!(v["reason"], "ToolDenied");
         assert_eq!(v["error"], "execution stopped");
     }
 
@@ -1599,7 +1579,7 @@ mod tests {
     // ── Day 5 tests ───────────────────────────────────────────────────────────
 
     #[test]
-    fn tool_call_increments_step_and_status_reports_running() {
+    fn tool_call_is_recorded_and_status_reports_running() {
         let b = started(1000);
         let (s, body) = post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);
         assert_eq!(s, 200);
@@ -1608,7 +1588,7 @@ mod tests {
         let (_, status) = get(&b, "/status");
         let v = json_val(&status);
         assert_eq!(v["state"], "running");
-        assert_eq!(v["step"], 1);
+        assert_eq!(v["tool_call_history"][0], "echo");
     }
 
 
@@ -1807,13 +1787,13 @@ mod tests {
 
     #[test]
     fn app_identity_never_touches_enforcement() {
-        // Attribution only: declaring an app must not consume budget or steps.
+        // Attribution only: declaring an app must not consume tokens or calls.
         let b = started(1000);
         let before = b.metrics();
         post(&b, "/app", r#"{"app_id":"app_abc","name":"gotm-nanny"}"#);
         let after = b.metrics();
         assert_eq!(before.tokens_spent, after.tokens_spent, "must not charge tokens");
-        assert_eq!(before.step_count, after.step_count, "must not count a step");
+        assert_eq!(before.tool_call_count, after.tool_call_count, "must not count a tool call");
     }
 
     #[test]
@@ -1872,27 +1852,16 @@ mod tests {
         assert_eq!(s, 200);
         let v = json_val(&body);
         assert_eq!(v["state"], "running");
-        assert_eq!(v["step"], 2);
+        assert_eq!(v["tool_call_counts"]["echo"], 2);
         assert_eq!(v["tokens_spent"], 20);
     }
 
     #[test]
     fn status_available_after_stop() {
         let b = started(1000);
-        b.stop("BudgetExhausted");
+        b.stop("ToolDenied");
         let (s, _) = get(&b, "/status");
         assert_eq!(s, 200);
-    }
-
-    #[test]
-    fn events_contains_step_completed_after_tool_call() {
-        let b = started(1000);
-        post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);
-        let (_, body) = get(&b, "/events");
-        let events: Vec<serde_json::Value> = body.lines()
-            .filter_map(|l| serde_json::from_str(l).ok())
-            .collect();
-        assert!(events.iter().any(|v| v["event"] == "StepCompleted"));
     }
 
     #[test]
@@ -1954,7 +1923,7 @@ mod tests {
     #[test]
     fn events_available_after_stop() {
         let b = started(1000);
-        b.stop("TimeoutExpired");
+        b.stop("ToolDenied");
         // /events must work even after execution stops
         assert_eq!(get(&b, "/events").0, 200);
     }
@@ -1962,12 +1931,12 @@ mod tests {
     #[test]
     fn stop_is_idempotent() {
         let b = started(1000);
-        b.stop("TimeoutExpired");
+        b.stop("ToolDenied");
         b.stop("ManualStop"); // second call is ignored
         // Reason is from the first stop, not the second
         assert_eq!(
             json_val(&get(&b, "/health").1)["reason"],
-            "TimeoutExpired"
+            "ToolDenied"
         );
     }
 
@@ -2010,7 +1979,7 @@ mod tests {
     #[test]
     fn action_endpoints_return_410_after_stop() {
         let b = started(1000);
-        b.stop("TimeoutExpired");
+        b.stop("ToolDenied");
         std::thread::sleep(std::time::Duration::from_millis(10));
 
         for (path, body) in &[
@@ -2029,7 +1998,7 @@ mod tests {
     #[test]
     fn read_endpoints_available_after_stop() {
         let b = started(1000);
-        b.stop("BudgetExhausted");
+        b.stop("ToolDenied");
         for path in &["/health", "/status", "/events"] {
             assert_eq!(get(&b, path).0, 200, "{path} must stay available after stop");
         }
@@ -2051,12 +2020,12 @@ mod tests {
     fn drain_events_returns_and_clears_events() {
         let b = started(1000);
 
-        // Trigger a step (a real tool call) to produce a StepCompleted event.
+        // Trigger a real tool call to produce a ToolAllowed event.
         post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);
         std::thread::sleep(std::time::Duration::from_millis(10));
 
         let lines = b.drain_events();
-        assert!(!lines.is_empty(), "drain must return at least one event after a step");
+        assert!(!lines.is_empty(), "drain must return at least one event after a tool call");
 
         // Every line must be valid JSON with an "event" field.
         for line in &lines {

@@ -20,9 +20,6 @@ use std::collections::HashMap;
 /// The policy reads it and makes a decision. That is the entire interface.
 #[derive(Default)]
 pub struct PolicyContext {
-    /// How many steps have completed so far.
-    pub step_count: u32,
-
     /// How many milliseconds have elapsed since execution started.
     pub elapsed_ms: u64,
 
@@ -30,7 +27,7 @@ pub struct PolicyContext {
     /// `None` means no tool call is being made this step.
     pub requested_tool: Option<String>,
 
-    /// Total tokens spent across all steps so far.
+    /// Total tokens measured in this execution so far.
     pub tokens_spent: u64,
 
     /// How many times each tool has been called in this execution.

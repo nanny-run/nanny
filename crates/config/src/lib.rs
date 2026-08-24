@@ -5,8 +5,6 @@
 // No silent defaults. No guessing. No recovery.
 //
 // TOML field naming vs Rust field naming:
-//   TOML uses short human-facing names: steps, cost, timeout
-//   Rust uses descriptive names:        max_steps, max_tokens, timeout_ms
 //   The gap is bridged by #[serde(rename = "...")] on each field.
 //   This means the Rust code is clear, and the config file is concise.
 
@@ -389,10 +387,6 @@ cmd = "true"
     fn observability_defaults_to_stdout() {
         let config: NannyConfig = toml::from_str(
             r#"
-[limits]
-steps   = 10
-tokens  = 5000
-timeout = 5000
 "#,
         )
         .expect("must parse");
@@ -457,10 +451,6 @@ timeout = 5000
 [start]
 cmd = "cargo run --release"
 
-[limits]
-steps   = 10
-tokens  = 5000
-timeout = 5000
 "#,
         )
         .expect("must parse");
@@ -473,10 +463,6 @@ timeout = 5000
     fn start_section_is_optional() {
         let config: NannyConfig = toml::from_str(
             r#"
-[limits]
-steps   = 10
-tokens  = 5000
-timeout = 5000
 "#,
         )
         .expect("must parse — [start] is optional");
@@ -508,10 +494,6 @@ timeout = 5000
 [runtime]
 mode = "managed"
 
-[limits]
-steps   = 10
-tokens  = 5000
-timeout = 5000
 
 [managed]
 endpoint = "https://api.nanny.run/v1"
@@ -525,7 +507,7 @@ endpoint = "https://api.nanny.run/v1"
     fn has_managed_section_matches_only_the_managed_table() {
         assert!(has_managed_section("[managed]\nendpoint = \"x\""));
         assert!(has_managed_section("  [managed.sub]\n"));
-        assert!(!has_managed_section("[limits]\nsteps = 1"));
+        assert!(!has_managed_section("[tools]\nallowed = []"));
         assert!(!has_managed_section("# [managed] just a comment"), "a comment is not a section");
     }
 }

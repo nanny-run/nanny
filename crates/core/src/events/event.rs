@@ -71,12 +71,6 @@ pub enum ExecutionEvent {
         error: String,
     },
 
-    /// Emitted when a step completes.
-    StepCompleted {
-        ts: u64,
-        step: u32,
-    },
-
     /// Emitted when LLM token usage is reported to the bridge — via
     /// `nanny::report_usage` (Rust) or `nanny.instrument()` (Python).
     ///
@@ -181,7 +175,6 @@ pub enum ExecutionEvent {
     ExecutionStopped {
         ts: u64,
         reason: String,
-        steps: u32,
         tokens_spent: u64,
         elapsed_ms: u64,
     },

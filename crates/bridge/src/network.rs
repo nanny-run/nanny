@@ -2207,7 +2207,6 @@ mod tests {
     //
     // GET /status is what the Python SDK reads to populate PolicyContext.
     // The bridge-to-SDK field mapping is a documented contract:
-    //   bridge "step"          → SDK "step_count"
     //   bridge "tokens_spent"  → SDK "tokens_spent"
     // A regression here breaks @rule evaluation silently.
 
@@ -2236,8 +2235,6 @@ mod tests {
         let body: serde_json::Value = resp.json().unwrap();
 
         // These are the exact field names the Python SDK reads.
-        assert!(body["step"].is_number(),
-            "/status must have numeric 'step' field; got: {body}");
         assert!(body["tokens_spent"].is_number(),
             "/status must have numeric 'tokens_spent' field; got: {body}");
         assert!(body["elapsed_ms"].is_number(),
@@ -2257,15 +2254,11 @@ mod tests {
             "tool_call_history must include 'echo'; got: {body}");
     }
 
-    // ── T11: /step increments step count ─────────────────────────────────────
+    // ── T11: repeated tool calls accumulate in /status ───────────────────────
 
     #[test]
-    fn tool_call_increments_step_count_in_status() {
-        // Steps come from real tool calls, not a separate /step endpoint
-        // (that endpoint was retired: nothing in any SDK ever called it,
-        // and it silently double-counted against the same step_count an
-        // ordinary tool call already increments).
-        let token = format!("step-incr-{}", next_port());
+    fn repeated_tool_calls_accumulate_in_status() {
+        let token = format!("call-count-{}", next_port());
         let (port, _state_dir)  = start_plain_http_server(&token);
         let client = plain_http_client();
         let base   = format!("http://127.0.0.1:{port}");
@@ -2281,7 +2274,6 @@ mod tests {
             assert_eq!(resp.status(), 200, "POST /tool/call must return 200");
         }
 
-        // GET /status — step must be at least 2.
         let status: serde_json::Value = client
             .get(format!("{base}/status"))
             .header("X-Nanny-Session-Token", &token)
@@ -2290,9 +2282,10 @@ mod tests {
             .json()
             .unwrap();
 
-        let step = status["step"].as_u64().unwrap_or(0);
-        assert!(step >= 2,
-            "step must be ≥ 2 after two POST /tool/call calls; got: {status}");
+        assert_eq!(status["tool_call_counts"]["echo"], 2,
+            "both calls must be counted; got: {status}");
+        assert_eq!(status["tool_call_history"].as_array().unwrap().len(), 2,
+            "both calls must be in history; got: {status}");
     }
 
     // ── T12–T13: Tool call events in network server ───────────────────────────

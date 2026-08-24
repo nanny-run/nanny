@@ -629,7 +629,6 @@ mod runtime {
             // Passthrough mode (no bridge env vars) — zeros are correct; rules
             // still run but counters will be empty, which is expected offline.
             None => BridgeStatus {
-                step_count:        0,
                 tokens_spent:      0,
                 tool_call_counts:  HashMap::new(),
                 tool_call_history: Vec::new(),
@@ -642,7 +641,6 @@ mod runtime {
             tool_call_history: status.tool_call_history,
             last_tool_args:    args,
             elapsed_ms,
-            step_count:    status.step_count,
             tokens_spent:  status.tokens_spent,
         };
 
@@ -656,7 +654,6 @@ mod runtime {
 
     /// Counters fetched from the bridge `/status` endpoint.
     struct BridgeStatus {
-        step_count:        u32,
         tokens_spent:      u64,
         tool_call_counts:  HashMap<String, u32>,
         tool_call_history: Vec<String>,
@@ -675,10 +672,6 @@ mod runtime {
             Ok(v) => v,
             Err(_) => return None,
         };
-        // Bridge wire names: "step" → step_count, "tokens_spent" → tokens_spent
-        let step_count = v.get("step")
-            .and_then(|s| s.as_u64())
-            .unwrap_or(0) as u32;
         let tokens_spent = v.get("tokens_spent")
             .and_then(|c| c.as_u64())
             .unwrap_or(0);
@@ -688,7 +681,7 @@ mod runtime {
         let tool_call_history = v.get("tool_call_history")
             .and_then(|h| serde_json::from_value(h.clone()).ok())
             .unwrap_or_default();
-        Some(BridgeStatus { step_count, tokens_spent, tool_call_counts, tool_call_history })
+        Some(BridgeStatus { tokens_spent, tool_call_counts, tool_call_history })
     }
 
     // ── Tool call ─────────────────────────────────────────────────────────────
