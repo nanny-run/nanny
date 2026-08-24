@@ -46,13 +46,9 @@ import httpx
 from nanny_sdk._context import PolicyContext
 from nanny_sdk.exceptions import (
     AgentCompleted,
-    AgentNotFound,
     BridgeUnavailable,
-    BudgetExhausted,
     ExecutionStopped,
-    MaxStepsReached,
     RuleDenied,
-    TimeoutExpired,
     ToolDenied,
 )
 
@@ -91,7 +87,7 @@ def _run_id() -> str | None:
     Checks the `run_scope()` ContextVar first (isolated per thread/task, so
     a host running several concurrent runs never races on it), then falls
     back to `NANNY_RUN_ID`, set by `nanny run` per invocation, or shared
-    across processes on purpose to pool one budget. Absent means the
+    across processes on purpose to share one run. Absent means the
     server's default run (shared-budget behaviour). The local bridge ignores
     it, one process is always one run. Mirrors the Rust client
     (`crates/cli/src/lib.rs`): run id is which budget you spend, distinct
@@ -333,16 +329,8 @@ def _raise_for_stop(reason: str, tool_name: str = "", rule_name: str = "") -> No
     bridge includes in a ``ToolDenied`` or ``RuleDenied`` deny response.
     """
     match reason:
-        case "MaxStepsReached":
-            raise MaxStepsReached()
-        case "BudgetExhausted":
-            raise BudgetExhausted()
-        case "TimeoutExpired":
-            raise TimeoutExpired()
         case "AgentCompleted":
             raise AgentCompleted()
-        case "AgentNotFound":
-            raise AgentNotFound()
         case "ToolDenied":
             raise ToolDenied(tool_name)
         case "RuleDenied":
@@ -360,7 +348,7 @@ def _raise_stop_from_410(resp: httpx.Response) -> None:
     ``HTTPStatusError``, so agents and frameworks catch it cleanly (G7). The run
     stopped on an earlier call, possibly on another process sharing the same
     ``NANNY_RUN_ID``, so the precise tool/rule detail is not on this response;
-    known limit reasons map to their class, everything else to
+    ``AgentCompleted`` maps to its class, everything else to
     ``ExecutionStopped`` carrying the reason.
     """
     reason = ""
@@ -369,12 +357,6 @@ def _raise_stop_from_410(resp: httpx.Response) -> None:
     except Exception:  # noqa: BLE001 (a malformed body still means the run stopped)
         pass
     match reason:
-        case "MaxStepsReached":
-            raise MaxStepsReached()
-        case "BudgetExhausted":
-            raise BudgetExhausted()
-        case "TimeoutExpired":
-            raise TimeoutExpired()
         case "AgentCompleted":
             raise AgentCompleted()
         case _:
@@ -443,8 +425,8 @@ def get_status() -> PolicyContext:
     the ``@tool`` decorator sets them on the returned context before passing it
     to rules.
 
-    The bridge response uses short wire names (``step``, ``cost_spent``) which
-    ``PolicyContext.from_dict()`` maps to Python field names automatically.
+    ``tool_labels`` arrives here too: an out-of-process SDK never reads
+    nanny.toml, so ``/status`` is the only place it can learn what a tool is.
     """
     with _bridge_call(), _make_client(timeout=5.0) as c:
         resp = c.get("/status", headers=_headers())
@@ -476,16 +458,16 @@ def call_tool(tool_name: str, tokens: int, args: dict[str, Any]) -> None:
 
 
 def agent_enter(name: str) -> None:
-    """POST /agent/enter: activate a named limit scope.
+    """POST /agent/enter: record entry into a named scope.
 
-    The bridge returns 404 when the named scope is not in nanny.toml,
-    raises ``AgentNotFound`` in that case. Raises ``BridgeUnavailable`` if the
-    bridge can't be reached at all, same reasoning as ``call_tool``.
+    A scope names a phase of the run so the audit log can attribute each
+    verdict to the phase that produced it. Any name is valid: there is nothing
+    to look up, so this cannot fail on an unknown name. Raises
+    ``BridgeUnavailable`` if the bridge can't be reached at all, same reasoning
+    as ``call_tool``.
     """
     with _bridge_call(), _make_client(timeout=5.0) as c:
         resp = c.post("/agent/enter", json={"name": name}, headers=_headers())
-    if resp.status_code == 404:
-        raise AgentNotFound()
     # 410 Gone: this run already stopped, raise a typed stop, not a raw HTTP error.
     if resp.status_code == 410:
         _raise_stop_from_410(resp)
@@ -493,7 +475,7 @@ def agent_enter(name: str) -> None:
 
 
 def agent_exit(name: str) -> None:
-    """POST /agent/exit: deactivate the named limit scope.
+    """POST /agent/exit: record exit from a named scope.
 
     Silently ignored if the bridge closed the connection after a stop event,
     the bridge already recorded the scope exit when it issued the stop.

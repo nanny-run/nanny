@@ -30,8 +30,8 @@ _RULES: dict[str, Callable[[PolicyContext], bool]] = {}
 def tool(*, tokens: int = 0) -> Callable[[F], F]:
     """Declare a Nanny-governed tool.
 
-    Contacts the bridge before each call to enforce step, budget, timeout,
-    allowlist, and rule limits. Charges ``tokens`` on each allowed call.
+    Contacts the bridge before each call to enforce the tool allowlist,
+    per-tool call caps, and rules. Records ``tokens`` on each allowed call.
 
     In passthrough mode (no ``NANNY_BRIDGE_PORT``) the decorated function
     is returned unchanged, zero overhead, zero import errors.
@@ -54,7 +54,7 @@ def tool(*, tokens: int = 0) -> Callable[[F], F]:
             """Evaluate all registered rules in registration order.
 
             Fetches live counters from ``GET /status`` first so rules have
-            access to ``step_count``, ``tool_call_history``, etc.
+            access to ``tool_call_history``, ``tool_labels``, etc.
 
             If the bridge is unreachable, raises ``BridgeUnavailable``:
             silently continuing with zeroed counters would let the agent run
@@ -110,7 +110,7 @@ def rule(name: str) -> Callable[[F], F]:
     ``False`` stops evaluation, remaining rules are not called.
 
     ``ctx.last_tool_args`` and ``ctx.requested_tool`` are always populated.
-    ``ctx.step_count``, ``ctx.tokens_spent``, and ``ctx.tool_call_history``
+    ``ctx.tool_labels``, ``ctx.tokens_spent``, and ``ctx.tool_call_history``
     reflect bridge-tracked state and are available via full context in v0.1.5+.
     """
 
@@ -122,15 +122,16 @@ def rule(name: str) -> Callable[[F], F]:
 
 
 def agent(name: str) -> Callable[[F], F]:
-    """Activate a named limit scope for the duration of the decorated function.
+    """Name a phase of the run for the duration of the decorated function.
 
-    Calls ``/agent/enter`` on entry and ``/agent/exit`` in a ``finally``
-    block so the scope always exits even on exception. Supports both sync
-    and async functions.
+    A scope does not change what the agent may do; it labels which phase each
+    verdict belongs to, so the audit log can attribute one. Calls
+    ``/agent/enter`` on entry and ``/agent/exit`` in a ``finally`` block so the
+    scope always exits even on exception. Supports both sync and async
+    functions.
 
-    ``/agent/enter`` is called **before** the ``try`` block: if the scope
-    is not found (bridge returns 404), ``AgentNotFound`` propagates immediately
-    and ``/agent/exit`` is never called (the scope was never activated).
+    ``/agent/enter`` is called **before** the ``try`` block, so a transport
+    failure there leaves no unmatched ``/agent/exit`` behind.
     """
 
     def decorator(fn: F) -> F:

@@ -3,7 +3,7 @@
 Each variant of the Rust ``StopReason`` enum maps to a typed Python exception.
 Names match exactly, no prefix, no divergence.
 
-    from nanny_sdk import BudgetExhausted, ToolDenied
+    from nanny_sdk import RuleDenied, ToolDenied
 """
 
 
@@ -16,24 +16,8 @@ class NannyStop(BaseException):
     """
 
 
-class MaxStepsReached(NannyStop):
-    """The step ceiling was reached before the agent completed."""
-
-
-class BudgetExhausted(NannyStop):
-    """The cost budget was exhausted before the agent completed."""
-
-
-class TimeoutExpired(NannyStop):
-    """The wall-clock timeout elapsed before the agent completed."""
-
-
 class AgentCompleted(NannyStop):
     """The agent finished normally (used as a signal, not an error)."""
-
-
-class AgentNotFound(NannyStop):
-    """The named agent scope is not defined in nanny.toml."""
 
 
 class ToolDenied(NannyStop):
@@ -65,13 +49,12 @@ class BridgeUnavailable(NannyStop):
 class ExecutionStopped(NannyStop):
     """The run this call belongs to has already stopped (G3/G7).
 
-    Raised when an action endpoint answers 410 Gone: the run hit a limit, or was
-    stopped, on an earlier call, possibly by another process sharing the same
-    ``NANNY_RUN_ID``. The governance server keys enforcement state by run id, so
-    the stop is final for this run only, not the whole server. ``reason`` carries
-    the stop reason the bridge reported. Known limit reasons (BudgetExhausted,
-    MaxStepsReached, TimeoutExpired, AgentCompleted) are raised as their own
-    class; everything else surfaces as this generic stop.
+    Raised when an action endpoint answers 410 Gone: the run was stopped on an
+    earlier call, possibly by another process sharing the same ``NANNY_RUN_ID``.
+    The governance server keys enforcement state by run id, so the stop is final
+    for this run only, not the whole server. ``reason`` carries the stop reason
+    the bridge reported. ``AgentCompleted`` is raised as its own class;
+    everything else surfaces as this generic stop.
     """
 
     def __init__(self, reason: str = "execution stopped") -> None:

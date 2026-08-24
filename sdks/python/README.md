@@ -10,7 +10,7 @@
 
 Python SDK for [Nanny](https://github.com/nanny-run/nanny): the enforcement primitive for autonomous AI agents.
 
-`@tool`, `@rule`, and `@agent` decorators that enforce step limits, token budgets, tool allowlists, and custom rules per function call. Works with LangChain, CrewAI, or any Python agent framework.
+`@tool`, `@rule`, and `@agent` decorators that enforce tool allowlists, per-tool call caps, and custom rules per function call. Works with LangChain, CrewAI, or any Python agent framework.
 
 ```bash
 pip install nanny-sdk
@@ -46,7 +46,7 @@ def fetch_page(url: str) -> str:
     return httpx.get(url).text
 ```
 
-Before `fetch_page` runs, Nanny checks the allowlist, per-tool call limits, and charges 10 tokens against the budget. If any check fails, a `NannyStop` exception is raised and the function body never executes.
+Before `fetch_page` runs, Nanny checks the allowlist, the per-tool call cap, and every registered rule, and records 10 tokens against the run. If any check refuses, a `NannyStop` exception is raised and the function body never executes.
 
 Async functions work identically:
 
@@ -69,7 +69,7 @@ client = openai.OpenAI()
 nanny_sdk.instrument(client)   # one line, done
 ```
 
-Call once at startup. Every LLM completion response is intercepted and its token counts are reported to Nanny's budget automatically, no `@tool` decorator needed on the LLM call itself.
+Call once at startup. Every LLM completion response is intercepted and its token counts are recorded automatically, no `@tool` decorator needed on the LLM call itself. Tokens are measured for attribution, never enforced: no token count stops a run.
 
 Supported: OpenAI, Groq, Together AI, Azure OpenAI, LiteLLM, Anthropic, Mistral, Google Gemini (google-genai), Cohere v2. No-op in passthrough mode.
 
@@ -104,29 +104,15 @@ def run_research_loop(query: str) -> str:
     ...
 ```
 
-Activates `[limits.researcher]` from `nanny.toml` for the duration of the function. Limits revert on exit, including on exception. Each role gets its own tool allowlist, the analysis agent cannot call the reporter's tools. Budgets are a different story: tokens spent and steps taken are one running total for the *whole run*, not a separate pool per role, so hitting the analysis ceiling stops the run there, the reporter never gets to run at all. Want each role to genuinely start from a clean budget instead? See `fresh_run` below.
+Names a phase of the run for the duration of the function, so the audit log can attribute each verdict to the phase that produced it. The scope exits on return and on exception. Any name works: a scope labels, it does not look anything up. Want a phase to be a genuinely separate run, with its own stop state and history? See `run_scope` below.
 
 ![metrics_crew: ingestion, analysis, visualization, and reporter agent scopes entering and exiting](https://raw.githubusercontent.com/nanny-run/nanny/main/assets/demo/metrics-crew-agent-scopes.gif)
 
 ---
 
-## `fresh_run`: starting a genuinely independent budget
+## `run_scope`: an independent run, safely, even concurrently
 
-`@agent` changes which ceiling the run's *one* running total is checked against; it does not give a role its own budget (see above). If your process runs multiple independent phases back to back and want each one to start from zero instead, that's a new **run**:
-
-```python
-import nanny_sdk
-
-nanny_sdk.fresh_run()   # everything governed after this point is a fresh run
-```
-
-Only meaningful under a network server (`nanny run --serve` / `--join`), which tracks each run's budget independently. Under local `nanny run`, one process is already always exactly one run, so it's a safe no-op there.
-
----
-
-## `run_scope`: the same idea, for concurrent runs in one process
-
-`fresh_run` writes to a process-global environment variable, which is correct for a short-lived, one-run-per-process caller, but two runs active at the same time in one process (a threaded or async server handling more than one independent session at once) would race on that same write. `run_scope` is the concurrent-safe form:
+`@agent` labels a phase within one run. If a phase should be a genuinely separate run, with its own stop state and its own tool call history, that is a new **run**. A threaded or async server handling several independent sessions at once needs one per session:
 
 ```python
 import nanny_sdk
@@ -135,7 +121,7 @@ with nanny_sdk.run_scope() as run_id:
     ...  # every governed call in this thread or task uses this run_id
 ```
 
-Each call gets its own run id, isolated per thread and per asyncio task, so two runs in flight at once in the same process never clobber each other's budget or stop state. Pass an explicit `run_id` to resume a specific run instead of minting a fresh one. Every caller that never calls this is unaffected, resolution falls through to `NANNY_RUN_ID` exactly as before.
+Each call gets its own run id, isolated per thread and per asyncio task, so two runs in flight at once in the same process never clobber each other's stop state or tool call history. Pass an explicit `run_id` to resume a specific run instead of minting a fresh one. Every caller that never calls this is unaffected, resolution falls through to `NANNY_RUN_ID` exactly as before.
 
 ---
 
@@ -145,18 +131,18 @@ Each call gets its own run id, isolated per thread and per asyncio task, so two 
 [start]
 cmd = "uv run agent.py"
 
-[limits]
-steps   = 50
-tokens  = 200
-timeout = 120000
-
-[limits.researcher]
-steps  = 30
-tokens = 100
-
 [tools]
 allowed = ["fetch_page", "search"]
+
+[tools.fetch_page]
+max_calls       = 30
+reads_untrusted = true
+
+[tools.search]
+reads_untrusted = true
 ```
+
+The five labels (`reads_untrusted`, `external_effect`, `destructive`, `moves_money`, `reads_sensitive`) describe what a tool *is*. Rules read labels rather than tool names, which is what lets a rule written for one app govern another.
 
 Cloud sync isn't a config field. Run `nanny auth login` once on a machine and every `nanny run` there forwards its event log automatically. No login, no sync.
 
@@ -164,18 +150,17 @@ Cloud sync isn't a config field. Run `nanny auth login` once on a machine and ev
 
 ## Stop reasons
 
-When a limit is exceeded, a `NannyStop` exception is raised with one of these reasons:
+When an action is refused, a `NannyStop` exception is raised with one of these reasons:
 
 | Reason              | Cause                                                                        |
 | ------------------- | ---------------------------------------------------------------------------- |
-| `BudgetExhausted`   | Token ceiling reached                                                        |
-| `MaxStepsReached`   | Step limit reached                                                           |
-| `TimeoutExpired`    | Wall-clock limit reached                                                     |
 | `ToolDenied`        | Tool not in the allowlist                                                    |
 | `RuleDenied`        | A rule returned `False`                                                      |
 | `AgentCompleted`    | Clean exit                                                                   |
-| `AgentNotFound`     | Named limit set in `@agent` does not exist in `nanny.toml`                   |
+| `ExecutionStopped`  | This run was already stopped by an earlier call                              |
 | `BridgeUnavailable` | Enforcement was active but became unreachable, fails closed, never continues ungoverned |
+
+Both refusals are policy decisions. Nanny bounds what an agent may do, not how much it may consume.
 
 ---
 

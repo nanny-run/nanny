@@ -150,11 +150,11 @@ def test_rule_ctx_bridge_fields_populated_from_status(mock_bridge: HTTPServer) -
     captured: list[PolicyContext] = []
     mock_bridge.expect_oneshot_request("/status", method="GET").respond_with_json({
         "state": "running",
-        "step": 7,
         "tokens_spent": 70,
         "elapsed_ms": 3500,
         "tool_call_counts": {"file_reader": 7},
         "tool_call_history": ["file_reader"] * 7,
+        "tool_labels": {"file_reader": ["reads_untrusted"]},
     })
     mock_bridge.expect_request("/tool/call", method="POST").respond_with_json(_allow())
 
@@ -170,11 +170,11 @@ def test_rule_ctx_bridge_fields_populated_from_status(mock_bridge: HTTPServer) -
     file_reader("src/main.rs")
     ctx = captured[0]
     # Bridge-tracked counters come from /status
-    assert ctx.step_count == 7
     assert ctx.tokens_spent == 70
     assert ctx.elapsed_ms == 3500
     assert ctx.tool_call_counts == {"file_reader": 7}
     assert ctx.tool_call_history == ["file_reader"] * 7
+    assert ctx.tool_labels == {"file_reader": ["reads_untrusted"]}
     # These are always set by the decorator, not /status
     assert ctx.requested_tool == "file_reader"
     assert ctx.last_tool_args == {"path": "src/main.rs"}
@@ -371,3 +371,99 @@ def test_passthrough_rules_not_evaluated(monkeypatch: pytest.MonkeyPatch) -> Non
 
     assert my_func() == "direct"
     assert not evaluated
+
+
+# ---------------------------------------------------------------------------
+# Tool labels — rules that name no tool
+# ---------------------------------------------------------------------------
+
+
+def test_a_label_driven_rule_denies_using_history(mock_bridge: HTTPServer) -> None:
+    """The end-to-end path for tool classification, mirroring the Rust matrix.
+
+    Labels declared in nanny.toml reach a rule through /status, and a rule that
+    names no tool at all still denies. Without this, labels are decoration.
+    """
+    mock_bridge.expect_oneshot_request("/status", method="GET").respond_with_json({
+        "state": "running",
+        "tokens_spent": 0,
+        "elapsed_ms": 0,
+        "tool_call_counts": {"web_search": 1},
+        "tool_call_history": ["web_search"],
+        "tool_labels": {
+            "web_search": ["reads_untrusted"],
+            "send_outreach": ["external_effect"],
+        },
+    })
+
+    @rule("no_external_effect_after_untrusted_read")
+    def taint(ctx: PolicyContext) -> bool:
+        pending = ctx.requested_tool
+        if pending is None or not ctx.tool_has(pending, "external_effect"):
+            return True
+        return not any(ctx.tool_has(t, "reads_untrusted") for t in ctx.tool_call_history)
+
+    @tool(tokens=10)
+    def send_outreach() -> str:
+        return "sent"
+
+    with pytest.raises(RuleDenied) as exc_info:
+        send_outreach()
+    assert exc_info.value.rule_name == "no_external_effect_after_untrusted_read"
+
+
+def test_the_same_rule_allows_when_the_tools_are_unlabelled(mock_bridge: HTTPServer) -> None:
+    """Proves the denial came from the labels, not from the tool names."""
+    mock_bridge.expect_oneshot_request("/status", method="GET").respond_with_json({
+        "state": "running",
+        "tokens_spent": 0,
+        "elapsed_ms": 0,
+        "tool_call_counts": {"web_search": 1},
+        "tool_call_history": ["web_search"],
+        "tool_labels": {"web_search": [], "send_outreach": []},
+    })
+    mock_bridge.expect_request("/tool/call", method="POST").respond_with_json(_allow())
+
+    @rule("no_external_effect_after_untrusted_read_2")
+    def taint(ctx: PolicyContext) -> bool:
+        pending = ctx.requested_tool
+        if pending is None or not ctx.tool_has(pending, "external_effect"):
+            return True
+        return not any(ctx.tool_has(t, "reads_untrusted") for t in ctx.tool_call_history)
+
+    @tool(tokens=10)
+    def send_outreach() -> str:
+        return "sent"
+
+    assert send_outreach() == "sent"
+
+
+def test_tool_has_defaults_are_false_in_both_directions() -> None:
+    """An unknown tool and an unknown label both answer False.
+
+    A rule asking about a tool the operator never declared must not fire, and a
+    rule asking about a misspelled label must not silently match everything.
+    That second direction is the one that would fail open.
+    """
+    ctx = PolicyContext(tool_labels={"web_search": ["reads_untrusted"], "save": []})
+
+    assert ctx.tool_has("web_search", "reads_untrusted")
+    assert not ctx.tool_has("web_search", "moves_money")
+    assert not ctx.tool_has("save", "external_effect"), "declared but unlabelled"
+    assert not ctx.tool_has("ghost", "reads_untrusted"), "never declared"
+    assert not ctx.tool_has("web_search", "reads_untrused"), "misspelled label"
+    assert not PolicyContext().tool_has("anything", "destructive"), "no labels at all"
+
+
+def test_tools_with_is_sorted() -> None:
+    """Sorted, not dict order, so a rule built on it behaves the same each run."""
+    ctx = PolicyContext(
+        tool_labels={
+            "zeta": ["moves_money"],
+            "alpha": ["moves_money"],
+            "mid": ["destructive"],
+        }
+    )
+
+    assert ctx.tools_with("moves_money") == ["alpha", "zeta"]
+    assert ctx.tools_with("nonexistent") == []

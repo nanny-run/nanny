@@ -1,8 +1,7 @@
-"""nanny_sdk.fresh_run / run_scope — starting or scoping a governed run."""
+"""nanny_sdk.run_scope — scoping a governed run to a thread or task."""
 
 from __future__ import annotations
 
-import os
 import threading
 import time
 
@@ -12,39 +11,40 @@ import nanny_sdk
 from nanny_sdk import _client as client
 
 
-def test_fresh_run_sets_a_fresh_nanny_run_id(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("NANNY_RUN_ID", raising=False)
-    run_id = nanny_sdk.fresh_run()
-    assert os.environ["NANNY_RUN_ID"] == run_id
+def test_fresh_run_is_gone() -> None:
+    """fresh_run wrote a process-global env var and raced under any threaded
+    host. run_scope replaces it in every case, so the old name is removed
+    rather than deprecated: a name that still imports but no longer isolates
+    would leave callers believing they had isolation they do not have.
+    """
+    assert not hasattr(nanny_sdk, "fresh_run")
 
 
-def test_fresh_run_returns_a_different_id_each_call(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("NANNY_RUN_ID", raising=False)
-    first = nanny_sdk.fresh_run()
-    second = nanny_sdk.fresh_run()
-    assert first != second
-
-
-def test_fresh_run_replaces_a_previously_set_run_id(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("NANNY_RUN_ID", "old-run")
-    new_id = nanny_sdk.fresh_run()
-    assert new_id != "old-run"
-    assert os.environ["NANNY_RUN_ID"] == new_id
-
-
-def test_governed_requests_after_fresh_run_carry_the_new_id(
+def test_governed_requests_inside_a_scope_carry_its_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """End to end: the id fresh_run() sets is exactly what the next request
-    sends as X-Nanny-Run-Id, the same header G3's existing tests cover for
-    manually-set NANNY_RUN_ID (see test_client.py) — fresh_run() is just a
-    public, discoverable way to set the same thing, not a different
-    mechanism."""
+    """End to end: the id run_scope() sets is exactly what the next request
+    sends as X-Nanny-Run-Id, the same header G3's existing tests cover for a
+    manually-set NANNY_RUN_ID (see test_client.py).
+    """
     monkeypatch.setenv("NANNY_SESSION_TOKEN", "tok")
     monkeypatch.delenv("NANNY_RUN_ID", raising=False)
-    run_id = nanny_sdk.fresh_run()
-    headers = client._headers()
-    assert headers["X-Nanny-Run-Id"] == run_id
+    with nanny_sdk.run_scope() as run_id:
+        assert client._headers()["X-Nanny-Run-Id"] == run_id
+
+
+def test_a_scope_beats_the_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Resolution order: an active scope wins over NANNY_RUN_ID.
+
+    The env var is how separate processes opt into a shared run; a scope is a
+    narrower, deliberate statement inside one process, so it takes precedence.
+    """
+    monkeypatch.setenv("NANNY_SESSION_TOKEN", "tok")
+    monkeypatch.setenv("NANNY_RUN_ID", "from-env")
+    with nanny_sdk.run_scope("from-scope"):
+        assert client._headers()["X-Nanny-Run-Id"] == "from-scope"
+    # Restored on exit: the env var is visible again.
+    assert client._headers()["X-Nanny-Run-Id"] == "from-env"
 
 
 def test_run_scope_sets_the_run_id_for_the_block(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 from pytest_httpserver import HTTPServer
 
-from nanny_sdk import BudgetExhausted, MaxStepsReached, RuleDenied, ToolDenied, tool
+from nanny_sdk import RuleDenied, ToolDenied, tool
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -96,28 +96,6 @@ def test_multiple_args_all_sent(mock_bridge: HTTPServer) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_deny_budget_exhausted(mock_bridge: HTTPServer) -> None:
-    mock_bridge.expect_request("/tool/call").respond_with_json(_deny("BudgetExhausted"))
-
-    @tool(tokens=10)
-    def my_func() -> str:
-        return "result"
-
-    with pytest.raises(BudgetExhausted):
-        my_func()
-
-
-def test_deny_max_steps_reached(mock_bridge: HTTPServer) -> None:
-    mock_bridge.expect_request("/tool/call").respond_with_json(_deny("MaxStepsReached"))
-
-    @tool(tokens=10)
-    def my_func() -> str:
-        return "result"
-
-    with pytest.raises(MaxStepsReached):
-        my_func()
-
-
 def test_deny_tool_denied_carries_name(mock_bridge: HTTPServer) -> None:
     mock_bridge.expect_request("/tool/call").respond_with_json(
         _deny("ToolDenied", tool_name="write_file")
@@ -149,7 +127,7 @@ def test_deny_rule_denied_carries_name(mock_bridge: HTTPServer) -> None:
 def test_function_body_never_runs_on_deny(mock_bridge: HTTPServer) -> None:
     """When the bridge denies, the wrapped function body must not execute."""
     executed = False
-    mock_bridge.expect_request("/tool/call").respond_with_json(_deny("BudgetExhausted"))
+    mock_bridge.expect_request("/tool/call").respond_with_json(_deny("ToolDenied"))
 
     @tool(tokens=10)
     def my_func() -> str:
@@ -157,7 +135,7 @@ def test_function_body_never_runs_on_deny(mock_bridge: HTTPServer) -> None:
         executed = True
         return "result"
 
-    with pytest.raises(BudgetExhausted):
+    with pytest.raises(ToolDenied):
         my_func()
     assert not executed
 
@@ -194,19 +172,19 @@ async def test_async_allowed(mock_bridge: HTTPServer) -> None:
 
 
 async def test_async_denied_raises(mock_bridge: HTTPServer) -> None:
-    mock_bridge.expect_request("/tool/call").respond_with_json(_deny("BudgetExhausted"))
+    mock_bridge.expect_request("/tool/call").respond_with_json(_deny("ToolDenied"))
 
     @tool(tokens=10)
     async def my_async_func() -> str:
         return "result"
 
-    with pytest.raises(BudgetExhausted):
+    with pytest.raises(ToolDenied):
         await my_async_func()
 
 
 async def test_async_body_not_called_on_deny(mock_bridge: HTTPServer) -> None:
     executed = False
-    mock_bridge.expect_request("/tool/call").respond_with_json(_deny("MaxStepsReached"))
+    mock_bridge.expect_request("/tool/call").respond_with_json(_deny("RuleDenied"))
 
     @tool(tokens=10)
     async def my_async_func() -> str:
@@ -214,6 +192,6 @@ async def test_async_body_not_called_on_deny(mock_bridge: HTTPServer) -> None:
         executed = True
         return "result"
 
-    with pytest.raises(MaxStepsReached):
+    with pytest.raises(RuleDenied):
         await my_async_func()
     assert not executed

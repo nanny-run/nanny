@@ -8,11 +8,7 @@ import pytest
 
 from nanny_sdk import (
     AgentCompleted,
-    AgentNotFound,
-    BudgetExhausted,
-    MaxStepsReached,
     RuleDenied,
-    TimeoutExpired,
     ToolDenied,
 )
 from nanny_sdk._client import _raise_for_stop
@@ -23,29 +19,9 @@ from nanny_sdk.exceptions import NannyStop
 # ---------------------------------------------------------------------------
 
 
-def test_max_steps_reached() -> None:
-    with pytest.raises(MaxStepsReached):
-        _raise_for_stop("MaxStepsReached")
-
-
-def test_budget_exhausted() -> None:
-    with pytest.raises(BudgetExhausted):
-        _raise_for_stop("BudgetExhausted")
-
-
-def test_timeout_expired() -> None:
-    with pytest.raises(TimeoutExpired):
-        _raise_for_stop("TimeoutExpired")
-
-
 def test_agent_completed() -> None:
     with pytest.raises(AgentCompleted):
         _raise_for_stop("AgentCompleted")
-
-
-def test_agent_not_found() -> None:
-    with pytest.raises(AgentNotFound):
-        _raise_for_stop("AgentNotFound")
 
 
 def test_tool_denied_carries_tool_name() -> None:
@@ -74,11 +50,7 @@ def test_all_exceptions_importable() -> None:
     """All stop exceptions are importable from the top-level package."""
     from nanny_sdk import (  # noqa: F401
         AgentCompleted,
-        AgentNotFound,
-        BudgetExhausted,
-        MaxStepsReached,
         RuleDenied,
-        TimeoutExpired,
         ToolDenied,
     )
 
@@ -89,13 +61,31 @@ def test_all_exceptions_importable() -> None:
 
 
 def test_all_are_nanny_stop_subclasses() -> None:
-    assert issubclass(MaxStepsReached, NannyStop)
-    assert issubclass(BudgetExhausted, NannyStop)
-    assert issubclass(TimeoutExpired, NannyStop)
     assert issubclass(AgentCompleted, NannyStop)
-    assert issubclass(AgentNotFound, NannyStop)
     assert issubclass(ToolDenied, NannyStop)
     assert issubclass(RuleDenied, NannyStop)
+
+
+def test_removed_stop_reasons_are_not_importable() -> None:
+    """The three consumption stops are gone, not deprecated.
+
+    A name that still imports but never fires is worse than one that does not
+    import: an integrator's ``except BudgetExhausted`` would look like a live
+    control and silently never catch anything.
+    """
+    import nanny_sdk
+
+    for name in ("MaxStepsReached", "BudgetExhausted", "TimeoutExpired", "AgentNotFound"):
+        assert not hasattr(nanny_sdk, name), f"{name} must not be importable"
+
+
+def test_a_removed_stop_reason_from_the_wire_is_a_hard_error() -> None:
+    """An old governor sending a deleted reason must fail loudly.
+
+    Falling through to a generic stop would hide a genuine version mismatch.
+    """
+    with pytest.raises(RuntimeError, match="unknown stop reason"):
+        _raise_for_stop("BudgetExhausted")
 
 
 def test_all_are_base_exceptions() -> None:
