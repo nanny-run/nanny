@@ -10,26 +10,56 @@ use nanny_core::agent::{limits::Limits, state::StopReason};
 use nanny_core::policy::{Policy, PolicyContext, PolicyDecision};
 use std::collections::HashMap;
 
+// ── ToolPermissionPolicy ──────────────────────────────────────────────────────
+
+/// Enforces the tool allowlist declared under `[tools] allowed`.
+///
+/// Separate from `LimitsPolicy` because permission is an authority question
+/// ("may this agent call this at all"), not a consumption one. Compose the two
+/// with `ChainPolicy`.
+///
+/// Pure — no state is mutated, no network calls are made.
+pub struct ToolPermissionPolicy {
+    allowed_tools: Vec<String>,
+}
+
+impl ToolPermissionPolicy {
+    pub fn new(allowed_tools: Vec<String>) -> Self {
+        Self { allowed_tools }
+    }
+}
+
+impl Policy for ToolPermissionPolicy {
+    fn evaluate(&self, ctx: &PolicyContext) -> PolicyDecision {
+        if let Some(tool) = &ctx.requested_tool {
+            if !self.allowed_tools.contains(tool) {
+                return PolicyDecision::Deny {
+                    reason: StopReason::ToolDenied { tool_name: tool.clone() },
+                };
+            }
+        }
+        PolicyDecision::Allow
+    }
+}
+
 // ── LimitsPolicy ──────────────────────────────────────────────────────────────
 
-/// The standard policy for a single execution.
+/// The consumption limits for a single execution.
 ///
-/// Enforces all four hard limits:
+/// Enforces three hard limits:
 ///   1. Maximum step count
 ///   2. Wall-clock timeout
 ///   3. Budget (tokens)
-///   4. Tool allowlist
 ///
 /// Checks are evaluated in order. The first failing check stops execution.
 /// All checks are pure — no state is mutated, no network calls are made.
 pub struct LimitsPolicy {
     limits: Limits,
-    allowed_tools: Vec<String>,
 }
 
 impl LimitsPolicy {
-    pub fn new(limits: Limits, allowed_tools: Vec<String>) -> Self {
-        Self { limits, allowed_tools }
+    pub fn new(limits: Limits) -> Self {
+        Self { limits }
     }
 }
 
@@ -43,13 +73,6 @@ impl Policy for LimitsPolicy {
         }
         if ctx.tokens_spent + ctx.next_tool_tokens > self.limits.max_tokens {
             return PolicyDecision::Deny { reason: StopReason::BudgetExhausted };
-        }
-        if let Some(tool) = &ctx.requested_tool {
-            if !self.allowed_tools.contains(tool) {
-                return PolicyDecision::Deny {
-                    reason: StopReason::ToolDenied { tool_name: tool.clone() },
-                };
-            }
         }
         PolicyDecision::Allow
     }
@@ -131,7 +154,11 @@ mod tests {
     }
 
     fn policy() -> LimitsPolicy {
-        LimitsPolicy::new(base_limits(), vec!["http_get".to_string()])
+        LimitsPolicy::new(base_limits())
+    }
+
+    fn tool_policy() -> ToolPermissionPolicy {
+        ToolPermissionPolicy::new(vec!["http_get".to_string()])
     }
 
     #[test]
@@ -184,7 +211,7 @@ mod tests {
             ..base_context()
         };
         assert!(matches!(
-            policy().evaluate(&ctx),
+            tool_policy().evaluate(&ctx),
             PolicyDecision::Deny { reason: StopReason::ToolDenied { .. } }
         ));
     }
@@ -195,7 +222,7 @@ mod tests {
             requested_tool: Some("http_get".to_string()),
             ..base_context()
         };
-        assert!(matches!(policy().evaluate(&ctx), PolicyDecision::Allow));
+        assert!(matches!(tool_policy().evaluate(&ctx), PolicyDecision::Allow));
     }
 
     #[test]
@@ -271,10 +298,8 @@ mod tests {
 
     #[test]
     fn chain_denies_when_first_denies() {
-        let first = LimitsPolicy::new(
-            Limits { max_steps: 0, max_tokens: 999, timeout_ms: 99_999 },
-            vec![],
-        );
+        let first =
+            LimitsPolicy::new(Limits { max_steps: 0, max_tokens: 999, timeout_ms: 99_999 });
         let second = RuleEvaluator::new(HashMap::new());
         let chain = ChainPolicy::new(first, second);
         assert!(matches!(
@@ -303,10 +328,8 @@ mod tests {
 
     #[test]
     fn chain_first_denial_wins_over_second() {
-        let first = LimitsPolicy::new(
-            Limits { max_steps: 0, max_tokens: 999, timeout_ms: 99_999 },
-            vec![],
-        );
+        let first =
+            LimitsPolicy::new(Limits { max_steps: 0, max_tokens: 999, timeout_ms: 99_999 });
         let mut max_calls = HashMap::new();
         max_calls.insert("http_get".to_string(), 0u32);
         let second = RuleEvaluator::new(max_calls);

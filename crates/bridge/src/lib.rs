@@ -23,7 +23,7 @@ use nanny_core::agent::state::StopReason;
 use nanny_core::ledger::Ledger;
 use nanny_core::policy::{Policy, PolicyContext, PolicyDecision};
 use nanny_core::tool::{ToolArgs, ToolCallError, ToolExecutor};
-use nanny_runtime::{FakeLedger, LimitsPolicy, RuleEvaluator, ToolRegistry};
+use nanny_runtime::{FakeLedger, LimitsPolicy, RuleEvaluator, ToolPermissionPolicy, ToolRegistry};
 
 // ── Error ─────────────────────────────────────────────────────────────────────
 
@@ -106,7 +106,8 @@ pub(crate) struct BridgeState {
     execution: ExecutionState,
 
     // Enforcement — stored separately so /rule/evaluate can access
-    // rule_evaluator directly without evaluating the full limits chain.
+    // rule_evaluator directly without evaluating the full policy chain.
+    tool_permission_policy: ToolPermissionPolicy,
     limits_policy: LimitsPolicy,
     rule_evaluator: RuleEvaluator,
     ledger: FakeLedger,
@@ -163,16 +164,16 @@ impl Bridge {
     pub fn start(components: BridgeComponents) -> Result<Self, BridgeError> {
         let token = Uuid::new_v4().to_string();
 
-        let limits_policy = LimitsPolicy::new(
-            components.limits.clone(),
-            components.allowed_tools.clone(),
-        );
+        let tool_permission_policy =
+            ToolPermissionPolicy::new(components.allowed_tools.clone());
+        let limits_policy = LimitsPolicy::new(components.limits.clone());
         let rule_evaluator = RuleEvaluator::new(components.per_tool_max_calls);
         let max_tokens = components.limits.max_tokens;
 
         let shared = Arc::new(Mutex::new(BridgeState {
             session_token: token.clone(),
             execution: ExecutionState::Running,
+            tool_permission_policy,
             limits_policy,
             rule_evaluator,
             ledger: FakeLedger::new(max_tokens),
@@ -490,9 +491,12 @@ pub(crate) fn handle_tool_call(
             tool_call_history: guard.tool_call_history.clone(),
             last_tool_args: HashMap::new(),
         };
-        // Chain: limits first, then per-tool rules.
-        match guard.limits_policy.evaluate(&ctx) {
-            PolicyDecision::Allow => guard.rule_evaluator.evaluate(&ctx),
+        // Chain: tool permission first, then limits, then per-tool rules.
+        match guard.tool_permission_policy.evaluate(&ctx) {
+            PolicyDecision::Allow => match guard.limits_policy.evaluate(&ctx) {
+                PolicyDecision::Allow => guard.rule_evaluator.evaluate(&ctx),
+                deny => deny,
+            },
             deny => deny,
         }
     };
@@ -503,7 +507,7 @@ pub(crate) fn handle_tool_call(
             {
                 let mut guard = shared.lock().unwrap();
                 // Emit the correct event variant based on why the tool was denied:
-                // ToolDenied  = allowlist violation (LimitsPolicy, fires first)
+                // ToolDenied  = allowlist violation (ToolPermissionPolicy, fires first)
                 // RuleDenied  = rule or max_calls violation (RuleEvaluator, fires after allowlist)
                 let event = match reason {
                     StopReason::RuleDenied { rule_name } => ExecutionEvent::RuleDenied {
@@ -651,8 +655,7 @@ pub(crate) fn handle_agent_enter(body: &[u8], shared: &Arc<Mutex<BridgeState>>) 
             guard.limits_stack.push(prev);
             guard.agent_name_stack.push(req.name.clone());
             guard.current_limits = new_limits.clone();
-            guard.limits_policy =
-                LimitsPolicy::new(new_limits.clone(), guard.allowed_tools.clone());
+            guard.limits_policy = LimitsPolicy::new(new_limits.clone());
             let snapshot = LimitsSnapshot {
                 steps: new_limits.max_steps,
                 tokens: new_limits.max_tokens,
@@ -684,7 +687,7 @@ pub(crate) fn handle_agent_exit(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp 
     let mut guard = shared.lock().unwrap();
     let prev = guard.limits_stack.pop().unwrap_or_else(|| guard.default_limits.clone());
     guard.current_limits = prev.clone();
-    guard.limits_policy = LimitsPolicy::new(prev, guard.allowed_tools.clone());
+    guard.limits_policy = LimitsPolicy::new(prev);
     let name = guard.agent_name_stack.pop().unwrap_or_default();
     append_event(&mut guard, ExecutionEvent::AgentScopeExited {
         ts: now_ms(),
@@ -1193,14 +1196,16 @@ impl RunTemplate {
     /// Each call produces a distinct execution with a zeroed ledger and
     /// counters, so a stop on one run never touches another.
     pub(crate) fn build_state(&self) -> Arc<Mutex<BridgeState>> {
-        let limits_policy =
-            LimitsPolicy::new(self.limits.clone(), self.allowed_tools.clone());
+        let tool_permission_policy =
+            ToolPermissionPolicy::new(self.allowed_tools.clone());
+        let limits_policy = LimitsPolicy::new(self.limits.clone());
         let rule_evaluator = RuleEvaluator::new(self.per_tool_max_calls.clone());
         let max_tokens = self.limits.max_tokens;
 
         Arc::new(Mutex::new(BridgeState {
             session_token: self.session_token.clone(),
             execution: ExecutionState::Running,
+            tool_permission_policy,
             limits_policy,
             rule_evaluator,
             ledger: FakeLedger::new(max_tokens),
