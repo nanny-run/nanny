@@ -45,6 +45,14 @@ pub enum ExecutionEvent {
         allowed_tools: Vec<String>,
         /// Operator-declared labels per tool, for every allowlisted tool.
         tool_labels: BTreeMap<String, Vec<String>>,
+        /// Fingerprint of the parsed config that produced this grant.
+        ///
+        /// The join key between a run and the policy that governed it. The
+        /// allowlist and labels above say what was permitted; this says *which
+        /// revision* of the operator's intent that was, so two runs can be
+        /// compared without reproducing their configs. Hashed over the parsed
+        /// config, so reformatting does not mint a new policy.
+        config_hash: String,
     },
 
     /// Emitted when a tool call is evaluated and allowed by policy.
@@ -301,6 +309,7 @@ mod tests {
                 command: "run".into(),
                 allowed_tools: vec!["a".into()],
                 tool_labels: BTreeMap::new(),
+                config_hash: "deadbeef".into(),
             },
             ExecutionEvent::RulesDeclared { ts: 2, rules: vec!["r".into()] },
             ExecutionEvent::ExecutionStopped {

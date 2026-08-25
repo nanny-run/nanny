@@ -81,6 +81,7 @@ mod tests {
             tool_labels: [("http_get".to_string(), vec!["reads_untrusted".to_string()])]
                 .into_iter()
                 .collect(),
+            config_hash: "deadbeef".to_string(),
         }
     }
 

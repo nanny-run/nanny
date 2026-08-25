@@ -613,7 +613,8 @@ fn cmd_run(
     // seq 0 of this run and the bridge continues from 1, so the log is one
     // sequence rather than two that collide.
     let run_id = runtime::resolve_run_id();
-    let started_event = execution_started_event(&command.join(" "), &config.tools);
+    let started_event =
+        execution_started_event(&command.join(" "), &config.tools, config.fingerprint());
     log.write(&run_id, 0, &started_event)?;
 
     // ── Start bridge ──────────────────────────────────────────────────────
@@ -788,7 +789,11 @@ fn cmd_run(
 /// Carries the config-side half of the grant: what the governor knows from
 /// nanny.toml. The rules half lives in the agent's process and arrives as
 /// `RulesDeclared` once it contacts the bridge.
-fn execution_started_event(command: &str, tools: &nanny_config::ToolsConfig) -> ExecutionEvent {
+fn execution_started_event(
+    command: &str,
+    tools: &nanny_config::ToolsConfig,
+    config_hash: String,
+) -> ExecutionEvent {
     // Every allowlisted tool appears, unlabelled ones with an empty list, so a
     // reader can tell "declared, no labels" from "never declared".
     let tool_labels = tools
@@ -809,6 +814,7 @@ fn execution_started_event(command: &str, tools: &nanny_config::ToolsConfig) -> 
         command: command.to_string(),
         allowed_tools: tools.allowed.clone(),
         tool_labels,
+        config_hash,
     }
 }
 

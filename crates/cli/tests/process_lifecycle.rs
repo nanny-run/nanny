@@ -876,3 +876,32 @@ fn a_run_without_a_stop_event_is_still_attributable() {
         );
     }
 }
+
+/// `ExecutionStarted` carries the fingerprint of the config that governed the
+/// run, and two runs under an unchanged config report the same one.
+#[test]
+fn execution_started_carries_a_stable_config_hash() {
+    let dir = temp_dir();
+    write_config_logging_to_file(&dir, "echo hello");
+
+    for _ in 0..2 {
+        Command::new(nanny_bin())
+            .args(["run", "--config", &config_arg(&dir)])
+            .current_dir(&dir)
+            .status()
+            .expect("nanny run must execute");
+    }
+
+    let log = fs::read_to_string(dir.join(".nanny/logs/log.ndjson")).unwrap();
+    let hashes: Vec<String> = log
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .filter(|v| v["event"] == "ExecutionStarted")
+        .map(|v| v["config_hash"].as_str().expect("a hash is always present").to_string())
+        .collect();
+
+    assert_eq!(hashes.len(), 2, "each run bookends with its own grant");
+    assert_eq!(hashes[0], hashes[1], "an unchanged config is one policy");
+    assert_eq!(hashes[0].len(), 64, "sha256 hex");
+}
