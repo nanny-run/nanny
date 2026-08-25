@@ -41,16 +41,28 @@ fn write_config(dir: &Path, cmd: &str) {
         r#"[start]
 cmd = "{cmd}"
 
-[limits]
-steps   = 100
-tokens  = 1000
-timeout = 30000
-
 [tools]
 allowed = ["http_get"]
 
 [observability]
 log = "stdout"
+"#
+    );
+    fs::write(dir.join("nanny.toml"), toml).unwrap();
+}
+
+/// Config that logs to a file rather than stdout, so a test can read the
+/// append-only log back off disk the way an operator would.
+fn write_config_logging_to_file(dir: &Path, cmd: &str) {
+    let toml = format!(
+        r#"[start]
+cmd = "{cmd}"
+
+[tools]
+allowed = ["http_get"]
+
+[observability]
+log = "file"
 "#
     );
     fs::write(dir.join("nanny.toml"), toml).unwrap();
@@ -277,12 +289,7 @@ fn missing_start_section_exits_nonzero_with_message() {
     let dir = temp_dir();
     fs::write(
         dir.join("nanny.toml"),
-        r#"[limits]
-steps   = 10
-tokens  = 100
-timeout = 5000
-
-[observability]
+        r#"[observability]
 log = "stdout"
 "#,
     )
@@ -323,11 +330,6 @@ fn server_start_nonloopback_without_certs_exits_with_message() {
         dir.join("nanny.toml"),
         r#"[start]
 cmd = "echo hello"
-
-[limits]
-steps   = 10
-tokens  = 100
-timeout = 5000
 
 [observability]
 log = "stdout"
@@ -384,12 +386,7 @@ fn server_start_loopback_does_not_require_cert_files() {
 
     fs::write(
         dir.join("nanny.toml"),
-        r#"[limits]
-steps   = 10
-tokens  = 100
-timeout = 5000
-
-[observability]
+        r#"[observability]
 log = "stdout"
 "#,
     )
@@ -442,11 +439,6 @@ fn nanny_run_joins_explicit_server_and_prints_message() {
         r#"[start]
 cmd = "echo nanny-detection-test"
 
-[limits]
-steps   = 10
-tokens  = 100
-timeout = 10000
-
 [observability]
 log = "stdout"
 "#,
@@ -462,12 +454,7 @@ log = "stdout"
         // No [start]: these tests want a headless governor. `--serve` runs
         // [start].cmd when nanny.toml declares one, so a dummy command here
         // would launch, exit instantly, and take the governor down with it.
-        r#"[limits]
-steps   = 100
-tokens  = 1000
-timeout = 60000
-
-[observability]
+        r#"[observability]
 log = "stdout"
 "#,
     )
@@ -533,12 +520,7 @@ fn joined_app_is_attributed_to_its_own_identity() {
         // No [start]: these tests want a headless governor. `--serve` runs
         // [start].cmd when nanny.toml declares one, so a dummy command here
         // would launch, exit instantly, and take the governor down with it.
-        r#"[limits]
-steps   = 100
-tokens  = 1000
-timeout = 60000
-
-[observability]
+        r#"[observability]
 log = "file"
 "#,
     )
@@ -552,10 +534,6 @@ log = "file"
         r#"[start]
 cmd = "echo joined-work"
 
-[limits]
-steps   = 10
-tokens  = 100
-timeout = 10000
 "#,
     )
     .unwrap();
@@ -633,11 +611,6 @@ fn join_to_unreachable_server_fails_loudly() {
         r#"[start]
 cmd = "echo nanny-stale-test"
 
-[limits]
-steps   = 10
-tokens  = 100
-timeout = 10000
-
 [observability]
 log = "stdout"
 "#,
@@ -697,11 +670,6 @@ fn serve_runs_the_start_command_and_remains_joinable() {
             r#"[start]
 cmd = "sh -c \"echo SERVE-RAN-THE-APP; touch {}; sleep 5\""
 
-[limits]
-steps   = 100
-tokens  = 1000
-timeout = 60000
-
 [observability]
 log = "file"
 "#,
@@ -740,10 +708,6 @@ log = "file"
         r#"[start]
 cmd = "echo JOINED-WHILE-SERVING"
 
-[limits]
-steps   = 10
-tokens  = 100
-timeout = 10000
 "#,
     )
     .unwrap();
@@ -794,11 +758,7 @@ fn serve_without_a_start_section_stays_headless() {
     let server_dir = temp_dir();
     fs::write(
         server_dir.join("nanny.toml"),
-        r#"[limits]
-steps   = 100
-tokens  = 1000
-timeout = 60000
-"#,
+        r#""#,
     )
     .unwrap();
     write_app_identity(&server_dir);
@@ -827,4 +787,92 @@ timeout = 60000
     );
 }
 
+// ── Run attribution ───────────────────────────────────────────────────────────
 
+/// Two runs of the same project append to the same log file. Every line must
+/// say which run it belongs to.
+///
+/// This is the shape `nanny run --serve` produces by default, where one
+/// governor drains many concurrent runs into one file. It cannot be recovered
+/// after the fact: draining is per-run and batched, so sorting by `ts` does not
+/// reconstruct the interleaving, and pairing `ExecutionStarted` with
+/// `ExecutionStopped` fails on exactly the runs worth investigating, because a
+/// missing stop is a documented outcome (the process crashed) rather than a
+/// parse error.
+#[test]
+fn two_runs_sharing_one_log_stay_attributable() {
+    let dir = temp_dir();
+    write_config_logging_to_file(&dir, "echo hello");
+
+    for _ in 0..2 {
+        let status = Command::new(nanny_bin())
+            .args(["run", "--config", &config_arg(&dir)])
+            .current_dir(&dir)
+            .status()
+            .expect("nanny run must execute");
+        assert!(status.success(), "run must exit cleanly");
+    }
+
+    let log = fs::read_to_string(dir.join(".nanny/logs/log.ndjson"))
+        .expect("file logging must produce a log");
+    let lines: Vec<serde_json::Value> = log
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).expect("every line is JSON"))
+        .collect();
+
+    assert!(lines.len() >= 4, "two runs produce at least two bookends each");
+
+    let mut runs: std::collections::BTreeMap<String, Vec<u64>> = Default::default();
+    for line in &lines {
+        let run_id = line["run_id"].as_str().expect("every line carries a run id");
+        assert!(!run_id.is_empty(), "run id must not be blank");
+        runs.entry(run_id.to_string())
+            .or_default()
+            .push(line["seq"].as_u64().expect("every line carries a seq"));
+    }
+
+    assert_eq!(runs.len(), 2, "two invocations are two runs, not one stream");
+
+    for (run_id, seqs) in runs {
+        let mut sorted = seqs.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), seqs.len(), "run {run_id} must not reuse a seq");
+        assert_eq!(sorted[0], 0, "run {run_id} must start at seq 0");
+    }
+}
+
+/// A run that never writes `ExecutionStopped` is still fully segmentable.
+///
+/// The event enum documents a missing stop as an auditable fact: the process
+/// crashed. Any scheme that recovers attribution by pairing the bookends fails
+/// here, which is why attribution rides on every line instead.
+#[test]
+fn a_run_without_a_stop_event_is_still_attributable() {
+    let dir = temp_dir();
+    write_config_logging_to_file(&dir, "echo hello");
+
+    let status = Command::new(nanny_bin())
+        .args(["run", "--config", &config_arg(&dir)])
+        .current_dir(&dir)
+        .status()
+        .expect("nanny run must execute");
+    assert!(status.success());
+
+    let path = dir.join(".nanny/logs/log.ndjson");
+    let log = fs::read_to_string(&path).expect("log exists");
+
+    // Drop the trailing ExecutionStopped, simulating a crashed run.
+    let kept: Vec<&str> = log.lines().filter(|l| !l.trim().is_empty()).collect();
+    let truncated: Vec<&str> = kept[..kept.len() - 1].to_vec();
+    assert!(!truncated.is_empty());
+
+    for line in truncated {
+        let v: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert!(
+            v["run_id"].as_str().is_some_and(|s| !s.is_empty()),
+            "attribution must not depend on the stop event"
+        );
+    }
+}
