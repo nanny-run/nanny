@@ -211,3 +211,112 @@ pub enum ExecutionEvent {
         elapsed_ms: u64,
     },
 }
+
+// ── LoggedEvent ───────────────────────────────────────────────────────────────
+
+/// An [`ExecutionEvent`] stamped with the run it belongs to and its position in
+/// that run's stream.
+///
+/// Every event written to the log or forwarded to a sink goes through this.
+/// Without it the log is not self-describing, which is a correctness problem
+/// rather than a convenience one: under `nanny run --serve` a single governor
+/// drains many concurrent runs into one shared file, so lines from different
+/// runs interleave with nothing to tell them apart. The drain loop holds the
+/// run id at the moment it writes and used to discard it.
+///
+/// Attribution cannot be recovered afterwards either. Draining is per-run and
+/// batched, so a run drained later can append older timestamps after a run
+/// drained earlier appended newer ones, which means sorting by `ts` does not
+/// reconstruct the interleaving. Pairing `ExecutionStarted` with
+/// `ExecutionStopped` does not work either, because a missing stop is a real,
+/// documented outcome (the process crashed) rather than a parse error.
+///
+/// `seq` is monotonic **per run**, assigned where the event is appended, never
+/// where it is drained. Assigned at drain time it would number across
+/// interleaved runs and manufacture gaps in the one field whose purpose is
+/// making genuine gaps detectable.
+///
+/// Flattened on purpose: the JSON keeps the shape every existing consumer
+/// already parses and gains exactly two keys.
+///
+/// ```text
+/// {"run_id":"a1b2","seq":3,"event":"ToolAllowed","ts":1756100000000,"tool":"web_search"}
+///  └────────── envelope ─────────┘└──────────── ExecutionEvent ────────────────────────┘
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoggedEvent {
+    /// Which run this event belongs to. Under `--serve` one governor serves
+    /// many; under a local run there is exactly one.
+    pub run_id: String,
+    /// Position in this run's stream, from 0. A gap means an event is missing.
+    pub seq: u64,
+    #[serde(flatten)]
+    pub event: ExecutionEvent,
+}
+
+impl LoggedEvent {
+    pub fn new(run_id: impl Into<String>, seq: u64, event: ExecutionEvent) -> Self {
+        Self { run_id: run_id.into(), seq, event }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tool_allowed() -> ExecutionEvent {
+        ExecutionEvent::ToolAllowed { ts: 1_756_100_000_000, tool: "web_search".into() }
+    }
+
+    #[test]
+    fn envelope_flattens_into_the_event() {
+        let line = serde_json::to_string(&LoggedEvent::new("a1b2", 3, tool_allowed())).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+
+        // The envelope adds two keys and moves nothing.
+        assert_eq!(v["run_id"], "a1b2");
+        assert_eq!(v["seq"], 3);
+        assert_eq!(v["event"], "ToolAllowed");
+        assert_eq!(v["tool"], "web_search");
+        assert_eq!(v["ts"], 1_756_100_000_000u64);
+    }
+
+    #[test]
+    fn envelope_round_trips() {
+        let line = serde_json::to_string(&LoggedEvent::new("r", 0, tool_allowed())).unwrap();
+        let back: LoggedEvent = serde_json::from_str(&line).unwrap();
+        assert_eq!(back.run_id, "r");
+        assert_eq!(back.seq, 0);
+        assert!(matches!(back.event, ExecutionEvent::ToolAllowed { .. }));
+    }
+
+    #[test]
+    fn every_variant_survives_the_envelope() {
+        // A thirteenth variant added later must not silently lose the envelope.
+        // Flattening is what buys that: the fields live on the wrapper, so a new
+        // variant inherits them without being edited.
+        let events = vec![
+            ExecutionEvent::ExecutionStarted {
+                ts: 1,
+                command: "run".into(),
+                allowed_tools: vec!["a".into()],
+                tool_labels: BTreeMap::new(),
+            },
+            ExecutionEvent::RulesDeclared { ts: 2, rules: vec!["r".into()] },
+            ExecutionEvent::ExecutionStopped {
+                ts: 3,
+                reason: "AgentCompleted".into(),
+                tokens_spent: 0,
+                elapsed_ms: 1,
+            },
+        ];
+        for (i, e) in events.into_iter().enumerate() {
+            let v: serde_json::Value =
+                serde_json::from_str(&serde_json::to_string(&LoggedEvent::new("r", i as u64, e)).unwrap())
+                    .unwrap();
+            assert_eq!(v["run_id"], "r");
+            assert_eq!(v["seq"], i as u64);
+            assert!(v.get("event").is_some());
+        }
+    }
+}
