@@ -1324,10 +1324,12 @@ dependencies = [
  "self-replace",
  "serde",
  "serde_json",
+ "sha2",
  "shlex",
  "time",
  "tokio",
  "toml",
+ "toml_edit",
  "uuid",
  "x509-parser",
 ]

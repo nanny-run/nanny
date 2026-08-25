@@ -1020,3 +1020,84 @@ log = "stdout"
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("nanny:recommended@1.0.0"), "the run must name its packs");
 }
+
+/// `nanny rules add` vendors the pack and declares it, and never touches source.
+#[test]
+fn rules_add_vendors_the_pack_and_declares_it() {
+    let dir = temp_dir();
+    fs::write(
+        dir.join("nanny.toml"),
+        "# governs the outreach agent\n[start]\ncmd = \"echo hello\"\n\n[tools]\nallowed = [\"http_get\"]\n",
+    )
+    .unwrap();
+    fs::write(dir.join("agent.py"), "# untouched\n").unwrap();
+
+    let src = temp_dir();
+    fs::write(
+        src.join("pack.toml"),
+        "name = \"nanny:owasp\"\nversion = \"2.1.0\"\nrules = [\"no_send_after_read\"]\n",
+    )
+    .unwrap();
+    fs::write(src.join("rules.py"), "def no_send_after_read(ctx): return True\n").unwrap();
+
+    let out = Command::new(nanny_bin())
+        .args(["rules", "add", "nanny:owasp@2.1.0", "--from", &src.to_string_lossy()])
+        .current_dir(&dir)
+        .output()
+        .expect("nanny rules add must execute");
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+
+    // Vendored, so the same controls run on every machine.
+    assert!(dir.join(".nanny/rules/nanny-owasp@2.1.0/rules.py").exists());
+
+    // Declared, pinned, and the operator's comment survives.
+    let toml = fs::read_to_string(dir.join("nanny.toml")).unwrap();
+    assert!(toml.contains("nanny:owasp@2.1.0"), "got: {toml}");
+    assert!(toml.contains("# governs the outreach agent"), "comments must survive");
+
+    // Source untouched: an installed rule is never pasted into user code.
+    assert_eq!(fs::read_to_string(dir.join("agent.py")).unwrap(), "# untouched\n");
+
+    // The run now starts, because the declared pack is present.
+    let run = Command::new(nanny_bin())
+        .args(["run", "--config", &config_arg(&dir)])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(run.status.success(), "stderr: {}", String::from_utf8_lossy(&run.stderr));
+
+    // And removing it undeclares it again.
+    let rm = Command::new(nanny_bin())
+        .args(["rules", "remove", "nanny:owasp@2.1.0"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(rm.status.success());
+    assert!(!fs::read_to_string(dir.join("nanny.toml")).unwrap().contains("nanny:owasp@2.1.0"));
+}
+
+/// A pack whose contents do not match its declared digest is refused.
+#[test]
+fn rules_add_refuses_a_tampered_pack() {
+    let dir = temp_dir();
+    fs::write(dir.join("nanny.toml"), "[start]\ncmd = \"echo hi\"\n\n[tools]\nallowed = []\n").unwrap();
+
+    let src = temp_dir();
+    fs::write(src.join("rules.py"), "def r(ctx): return True\n").unwrap();
+    fs::write(
+        src.join("pack.toml"),
+        "name = \"acme:pack\"\nversion = \"1.0.0\"\nsignature = \"0000000000000000000000000000000000000000000000000000000000000000\"\n",
+    )
+    .unwrap();
+
+    let out = Command::new(nanny_bin())
+        .args(["rules", "add", "acme:pack@1.0.0", "--from", &src.to_string_lossy()])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+
+    assert!(!out.status.success(), "a tampered pack must not install");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("failed integrity check"), "got: {stderr}");
+    assert!(!dir.join(".nanny/rules").exists(), "nothing may be written on failure");
+}

@@ -28,6 +28,8 @@ clap         = { workspace = true }
 serde        = { workspace = true }
 serde_json   = { workspace = true }
 shlex        = "1"
+toml_edit    = { workspace = true }
+sha2         = { workspace = true }
 # v0.2.0 — Network Bridge
 reqwest      = { workspace = true }
 rcgen        = { workspace = true }

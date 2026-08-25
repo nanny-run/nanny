@@ -137,6 +137,14 @@ enum Command {
         app: Option<String>,
     },
 
+    /// Install and inspect rule packs.
+    ///
+    /// A pack is vendored into `.nanny/rules/` and declared in `[rules]
+    /// extends`. Your source is never edited: `@rule` remains for your own
+    /// private rules.
+    #[command(subcommand)]
+    Rules(commands::rules::RulesCommand),
+
     /// Show the health of all active Nanny components.
     ///
     /// Checks: local bridge, network server, certificate expiry.
@@ -178,6 +186,10 @@ fn main() {
         Command::Status { app } => commands::server::cmd_server_status(app),
         Command::Stop { app } => commands::server::cmd_server_stop(app),
         Command::Certs(action) => commands::certs::cmd_certs(action),
+        Command::Rules(cmd) => {
+            let root = std::env::current_dir().unwrap_or_else(|_| ".".into());
+            commands::rules::run(cmd, &root)
+        }
         Command::Health => commands::health::cmd_health(),
     };
 
