@@ -204,3 +204,45 @@ python = "python/rules.py"
         assert!(err.to_string().contains("'b@2.0.0'"));
     }
 }
+
+#[cfg(test)]
+mod manifesto_guard {
+    //! The engine must not carry remote dependencies, must work with no company
+    //! behind it, and must behave identically for identical inputs. Pack
+    //! resolution runs on the enforcement path, so it has to be structurally
+    //! incapable of reaching the network, not merely written so that it does
+    //! not today.
+    //!
+    //! `nanny-config` owns pack resolution and links no HTTP client, no TLS
+    //! stack, and no async runtime. That is the guarantee, and this test fails
+    //! the moment someone adds one.
+
+    #[test]
+    fn pack_resolution_cannot_reach_the_network() {
+        let manifest = include_str!("../Cargo.toml");
+        for forbidden in ["reqwest", "hyper", "ureq", "curl", "tokio", "rustls", "async-std"] {
+            assert!(
+                !manifest.contains(forbidden),
+                "nanny-config gained a dependency on `{forbidden}`. Pack resolution \
+                 runs during enforcement, and a crate that can open a socket there \
+                 breaks the offline guarantee, the ban on remote dependencies, and \
+                 determinism. Install-time fetching belongs in the CLI."
+            );
+        }
+    }
+
+    #[test]
+    fn resolution_reads_only_the_project_directory() {
+        // A pack outside the project root is not resolvable: the vendored copy
+        // under `.nanny/rules/` is the only thing that can govern a run, so what
+        // ships in the repository is exactly what enforces.
+        let root = std::env::temp_dir().join("nanny_scope_guard_root");
+        let _ = std::fs::create_dir_all(&root);
+        let resolved = super::pack_path(&root, "nanny:owasp", "2.1.0");
+        assert!(
+            resolved.starts_with(&root),
+            "a pack must resolve inside the project, got {}",
+            resolved.display()
+        );
+    }
+}
