@@ -12,7 +12,39 @@ pub fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
+// ── RuleDecl ──────────────────────────────────────────────────────────────────
+
+/// One registered rule, as declared by the process that holds it.
+///
+/// A name alone cannot answer "which control was this". Two runs six months
+/// apart can both declare `no_send_after_read` while running different code, so
+/// evidence produced under one is not comparable with evidence produced under
+/// the other. `version` and `pack` make the declaration specific.
+///
+/// Both are `None` for a rule the developer wrote themselves, which is the
+/// honest answer: a hand-written rule has no version and inventing one would
+/// imply a provenance it does not have. They are populated by the pack loader
+/// from the pack's manifest, never typed by the person writing the rule.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct RuleDecl {
+    pub name: String,
+    /// The pack version this rule came from. `None` for hand-written rules.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// The pack this rule came from. `None` for hand-written rules.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pack: Option<String>,
+}
+
+impl RuleDecl {
+    /// A rule the developer wrote, carrying no pack provenance.
+    pub fn local(name: impl Into<String>) -> Self {
+        Self { name: name.into(), version: None, pack: None }
+    }
+}
+
 // ── ExecutionEvent ────────────────────────────────────────────────────────────
+
 
 /// The canonical event type for every event the nanny ecosystem emits.
 ///
@@ -188,7 +220,7 @@ pub enum ExecutionEvent {
     /// Deduped bridge-side, so a caller may safely redeclare.
     RulesDeclared {
         ts: u64,
-        rules: Vec<String>,
+        rules: Vec<RuleDecl>,
     },
 
     /// Emitted when the agent enters a named scope via `agent_enter`.
@@ -311,7 +343,7 @@ mod tests {
                 tool_labels: BTreeMap::new(),
                 config_hash: "deadbeef".into(),
             },
-            ExecutionEvent::RulesDeclared { ts: 2, rules: vec!["r".into()] },
+            ExecutionEvent::RulesDeclared { ts: 2, rules: vec![RuleDecl::local("r")] },
             ExecutionEvent::ExecutionStopped {
                 ts: 3,
                 reason: "AgentCompleted".into(),

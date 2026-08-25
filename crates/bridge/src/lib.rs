@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
-use nanny_core::events::event::{ExecutionEvent, LoggedEvent};
+use nanny_core::events::event::{ExecutionEvent, LoggedEvent, RuleDecl};
 use nanny_core::agent::state::StopReason;
 use nanny_core::policy::{Policy, PolicyContext, PolicyDecision};
 use nanny_core::tool::{ToolArgs, ToolCallError, ToolExecutor};
@@ -136,7 +136,7 @@ pub(crate) struct BridgeState {
     // `HarnessIdentified`: the SDK may resend the harness on every LLM call, so
     // we only append an event when it actually changes.
     last_harness: Option<(String, Option<String>)>,
-    last_rules: Option<Vec<String>>,
+    last_rules: Option<Vec<RuleDecl>>,
 
     // Last-recorded app attribution `(app_id, name)`. Dedups `AppIdentified`
     // the same way, so a caller may safely (re)declare its identity on every
@@ -791,7 +791,29 @@ pub(crate) fn handle_rules(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> Bri
     #[derive(serde::Deserialize)]
     struct RulesRequest {
         #[serde(default)]
-        rules: Vec<String>,
+        rules: Vec<RuleInput>,
+    }
+
+    /// Accepts both shapes on the wire.
+    ///
+    /// An older SDK sends `["no_send_after_read"]`; a pack-aware one sends
+    /// `[{"name":"...","version":"2.1","pack":"nanny:owasp"}]`. Both are valid
+    /// declarations, and refusing the older one would make a governor upgrade
+    /// break every agent that had not upgraded with it.
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum RuleInput {
+        Name(String),
+        Decl { name: String, #[serde(default)] version: Option<String>, #[serde(default)] pack: Option<String> },
+    }
+
+    impl From<RuleInput> for RuleDecl {
+        fn from(v: RuleInput) -> Self {
+            match v {
+                RuleInput::Name(name) => RuleDecl::local(name),
+                RuleInput::Decl { name, version, pack } => RuleDecl { name, version, pack },
+            }
+        }
     }
 
     let req: RulesRequest = match serde_json::from_slice(body) {
@@ -800,7 +822,7 @@ pub(crate) fn handle_rules(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> Bri
     };
 
     let mut guard = shared.lock().unwrap();
-    record_rules(&mut guard, req.rules);
+    record_rules(&mut guard, req.rules.into_iter().map(RuleDecl::from).collect());
 
     BridgeResp::json(200, r#"{"status":"ok"}"#)
 }
@@ -811,9 +833,15 @@ pub(crate) fn handle_rules(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> Bri
 /// order is the same declaration and does not produce a second event. Rust
 /// rule registration order is link order, which is not stable across builds,
 /// so without this the log would churn for no reason.
-pub(crate) fn record_rules(state: &mut BridgeState, rules: Vec<String>) {
-    let mut rules: Vec<String> =
-        rules.into_iter().map(|r| r.trim().to_string()).filter(|r| !r.is_empty()).collect();
+pub(crate) fn record_rules(state: &mut BridgeState, rules: Vec<RuleDecl>) {
+    let mut rules: Vec<RuleDecl> = rules
+        .into_iter()
+        .map(|mut r| {
+            r.name = r.name.trim().to_string();
+            r
+        })
+        .filter(|r| !r.name.is_empty())
+        .collect();
     rules.sort();
     rules.dedup();
     if rules.is_empty() || state.last_rules.as_ref() == Some(&rules) {
@@ -1666,9 +1694,53 @@ mod tests {
         assert_eq!(declared.len(), 1, "redeclaring the same set must not re-emit");
         assert_eq!(
             declared[0]["rules"],
-            serde_json::json!(["a_rule", "b_rule"]),
+            serde_json::json!([{"name": "a_rule"}, {"name": "b_rule"}]),
             "rules must be sorted: Rust registration order is link order, which \
              is not stable across builds"
+        );
+    }
+
+    #[test]
+    fn a_rule_declaration_carries_pack_provenance() {
+        let b = started(1000);
+
+        post(
+            &b,
+            "/rules",
+            r#"{"rules":[{"name":"no_send_after_read","version":"2.1","pack":"nanny:owasp"}]}"#,
+        );
+
+        let (_, events) = get(&b, "/events");
+        let declared: Vec<serde_json::Value> = events
+            .lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .filter(|v| v["event"] == "RulesDeclared")
+            .collect();
+
+        assert_eq!(declared[0]["rules"][0]["version"], "2.1");
+        assert_eq!(declared[0]["rules"][0]["pack"], "nanny:owasp");
+    }
+
+    #[test]
+    fn a_bare_name_still_declares() {
+        // An SDK that predates packs sends plain strings. A governor upgrade
+        // must not break every agent that has not upgraded with it.
+        let b = started(1000);
+        let (status, _) = post(&b, "/rules", r#"{"rules":["hand_written"]}"#);
+        assert_eq!(status, 200);
+
+        let (_, events) = get(&b, "/events");
+        let declared: Vec<serde_json::Value> = events
+            .lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .filter(|v| v["event"] == "RulesDeclared")
+            .collect();
+
+        assert_eq!(declared[0]["rules"][0]["name"], "hand_written");
+        assert!(
+            declared[0]["rules"][0].get("version").is_none(),
+            "a hand-written rule has no version, and inventing one would imply \
+             provenance it does not have"
         );
     }
 
