@@ -760,6 +760,7 @@ mod runtime {
             tool_labels:       status.tool_labels,
             last_tool_args:    args,
             elapsed_ms,
+            now_ms:        nanny_core::events::event::now_ms(),
             tokens_spent:  status.tokens_spent,
         };
 

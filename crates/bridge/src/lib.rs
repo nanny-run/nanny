@@ -460,12 +460,12 @@ pub(crate) fn handle_status(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
     let labels_json = serde_json::to_string(&guard.tool_labels).unwrap_or_else(|_| "{}".to_string());
     let body = match &guard.execution {
         ExecutionState::Running => format!(
-            r#"{{"state":"running","tokens_spent":{},"elapsed_ms":{},"tool_call_counts":{},"tool_call_history":{},"tool_labels":{}}}"#,
-            guard.tokens_spent, elapsed_ms, counts_json, history_json, labels_json
+            r#"{{"state":"running","tokens_spent":{},"elapsed_ms":{},"now_ms":{},"tool_call_counts":{},"tool_call_history":{},"tool_labels":{}}}"#,
+            guard.tokens_spent, elapsed_ms, now_ms(), counts_json, history_json, labels_json
         ),
         ExecutionState::Stopped { reason } => format!(
-            r#"{{"state":"stopped","reason":"{}","tokens_spent":{},"elapsed_ms":{},"tool_call_counts":{},"tool_call_history":{},"tool_labels":{}}}"#,
-            reason, guard.tokens_spent, elapsed_ms, counts_json, history_json, labels_json
+            r#"{{"state":"stopped","reason":"{}","tokens_spent":{},"elapsed_ms":{},"now_ms":{},"tool_call_counts":{},"tool_call_history":{},"tool_labels":{}}}"#,
+            reason, guard.tokens_spent, elapsed_ms, now_ms(), counts_json, history_json, labels_json
         ),
     };
     BridgeResp::json(200, body)
@@ -500,6 +500,7 @@ pub(crate) fn handle_tool_call(
         let elapsed_ms = guard.start_time.elapsed().as_millis() as u64;
         let ctx = PolicyContext {
             elapsed_ms,
+            now_ms: now_ms(),
             requested_tool: Some(call.tool.clone()),
             tool_labels: guard.tool_labels.clone(),
             tokens_spent: guard.tokens_spent,
@@ -604,6 +605,7 @@ pub(crate) fn handle_rule_evaluate(body: &[u8], shared: &Arc<Mutex<BridgeState>>
         let guard = shared.lock().unwrap();
         let ctx = PolicyContext {
             tool_labels: guard.tool_labels.clone(),
+            now_ms: now_ms(),
             elapsed_ms: req.elapsed
                 .unwrap_or_else(|| guard.start_time.elapsed().as_millis() as u64),
             requested_tool: req.tool.clone(),

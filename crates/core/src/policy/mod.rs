@@ -23,6 +23,17 @@ pub struct PolicyContext {
     /// How many milliseconds have elapsed since execution started.
     pub elapsed_ms: u64,
 
+    /// Wall-clock time at evaluation, as milliseconds since the Unix epoch.
+    ///
+    /// Present so that a rule about *when* an action is permitted, "no
+    /// external effects outside declared operating hours", stays a pure
+    /// function of its context. A rule that read the clock itself would reach
+    /// outside the context to decide, which is untestable and breaks the
+    /// guarantee that identical inputs produce identical behaviour.
+    ///
+    /// Supplied by the caller, never sampled inside a rule.
+    pub now_ms: u64,
+
     /// The name of the tool being requested, if any.
     /// `None` means no tool call is being made this step.
     pub requested_tool: Option<String>,
