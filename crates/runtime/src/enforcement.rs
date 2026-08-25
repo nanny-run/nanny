@@ -56,6 +56,16 @@ impl RuleEvaluator {
     pub fn new(max_calls: HashMap<String, u32>) -> Self {
         Self { max_calls }
     }
+
+    /// The engine-side rule governing `tool`, if any.
+    ///
+    /// A `max_calls` cap is a rule like any other, so a call it evaluated and
+    /// allowed belongs in that call's `cleared_by` alongside the SDK's rules.
+    /// Otherwise the engine's own control is the one control that leaves no
+    /// evidence of having operated.
+    pub fn rule_name_for(&self, tool: &str) -> Option<String> {
+        self.max_calls.contains_key(tool).then(|| format!("{tool}.max_calls"))
+    }
 }
 
 impl Policy for RuleEvaluator {

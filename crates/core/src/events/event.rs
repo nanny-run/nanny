@@ -88,9 +88,20 @@ pub enum ExecutionEvent {
     },
 
     /// Emitted when a tool call is evaluated and allowed by policy.
+    ///
+    /// `cleared_by` names the rules that evaluated this call and allowed it, in
+    /// evaluation order. Without it a rule that ran clean nine thousand times
+    /// and a rule that was never reached produce identical logs, so the healthy
+    /// state, which is the normal state for a good control, is unprovable. The
+    /// engine is required to log every verdict, allow and refuse alike; a rule
+    /// returning allow is a verdict.
+    ///
+    /// Empty when no rule governed the call.
     ToolAllowed {
         ts: u64,
         tool: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        cleared_by: Vec<String>,
     },
 
     /// Emitted when a tool call is blocked by the allowlist ([tools] allowed).
@@ -113,6 +124,15 @@ pub enum ExecutionEvent {
         ts: u64,
         tool: String,
         rule_name: String,
+        /// Rules that evaluated and allowed this call *before* the one that
+        /// fired, in evaluation order.
+        ///
+        /// Evaluation short-circuits on the first denial, so rules after
+        /// `rule_name` never produced a verdict and listing them would be a
+        /// fabrication. This is the boundary between what was checked and what
+        /// merely existed.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        cleared_by: Vec<String>,
     },
 
     /// Emitted when a permitted tool fails during execution.
@@ -305,7 +325,7 @@ mod tests {
     use super::*;
 
     fn tool_allowed() -> ExecutionEvent {
-        ExecutionEvent::ToolAllowed { ts: 1_756_100_000_000, tool: "web_search".into() }
+        ExecutionEvent::ToolAllowed { ts: 1_756_100_000_000, tool: "web_search".into(), cleared_by: Vec::new() }
     }
 
     #[test]

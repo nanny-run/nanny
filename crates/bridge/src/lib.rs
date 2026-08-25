@@ -495,6 +495,11 @@ pub(crate) fn handle_tool_call(
     };
 
     // Build PolicyContext and evaluate — hold lock briefly, then release.
+    // The engine's own `max_calls` rule, if it governs this tool. Recorded as
+    // cleared when the call is allowed, the same as any SDK-side rule.
+    let engine_rule = shared.lock().unwrap().rule_evaluator.rule_name_for(&call.tool);
+    let mut cleared_by = call.cleared_by.clone();
+
     let decision = {
         let guard = shared.lock().unwrap();
         let elapsed_ms = guard.start_time.elapsed().as_millis() as u64;
@@ -528,6 +533,7 @@ pub(crate) fn handle_tool_call(
                         ts: now_ms(),
                         tool: call.tool.clone(),
                         rule_name: rule_name.clone(),
+                        cleared_by: call.cleared_by.clone(),
                     },
                     _ => ExecutionEvent::ToolDenied {
                         ts: now_ms(),
@@ -541,6 +547,9 @@ pub(crate) fn handle_tool_call(
         }
 
         PolicyDecision::Allow => {
+            if let Some(name) = engine_rule {
+                cleared_by.push(name);
+            }
             // Execute tool — no lock held during execution (may be slow for http_get).
             let cost = registry.declared_cost(&call.tool).unwrap_or(0);
             let result = registry.call(&call.tool, &call.args);
@@ -558,6 +567,7 @@ pub(crate) fn handle_tool_call(
                         append_event(&mut guard, ExecutionEvent::ToolAllowed {
                             ts: now_ms(),
                             tool: call.tool.clone(),
+                            cleared_by: cleared_by.clone(),
                         });
                     }
                     BridgeResp::json(200, serde_json::to_string(
@@ -587,6 +597,7 @@ pub(crate) fn handle_tool_call(
                         append_event(&mut guard, ExecutionEvent::ToolAllowed {
                             ts: now_ms(),
                             tool: call.tool.clone(),
+                            cleared_by: cleared_by.clone(),
                         });
                     }
                     BridgeResp::json(200, serde_json::to_string(
@@ -1016,6 +1027,15 @@ struct ToolCallRequest {
     tool: String,
     #[serde(default)]
     args: ToolArgs,
+    /// Rules the SDK evaluated and cleared before making this call.
+    ///
+    /// Assembled client-side because that is the only place it exists: real
+    /// `@rule` bodies are compiled into the agent's process and run before the
+    /// bridge is ever contacted, so the governor cannot observe them. The
+    /// bridge records what the SDK reports and adds its own `max_calls`
+    /// pseudo-rules to the same list.
+    #[serde(default)]
+    cleared_by: Vec<String>,
     /// Token cost declared by the macro at the call site.
     /// Used when the tool is not registered in the bridge registry (user-defined tools).
     #[serde(default)]
@@ -1099,7 +1119,14 @@ pub(crate) fn handle_stop(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> Brid
         let tool      = parsed["tool"].as_str().unwrap_or("").to_string();
         let rule_name = parsed["rule_name"].as_str().unwrap_or("").to_string();
         if !tool.is_empty() && !rule_name.is_empty() {
-            append_event(&mut guard, ExecutionEvent::RuleDenied { ts: now_ms(), tool, rule_name });
+            let cleared_by: Vec<String> = parsed["cleared_by"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            append_event(
+                &mut guard,
+                ExecutionEvent::RuleDenied { ts: now_ms(), tool, rule_name, cleared_by },
+            );
         }
     }
     mark_stopped(&mut guard, &reason);
@@ -2419,7 +2446,7 @@ mod tests {
         let state = template_for_envelope().build_state("run-a");
         let mut guard = state.lock().unwrap();
         for i in 0..3 {
-            append_event(&mut guard, ExecutionEvent::ToolAllowed { ts: i, tool: "echo".into() });
+            append_event(&mut guard, ExecutionEvent::ToolAllowed { ts: i, tool: "echo".into(), cleared_by: Vec::new() });
         }
         let seqs: Vec<u64> = guard
             .events
@@ -2440,12 +2467,12 @@ mod tests {
 
         {
             let mut ga = a.lock().unwrap();
-            append_event(&mut ga, ExecutionEvent::ToolAllowed { ts: 1, tool: "echo".into() });
-            append_event(&mut ga, ExecutionEvent::ToolAllowed { ts: 2, tool: "echo".into() });
+            append_event(&mut ga, ExecutionEvent::ToolAllowed { ts: 1, tool: "echo".into(), cleared_by: Vec::new() });
+            append_event(&mut ga, ExecutionEvent::ToolAllowed { ts: 2, tool: "echo".into(), cleared_by: Vec::new() });
         }
         {
             let mut gb = b.lock().unwrap();
-            append_event(&mut gb, ExecutionEvent::ToolAllowed { ts: 3, tool: "echo".into() });
+            append_event(&mut gb, ExecutionEvent::ToolAllowed { ts: 3, tool: "echo".into(), cleared_by: Vec::new() });
         }
 
         let read = |st: &Arc<Mutex<BridgeState>>| -> Vec<(String, u64)> {
@@ -2463,4 +2490,104 @@ mod tests {
         assert_eq!(read(&a), vec![("run-a".into(), 0), ("run-a".into(), 1)]);
         assert_eq!(read(&b), vec![("run-b".into(), 0)]);
     }
+
+    // ── cleared_by ────────────────────────────────────────────────────────────
+
+    fn started_with_max_calls(tool: &str, max: u32) -> Bridge {
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(EchoTool));
+        Bridge::start(
+            BridgeComponents {
+                registry,
+                allowed_tools: vec![tool.to_string()],
+                per_tool_max_calls: [(tool.to_string(), max)].into_iter().collect(),
+                tool_labels: HashMap::new(),
+            },
+            "test-run".to_string(),
+        )
+        .unwrap()
+    }
+
+    fn one_event(b: &Bridge, name: &str) -> serde_json::Value {
+        let (_, events) = get(b, "/events");
+        events
+            .lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .find(|v| v["event"] == name)
+            .unwrap_or_else(|| panic!("no {name} event in the stream"))
+    }
+
+
+    /// A call the SDK cleared through two rules records both, in order.
+    #[test]
+    fn an_allowed_call_records_what_cleared_it() {
+        let b = started(1000);
+        let (status, _) = post(
+            &b,
+            "/tool/call",
+            r#"{"tool":"echo","args":{"message":"hi"},"cleared_by":["first_rule","second_rule"]}"#,
+        );
+        assert_eq!(status, 200);
+
+        let allowed = one_event(&b, "ToolAllowed");
+        assert_eq!(
+            allowed["cleared_by"],
+            serde_json::json!(["first_rule", "second_rule"]),
+            "a rule that ran clean must leave evidence it operated"
+        );
+    }
+
+    /// A denial records the rules that cleared *before* the one that fired, and
+    /// never the ones after it.
+    ///
+    /// Evaluation short-circuits, so rules after the denier never produced a
+    /// verdict. Listing them would claim a control operated when it did not,
+    /// which is the one failure mode a compliance log cannot have.
+    #[test]
+    fn a_denial_records_only_the_rules_that_ran_before_it() {
+        let b = started(1000);
+        let (status, _) = post(
+            &b,
+            "/stop",
+            r#"{"reason":"RuleDenied","tool":"send_outreach","rule_name":"no_send_after_read","cleared_by":["ran_first"]}"#,
+        );
+        assert_eq!(status, 200);
+
+        let denied = one_event(&b, "RuleDenied");
+        assert_eq!(denied["rule_name"], "no_send_after_read");
+        assert_eq!(
+            denied["cleared_by"],
+            serde_json::json!(["ran_first"]),
+            "only rules that actually evaluated belong here"
+        );
+    }
+
+    /// An ungoverned call says so by omission rather than by an empty promise.
+    #[test]
+    fn a_call_no_rule_governed_records_nothing() {
+        let b = started(1000);
+        post(&b, "/tool/call", r#"{"tool":"echo","args":{"message":"hi"}}"#);
+
+        let allowed = one_event(&b, "ToolAllowed");
+        assert!(
+            allowed.get("cleared_by").is_none(),
+            "no rule ran, so the field is absent rather than an empty list"
+        );
+    }
+
+    /// The engine's own `max_calls` cap is a rule, and a call it allowed
+    /// records it alongside the SDK's.
+    #[test]
+    fn the_engine_records_its_own_rule_as_cleared() {
+        let b = started_with_max_calls("echo", 5);
+        post(&b, "/tool/call", r#"{"tool":"echo","args":{"message":"hi"},"cleared_by":["sdk_rule"]}"#);
+
+        let allowed = one_event(&b, "ToolAllowed");
+        assert_eq!(
+            allowed["cleared_by"],
+            serde_json::json!(["sdk_rule", "echo.max_calls"]),
+            "the engine's control must not be the one control with no evidence"
+        );
+    }
+
 }
