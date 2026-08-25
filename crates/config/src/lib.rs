@@ -1,3 +1,5 @@
+pub mod pack;
+
 // nanny.toml schema, parsing, and strict validation.
 //
 // This crate owns one job: turn a static file into a trusted, validated config.
