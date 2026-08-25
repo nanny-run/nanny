@@ -95,7 +95,7 @@ fn start_bridge(allowed: &[&str]) -> Bridge {
         per_tool_max_calls: HashMap::new(),
         tool_labels: Default::default(),
     };
-    Bridge::start(components).expect("bridge must start in tests")
+    Bridge::start(components, "test-run".to_string()).expect("bridge must start in tests")
 }
 
 /// A bridge whose allowlist carries operator-declared labels, mirroring what
@@ -112,7 +112,7 @@ fn start_labelled_bridge(tools: &[(&str, &[&str])]) -> Bridge {
             })
             .collect(),
     };
-    Bridge::start(components).expect("bridge must start in tests")
+    Bridge::start(components, "test-run".to_string()).expect("bridge must start in tests")
 }
 
 fn inject_env(bridge: &Bridge) {

@@ -164,24 +164,25 @@ impl Bridge {
     ///
     /// On Unix, binds a Unix domain socket before returning — ready immediately.
     /// On Windows, binds a TCP loopback socket on an OS-assigned port.
-    pub fn start(components: BridgeComponents) -> Result<Self, BridgeError> {
+    /// `run_id` is supplied by the caller rather than minted here: the CLI
+    /// writes `ExecutionStarted` before the bridge exists, and a bookend
+    /// stamped with a different id than the verdicts it brackets is worse than
+    /// no id at all.
+    pub fn start(components: BridgeComponents, run_id: String) -> Result<Self, BridgeError> {
         let token = Uuid::new_v4().to_string();
 
         let tool_permission_policy =
             ToolPermissionPolicy::new(components.allowed_tools.clone());
         let rule_evaluator = RuleEvaluator::new(components.per_tool_max_calls);
 
-        // One local process is always one run, so the id is minted here rather
-        // than threaded in. It still matters locally: `[observability] log`
-        // appends every run of a project to the same file, so without it two
-        // successive `nanny run` invocations are one undifferentiated stream.
-        let run_id = Uuid::new_v4().to_string();
-
+        // `seq` starts at 1: the CLI writes `ExecutionStarted` before the
+        // bridge exists and reserves 0 for it, so the run has one counter
+        // rather than two that collide.
         let shared = Arc::new(Mutex::new(BridgeState {
             session_token: token.clone(),
             execution: ExecutionState::Running,
             run_id,
-            next_seq: 0,
+            next_seq: 1,
             tool_permission_policy,
             rule_evaluator,
             agent_name_stack: Vec::new(),
@@ -276,6 +277,21 @@ fn start_transport(
 impl Bridge {
 
     /// Read the current execution state.
+    /// The next unused `seq` for this run.
+    ///
+    /// The CLI needs it to stamp `ExecutionStopped`, which it writes itself
+    /// after the bridge has already numbered every verdict. Taking the number
+    /// here rather than keeping a second counter in the CLI is what makes the
+    /// run one continuous sequence instead of two overlapping ones.
+    pub fn next_seq(&self) -> u64 {
+        self.shared.lock().unwrap().next_seq
+    }
+
+    /// The run this bridge governs.
+    pub fn run_id(&self) -> String {
+        self.shared.lock().unwrap().run_id.clone()
+    }
+
     pub fn execution_state(&self) -> ExecutionState {
         self.shared.lock().unwrap().execution.clone()
     }
@@ -1264,7 +1280,7 @@ mod tests {
     }
 
     fn started(max_cost: u64) -> Bridge {
-        let b = Bridge::start(echo_components(max_cost)).unwrap();
+        let b = Bridge::start(echo_components(max_cost), "test-run".to_string()).unwrap();
         // Small pause to let the server thread reach accept().
         std::thread::sleep(std::time::Duration::from_millis(20));
         b
@@ -1279,7 +1295,7 @@ mod tests {
             per_tool_max_calls: Default::default(),
             tool_labels: Default::default(),
         };
-        let b = Bridge::start(components).unwrap();
+        let b = Bridge::start(components, "test-run".to_string()).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
         b
     }
@@ -1393,8 +1409,8 @@ mod tests {
 
     #[test]
     fn each_bridge_gets_a_unique_token() {
-        let b1 = Bridge::start(echo_components(1000)).unwrap();
-        let b2 = Bridge::start(echo_components(1000)).unwrap();
+        let b1 = Bridge::start(echo_components(1000), "test-run".to_string()).unwrap();
+        let b2 = Bridge::start(echo_components(1000), "test-run".to_string()).unwrap();
         assert_ne!(b1.session_token, b2.session_token);
     }
 
@@ -1485,7 +1501,7 @@ mod tests {
             allowed_tools: vec![],   // empty allowlist — all tools denied
             per_tool_max_calls: Default::default(),
             tool_labels: Default::default(),
-        }).unwrap();
+        }, "test-run".to_string()).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
 
         let (s, body) = post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);
@@ -1503,7 +1519,7 @@ mod tests {
             allowed_tools: vec![],
             per_tool_max_calls: Default::default(),
             tool_labels: Default::default(),
-        }).unwrap();
+        }, "test-run".to_string()).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
 
         post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);
@@ -1563,7 +1579,7 @@ mod tests {
             allowed_tools: vec!["echo".to_string()],
             per_tool_max_calls,
             tool_labels: Default::default(),
-        }).unwrap();
+        }, "test-run".to_string()).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
 
         // First call: allowed
@@ -1595,7 +1611,7 @@ mod tests {
             allowed_tools: vec!["echo".to_string()],
             per_tool_max_calls,
             tool_labels: Default::default(),
-        }).unwrap();
+        }, "test-run".to_string()).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
 
         let ctx = r#"{"tool":"echo","tool_call_counts":{"echo":2}}"#;
@@ -1616,7 +1632,7 @@ mod tests {
             allowed_tools: vec!["echo".to_string()],
             per_tool_max_calls,
             tool_labels: Default::default(),
-        }).unwrap();
+        }, "test-run".to_string()).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
 
         // Make one tool call so bridge tracks 1 echo call.
@@ -1686,7 +1702,7 @@ mod tests {
             allowed_tools: vec!["echo".to_string(), "quiet".to_string()],
             per_tool_max_calls: Default::default(),
             tool_labels,
-        }).unwrap();
+        }, "test-run".to_string()).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
 
         let (_, body) = get(&b, "/status");
@@ -2063,7 +2079,7 @@ mod tests {
             allowed_tools: vec!["fail".to_string()],
             per_tool_max_calls: Default::default(),
             tool_labels: Default::default(),
-        }).unwrap();
+        }, "test-run".to_string()).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
 
         let (status, _body) = post(&b, "/tool/call", r#"{"tool":"fail","args":{}}"#);

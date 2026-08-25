@@ -72,6 +72,20 @@ pub fn build_bridge_components(config: &NannyConfig) -> BridgeComponents {
     }
 }
 
+/// The id for this run.
+///
+/// `NANNY_RUN_ID` is how separate processes opt into one shared run; absent it,
+/// every invocation is its own. Minted here rather than inside the bridge
+/// because the CLI writes `ExecutionStarted` before the bridge exists, and a
+/// bookend stamped with a different id than the verdicts it brackets would be
+/// worse than no id at all.
+pub fn resolve_run_id() -> String {
+    std::env::var("NANNY_RUN_ID")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

@@ -6,7 +6,7 @@
 
 use anyhow::{Context, Result};
 use nanny_config::ObservabilityConfig;
-use nanny_core::events::event::ExecutionEvent;
+use nanny_core::events::event::{ExecutionEvent, LoggedEvent};
 use std::fs::OpenOptions;
 use std::io::{self, BufWriter, Write};
 use std::path::Path;
@@ -45,8 +45,14 @@ impl EventWriter {
     }
 
     /// Write one event as a single line of JSON, flushed immediately.
-    pub fn write(&mut self, event: &ExecutionEvent) -> Result<()> {
-        let line = serde_json::to_string(event).context("failed to serialize event")?;
+    ///
+    /// Takes the run id and sequence explicitly rather than holding a counter:
+    /// the bridge numbers every verdict, so a second counter here would produce
+    /// two overlapping sequences for one run. The CLI only ever writes the two
+    /// bookends, and it takes their numbers from the bridge.
+    pub fn write(&mut self, run_id: &str, seq: u64, event: &ExecutionEvent) -> Result<()> {
+        let stamped = LoggedEvent::new(run_id, seq, event.clone());
+        let line = serde_json::to_string(&stamped).context("failed to serialize event")?;
         self.write_raw(&line)
     }
 
@@ -139,8 +145,8 @@ mod tests {
                 fn flush(&mut self) -> io::Result<()> { Ok(()) }
             }
             let mut writer = EventWriter { out: Box::new(ArcWriter(buf_clone)) };
-            for event in events {
-                writer.write(&event).unwrap();
+            for (seq, event) in events.into_iter().enumerate() {
+                writer.write("test-run", seq as u64, &event).unwrap();
             }
         }
         let bytes = buf.lock().unwrap().clone();
@@ -192,8 +198,8 @@ mod tests {
 
         {
             let mut writer = EventWriter::file(&path).unwrap();
-            writer.write(&started_event()).unwrap();
-            writer.write(&stopped_event("AgentCompleted", 0, 50)).unwrap();
+            writer.write("test-run", 0, &started_event()).unwrap();
+            writer.write("test-run", 1, &stopped_event("AgentCompleted", 0, 50)).unwrap();
         }
 
         let content = std::fs::read_to_string(&path).unwrap();

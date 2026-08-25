@@ -609,12 +609,16 @@ fn cmd_run(
     // ── Open event log ────────────────────────────────────────────────────
     let mut log = events::EventWriter::from_config(&config.observability, config_dir)?;
 
+    // The run id is minted before anything is written: `ExecutionStarted` is
+    // seq 0 of this run and the bridge continues from 1, so the log is one
+    // sequence rather than two that collide.
+    let run_id = runtime::resolve_run_id();
     let started_event = execution_started_event(&command.join(" "), &config.tools);
-    log.write(&started_event)?;
+    log.write(&run_id, 0, &started_event)?;
 
     // ── Start bridge ──────────────────────────────────────────────────────
     let bridge_components = runtime::build_bridge_components(&config);
-    let bridge = Bridge::start(bridge_components)
+    let bridge = Bridge::start(bridge_components, run_id.clone())
         .context("failed to start bridge")?;
 
     // ── Cloud sync (off unless NANNY_API_KEY is set) ────────────────────────
@@ -663,7 +667,7 @@ fn cmd_run(
         Err(e) => {
             // ExecutionStarted was emitted — always pair it with ExecutionStopped.
             let elapsed_ms = started_at.elapsed().as_millis() as u64;
-            let _ = log.write(&execution_stopped_event("SpawnFailed", 0, elapsed_ms));
+            let _ = log.write(&run_id, bridge.next_seq(), &execution_stopped_event("SpawnFailed", 0, elapsed_ms));
             return Err(e).with_context(|| format!("failed to spawn '{}'", program));
         }
     };
@@ -716,7 +720,7 @@ fn cmd_run(
             Err(e) => {
                 // Polling failed — emit stopped before surfacing the error.
                 let elapsed_ms = started_at.elapsed().as_millis() as u64;
-                let _ = log.write(&execution_stopped_event("InternalError", 0, elapsed_ms));
+                let _ = log.write(&run_id, bridge.next_seq(), &execution_stopped_event("InternalError", 0, elapsed_ms));
                 return Err(e).context("failed to poll child process");
             }
         }
@@ -756,7 +760,7 @@ fn cmd_run(
         metrics.tokens_spent,
         elapsed_ms,
     );
-    log.write(&stopped_event)?;
+    log.write(&run_id, bridge.next_seq(), &stopped_event)?;
     if let Some(sender) = &managed {
         if let Ok(line) = serde_json::to_string(&stopped_event) {
             sender.enqueue(line);
