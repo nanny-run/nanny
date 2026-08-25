@@ -26,6 +26,19 @@ pub enum ConfigError {
 
     #[error("invalid config: {0}")]
     Parse(String),
+
+    #[error(
+        "rule pack '{0}' has no version — pin it as 'name@version'. \
+         An unpinned pack lets the rules change without anyone deciding to \
+         change them, and makes past evidence mean something different later."
+    )]
+    UnpinnedRulePack(String),
+
+    #[error(
+        "rule pack '{name}@{version}' is declared in [rules] extends but is not \
+         installed at '{path}' — run `nanny rules add {name}@{version}`"
+    )]
+    RulePackMissing { name: String, version: String, path: String },
 }
 
 // ── Top-level config ──────────────────────────────────────────────────────────
@@ -45,6 +58,59 @@ pub struct NannyConfig {
     /// Event log output settings.
     #[serde(default)]
     pub observability: ObservabilityConfig,
+
+    /// Installed rule packs.
+    #[serde(default)]
+    pub rules: RulesConfig,
+}
+
+// ── RulesConfig ───────────────────────────────────────────────────────────────
+
+/// Which rule packs govern this application.
+///
+/// ```toml
+/// [rules]
+/// extends = ["nanny:recommended@1.0.0", "nanny:owasp@2.1.0"]
+/// ```
+///
+/// A values-only list, exactly like `tools.allowed`. It names packs; it does not
+/// express conditions or actions, so it is not the condition/action DSL the
+/// manifesto forbids in configuration. The logic stays in the rule bodies the
+/// pack ships.
+///
+/// Each entry is `name@version`, always pinned. An unpinned or floating
+/// reference would let the control set change without anyone deciding to change
+/// it, which destroys determinism and makes historical evidence change meaning
+/// after the fact. `nanny rules add` writes the pin for you.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct RulesConfig {
+    #[serde(default)]
+    pub extends: Vec<String>,
+}
+
+impl RulesConfig {
+    /// Parse each entry into `(name, version)`.
+    ///
+    /// Returns an error rather than guessing: an entry without a version is a
+    /// configuration mistake, and silently resolving it to "whatever is
+    /// installed" is exactly the floating reference this format exists to
+    /// prevent.
+    pub fn pinned(&self) -> Result<Vec<(String, String)>, ConfigError> {
+        self.extends
+            .iter()
+            .map(|entry| {
+                let entry = entry.trim();
+                match entry.rsplit_once('@') {
+                    Some((name, version))
+                        if !name.trim().is_empty() && !version.trim().is_empty() =>
+                    {
+                        Ok((name.trim().to_string(), version.trim().to_string()))
+                    }
+                    _ => Err(ConfigError::UnpinnedRulePack(entry.to_string())),
+                }
+            })
+            .collect()
+    }
 }
 
 // ── StartConfig ───────────────────────────────────────────────────────────────
@@ -795,5 +861,60 @@ reads_untrusted = true
         let fp = parse(BASE).fingerprint();
         assert_eq!(fp.len(), 64);
         assert!(fp.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+}
+
+#[cfg(test)]
+mod rules_config_tests {
+    use super::*;
+
+    #[test]
+    fn extends_defaults_to_empty() {
+        let cfg: NannyConfig = toml::from_str("[tools]\nallowed = []\n").unwrap();
+        assert!(cfg.rules.extends.is_empty());
+    }
+
+    #[test]
+    fn a_pinned_pack_parses_into_name_and_version() {
+        let cfg: NannyConfig = toml::from_str(
+            "[rules]\nextends = [\"nanny:owasp@2.1.0\"]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.rules.pinned().unwrap(),
+            vec![("nanny:owasp".to_string(), "2.1.0".to_string())]
+        );
+    }
+
+    #[test]
+    fn an_unpinned_pack_is_rejected_rather_than_guessed() {
+        // Resolving this to "whatever is installed" is the floating reference
+        // the pinned format exists to prevent.
+        let cfg: NannyConfig =
+            toml::from_str("[rules]\nextends = [\"nanny:owasp\"]\n").unwrap();
+        assert!(matches!(
+            cfg.rules.pinned(),
+            Err(ConfigError::UnpinnedRulePack(_))
+        ));
+    }
+
+    #[test]
+    fn the_namespace_colon_is_not_mistaken_for_a_version() {
+        let cfg: NannyConfig =
+            toml::from_str("[rules]\nextends = [\"acme:internal:fraud@0.3.1\"]\n").unwrap();
+        assert_eq!(
+            cfg.rules.pinned().unwrap(),
+            vec![("acme:internal:fraud".to_string(), "0.3.1".to_string())]
+        );
+    }
+
+    #[test]
+    fn declared_packs_change_the_fingerprint() {
+        // Which controls govern a run is policy, so it must move the hash.
+        let base: NannyConfig = toml::from_str("[tools]\nallowed = []\n").unwrap();
+        let with_pack: NannyConfig =
+            toml::from_str("[tools]\nallowed = []\n\n[rules]\nextends = [\"nanny:owasp@2.1.0\"]\n")
+                .unwrap();
+        assert_ne!(base.fingerprint(), with_pack.fingerprint());
     }
 }

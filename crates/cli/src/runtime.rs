@@ -102,6 +102,7 @@ mod tests {
                 per_tool: HashMap::new(),
             },
             observability: ObservabilityConfig::default(),
+            rules: Default::default(),
         }
     }
 
