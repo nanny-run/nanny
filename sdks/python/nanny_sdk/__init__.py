@@ -19,9 +19,12 @@ from nanny_sdk.exceptions import (
     ToolDenied,
 )
 from nanny_sdk.instrument import instrument
+from nanny_sdk.packs import declare_all, load_installed_packs
 from nanny_sdk.run import run_scope
 
 __all__ = [
+    "declare_all",
+    "load_installed_packs",
     # Decorators
     "tool",
     "rule",
