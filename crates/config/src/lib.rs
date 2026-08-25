@@ -653,3 +653,147 @@ endpoint = "https://api.nanny.run/v1"
         assert!(!has_managed_section("# [managed] just a comment"), "a comment is not a section");
     }
 }
+
+// ── Config fingerprint ────────────────────────────────────────────────────────
+
+impl NannyConfig {
+    /// A stable fingerprint of the policy this config expresses.
+    ///
+    /// Recorded on `ExecutionStarted` so a run can be joined to the policy that
+    /// governed it. Without it, "which rules were in force in March" is
+    /// unanswerable: git versions the file, but nothing downstream can see the
+    /// customer's git, so there is no join key between a run and a revision.
+    ///
+    /// Hashed over the **parsed** config, not the file bytes. Comments,
+    /// whitespace, key order and table order are all formatting rather than
+    /// policy, and a fingerprint that changed when someone reflowed a comment
+    /// would report a policy change that did not happen, which is worse than no
+    /// fingerprint at all. `serde_json::Map` is a `BTreeMap`, so serialising
+    /// through it sorts keys for free.
+    ///
+    /// `[start]` is deliberately included: which command is governed is part of
+    /// what was authorised, not incidental.
+    ///
+    /// Canonicalised through `to_value` before serialising, not straight to a
+    /// string. `per_tool` is a `HashMap`, and serialising one directly streams
+    /// its entries in iteration order, which std deliberately varies between
+    /// instances. `serde_json::Value`'s object type is a `BTreeMap`, so routing
+    /// through it sorts every key at every depth. Without this the fingerprint
+    /// is intermittently unstable for one unchanged config, which is the worst
+    /// possible failure for a field whose entire job is saying "same policy".
+    pub fn fingerprint(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let canonical = serde_json::to_value(self)
+            .expect("NannyConfig is plain data and always serialises");
+        let canonical = serde_json::to_string(&canonical)
+            .expect("a Value always serialises");
+        format!("{:x}", Sha256::digest(canonical.as_bytes()))
+    }
+}
+
+#[cfg(test)]
+mod fingerprint_tests {
+    use super::*;
+
+    fn parse(toml: &str) -> NannyConfig {
+        toml::from_str(toml).expect("test config must parse")
+    }
+
+    const BASE: &str = r#"
+[start]
+cmd = "python agent.py"
+
+[tools]
+allowed = ["web_search", "send_outreach"]
+
+[tools.web_search]
+max_calls = 30
+reads_untrusted = true
+
+[tools.send_outreach]
+external_effect = true
+"#;
+
+    #[test]
+    fn formatting_does_not_change_the_fingerprint() {
+        // Same policy, reflowed: comments added, keys reordered, tables moved.
+        let reformatted = r#"
+# Governs the outreach agent.
+[tools]
+allowed = ["web_search", "send_outreach"]
+
+[tools.send_outreach]
+external_effect = true   # acts on the outside world
+
+[start]
+cmd = "python agent.py"
+
+[tools.web_search]
+reads_untrusted = true
+max_calls       = 30
+"#;
+        assert_eq!(parse(BASE).fingerprint(), parse(reformatted).fingerprint());
+    }
+
+    #[test]
+    fn changing_a_call_cap_changes_the_fingerprint() {
+        let changed = BASE.replace("max_calls = 30", "max_calls = 31");
+        assert_ne!(parse(BASE).fingerprint(), parse(&changed).fingerprint());
+    }
+
+    #[test]
+    fn changing_a_label_changes_the_fingerprint() {
+        let changed = BASE.replace("external_effect = true", "destructive = true");
+        assert_ne!(parse(BASE).fingerprint(), parse(&changed).fingerprint());
+    }
+
+    #[test]
+    fn changing_the_allowlist_changes_the_fingerprint() {
+        let changed = BASE.replace(r#"["web_search", "send_outreach"]"#, r#"["web_search"]"#);
+        assert_ne!(parse(BASE).fingerprint(), parse(&changed).fingerprint());
+    }
+
+    #[test]
+    fn changing_the_governed_command_changes_the_fingerprint() {
+        // What is governed is part of the grant, not incidental.
+        let changed = BASE.replace("python agent.py", "python other.py");
+        assert_ne!(parse(BASE).fingerprint(), parse(&changed).fingerprint());
+    }
+
+#[test]
+    fn the_fingerprint_is_stable_across_independent_parses() {
+        // `per_tool` is a HashMap and std varies iteration order between
+        // instances, so a naive serialisation is intermittently unstable. Many
+        // fresh parses of the same text must agree every time.
+        let first = parse(BASE).fingerprint();
+        for _ in 0..64 {
+            assert_eq!(parse(BASE).fingerprint(), first);
+        }
+    }
+
+    #[test]
+    fn tool_table_order_does_not_change_the_fingerprint() {
+        let swapped = r#"
+[start]
+cmd = "python agent.py"
+
+[tools]
+allowed = ["web_search", "send_outreach"]
+
+[tools.send_outreach]
+external_effect = true
+
+[tools.web_search]
+max_calls = 30
+reads_untrusted = true
+"#;
+        assert_eq!(parse(BASE).fingerprint(), parse(swapped).fingerprint());
+    }
+
+    #[test]
+    fn the_fingerprint_is_a_sha256_hex_digest() {
+        let fp = parse(BASE).fingerprint();
+        assert_eq!(fp.len(), 64);
+        assert!(fp.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+}
