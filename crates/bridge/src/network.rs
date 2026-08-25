@@ -269,11 +269,12 @@ impl AppState {
             .unwrap_or(DEFAULT_RUN_ID)
             .to_string();
 
+        let run_id_for_state = run_id.clone();
         self.runs
             .lock()
             .unwrap()
             .entry(run_id)
-            .or_insert_with(|| self.template.build_state())
+            .or_insert_with(|| self.template.build_state(&run_id_for_state))
             .clone()
     }
 }
@@ -668,7 +669,7 @@ impl NetworkServer {
             Arc::new(Mutex::new(HashMap::new()));
         runs.lock()
             .unwrap()
-            .insert(DEFAULT_RUN_ID.to_string(), template.build_state());
+            .insert(DEFAULT_RUN_ID.to_string(), template.build_state(DEFAULT_RUN_ID));
 
         // Draining hook: when either a cloud sink or a local log path is
         // attached, a background thread drains each run's events. Draining is
@@ -1543,7 +1544,7 @@ mod tests {
                 Arc::new(Mutex::new(HashMap::new()));
             runs.lock()
                 .unwrap()
-                .insert(DEFAULT_RUN_ID.to_string(), template.build_state());
+                .insert(DEFAULT_RUN_ID.to_string(), template.build_state(DEFAULT_RUN_ID));
             let app = AppState {
                 runs,
                 template,

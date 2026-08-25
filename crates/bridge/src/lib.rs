@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
-use nanny_core::events::event::ExecutionEvent;
+use nanny_core::events::event::{ExecutionEvent, LoggedEvent};
 use nanny_core::agent::state::StopReason;
 use nanny_core::policy::{Policy, PolicyContext, PolicyDecision};
 use nanny_core::tool::{ToolArgs, ToolCallError, ToolExecutor};
@@ -102,6 +102,17 @@ pub(crate) struct BridgeState {
     session_token: String,
     execution: ExecutionState,
 
+    /// Which run this state governs. Under `--serve` one governor holds many;
+    /// locally there is exactly one. Stamped onto every event so the log is
+    /// self-describing rather than only interpretable alongside the transport
+    /// header that carried it.
+    run_id: String,
+    /// Next `seq` for this run. Assigned **here, at append time**, never at
+    /// drain time: the drain loop walks many runs and numbering there would
+    /// count across interleaved runs, manufacturing gaps in the one field
+    /// whose purpose is making genuine gaps detectable.
+    next_seq: u64,
+
     // Enforcement — stored separately so /rule/evaluate can access
     // rule_evaluator directly without evaluating the full policy chain.
     tool_permission_policy: ToolPermissionPolicy,
@@ -160,9 +171,17 @@ impl Bridge {
             ToolPermissionPolicy::new(components.allowed_tools.clone());
         let rule_evaluator = RuleEvaluator::new(components.per_tool_max_calls);
 
+        // One local process is always one run, so the id is minted here rather
+        // than threaded in. It still matters locally: `[observability] log`
+        // appends every run of a project to the same file, so without it two
+        // successive `nanny run` invocations are one undifferentiated stream.
+        let run_id = Uuid::new_v4().to_string();
+
         let shared = Arc::new(Mutex::new(BridgeState {
             session_token: token.clone(),
             execution: ExecutionState::Running,
+            run_id,
+            next_seq: 0,
             tool_permission_policy,
             rule_evaluator,
             agent_name_stack: Vec::new(),
@@ -1054,7 +1073,9 @@ pub(crate) fn mark_stopped(state: &mut BridgeState, reason: &str) {
 }
 
 pub(crate) fn append_event(state: &mut BridgeState, event: ExecutionEvent) {
-    state.events.push(serde_json::to_string(&event).unwrap());
+    let stamped = LoggedEvent::new(state.run_id.clone(), state.next_seq, event);
+    state.next_seq += 1;
+    state.events.push(serde_json::to_string(&stamped).unwrap());
 }
 
 /// Append a `HarnessIdentified` event only when the harness actually changes.
@@ -1160,7 +1181,7 @@ impl RunTemplate {
     ///
     /// Each call produces a distinct execution with zeroed counters, so a
     /// stop on one run never touches another.
-    pub(crate) fn build_state(&self) -> Arc<Mutex<BridgeState>> {
+    pub(crate) fn build_state(&self, run_id: &str) -> Arc<Mutex<BridgeState>> {
         let tool_permission_policy =
             ToolPermissionPolicy::new(self.allowed_tools.clone());
         let rule_evaluator = RuleEvaluator::new(self.per_tool_max_calls.clone());
@@ -1168,6 +1189,8 @@ impl RunTemplate {
         Arc::new(Mutex::new(BridgeState {
             session_token: self.session_token.clone(),
             execution: ExecutionState::Running,
+            run_id: run_id.to_string(),
+            next_seq: 0,
             tool_permission_policy,
             rule_evaluator,
             agent_name_stack: Vec::new(),
@@ -2287,5 +2310,67 @@ mod tests {
                 .unwrap_or(false)
         });
         assert!(!has_rule_denied, "RuleDenied event must only fire for RuleDenied reason, not AgentCompleted");
+    }
+
+    // ── Run envelope ──────────────────────────────────────────────────────────
+
+    fn template_for_envelope() -> RunTemplate {
+        let components = BridgeComponents {
+            registry: ToolRegistry::new(),
+            allowed_tools: vec!["echo".into()],
+            per_tool_max_calls: HashMap::new(),
+            tool_labels: HashMap::new(),
+        };
+        init_run_template(components, "tok".into()).0
+    }
+
+    #[test]
+    fn seq_is_monotonic_within_a_run() {
+        let state = template_for_envelope().build_state("run-a");
+        let mut guard = state.lock().unwrap();
+        for i in 0..3 {
+            append_event(&mut guard, ExecutionEvent::ToolAllowed { ts: i, tool: "echo".into() });
+        }
+        let seqs: Vec<u64> = guard
+            .events
+            .iter()
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap()["seq"].as_u64().unwrap())
+            .collect();
+        assert_eq!(seqs, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn each_run_numbers_itself() {
+        // The whole point of assigning seq at append time rather than at drain
+        // time: two runs interleaving into one log must not share a counter, or
+        // every run looks like it is missing events.
+        let template = template_for_envelope();
+        let a = template.build_state("run-a");
+        let b = template.build_state("run-b");
+
+        {
+            let mut ga = a.lock().unwrap();
+            append_event(&mut ga, ExecutionEvent::ToolAllowed { ts: 1, tool: "echo".into() });
+            append_event(&mut ga, ExecutionEvent::ToolAllowed { ts: 2, tool: "echo".into() });
+        }
+        {
+            let mut gb = b.lock().unwrap();
+            append_event(&mut gb, ExecutionEvent::ToolAllowed { ts: 3, tool: "echo".into() });
+        }
+
+        let read = |st: &Arc<Mutex<BridgeState>>| -> Vec<(String, u64)> {
+            st.lock()
+                .unwrap()
+                .events
+                .iter()
+                .map(|l| {
+                    let v: serde_json::Value = serde_json::from_str(l).unwrap();
+                    (v["run_id"].as_str().unwrap().to_string(), v["seq"].as_u64().unwrap())
+                })
+                .collect()
+        };
+
+        assert_eq!(read(&a), vec![("run-a".into(), 0), ("run-a".into(), 1)]);
+        assert_eq!(read(&b), vec![("run-b".into(), 0)]);
     }
 }
