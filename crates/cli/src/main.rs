@@ -569,6 +569,24 @@ fn cmd_run(
         }
     }
 
+    // ── Resolve declared rule packs ───────────────────────────────────────────
+    // Before anything runs. A pack named in [rules] extends but absent from
+    // disk means the operator believes controls are in force that are not, so
+    // the honest response is to refuse rather than to start an agent that is
+    // less governed than its config says.
+    let declared_packs = {
+        let pinned = config.rules.pinned()?;
+        let packs = nanny_config::pack::load_declared_packs(config_dir, &pinned)?;
+        if !packs.is_empty() {
+            println!(
+                "nanny: rule packs — {:?}",
+                packs.iter().map(|p| p.slug()).collect::<Vec<_>>()
+            );
+        }
+        packs
+    };
+    let _ = &declared_packs;
+
     // Require [start] — nanny run always reads the command from config.
     let start = config.start.as_ref()
         .ok_or_else(|| anyhow::anyhow!("no start config found in nanny.toml"))?;

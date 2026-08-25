@@ -905,3 +905,118 @@ fn execution_started_carries_a_stable_config_hash() {
     assert_eq!(hashes[0], hashes[1], "an unchanged config is one policy");
     assert_eq!(hashes[0].len(), 64, "sha256 hex");
 }
+
+// ── Rule packs ────────────────────────────────────────────────────────────────
+
+/// A pack declared in config but absent from disk stops the run before it
+/// starts.
+///
+/// Fail-closed applies to what Nanny was asked to govern. The operator asked
+/// for these controls; running without them would be an agent that is less
+/// governed than its own config claims, which is the one failure a governance
+/// tool cannot have.
+#[test]
+fn a_missing_rule_pack_refuses_to_start() {
+    let dir = temp_dir();
+    fs::write(
+        dir.join("nanny.toml"),
+        r#"[start]
+cmd = "echo hello"
+
+[tools]
+allowed = ["http_get"]
+
+[rules]
+extends = ["nanny:owasp@2.1.0"]
+
+[observability]
+log = "stdout"
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(nanny_bin())
+        .args(["run", "--config", &config_arg(&dir)])
+        .current_dir(&dir)
+        .output()
+        .expect("nanny run must execute");
+
+    assert!(!out.status.success(), "a missing control must not start");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("nanny rules add nanny:owasp@2.1.0"),
+        "the error must say how to fix it, got: {stderr}"
+    );
+}
+
+/// An unpinned pack is a config error, not a resolution guess.
+#[test]
+fn an_unpinned_rule_pack_refuses_to_start() {
+    let dir = temp_dir();
+    fs::write(
+        dir.join("nanny.toml"),
+        r#"[start]
+cmd = "echo hello"
+
+[tools]
+allowed = ["http_get"]
+
+[rules]
+extends = ["nanny:owasp"]
+
+[observability]
+log = "stdout"
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(nanny_bin())
+        .args(["run", "--config", &config_arg(&dir)])
+        .current_dir(&dir)
+        .output()
+        .expect("nanny run must execute");
+
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("has no version"), "got: {stderr}");
+}
+
+/// An installed pack loads and the run proceeds.
+#[test]
+fn an_installed_rule_pack_starts_normally() {
+    let dir = temp_dir();
+    fs::write(
+        dir.join("nanny.toml"),
+        r#"[start]
+cmd = "echo hello"
+
+[tools]
+allowed = ["http_get"]
+
+[rules]
+extends = ["nanny:recommended@1.0.0"]
+
+[observability]
+log = "stdout"
+"#,
+    )
+    .unwrap();
+
+    let pack = dir.join(".nanny/rules/nanny-recommended@1.0.0");
+    fs::create_dir_all(&pack).unwrap();
+    fs::write(
+        pack.join("pack.toml"),
+        "name = \"nanny:recommended\"\nversion = \"1.0.0\"\nrules = [\"no_send_after_read\"]\n",
+    )
+    .unwrap();
+
+    let out = Command::new(nanny_bin())
+        .args(["run", "--config", &config_arg(&dir)])
+        .current_dir(&dir)
+        .output()
+        .expect("nanny run must execute");
+
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("nanny:recommended@1.0.0"), "the run must name its packs");
+}
