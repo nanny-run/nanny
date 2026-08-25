@@ -1,0 +1,21 @@
+name = "nanny:owasp"
+version = "1.0.0"
+description = "Controls mapped to the OWASP Agentic Top Ten."
+python = "python"
+rules = [
+  "no_external_effect_after_untrusted_read",
+  "no_untrusted_read_after_secrets",
+  "no_external_effect_soon_after_untrusted_read",
+  "no_secret_patterns_in_args",
+  "no_pii_to_external_effect_tools",
+  "no_oversized_args",
+  "no_private_network_urls",
+  "no_urls_outside_declared_pattern",
+  "no_path_traversal",
+  "no_shell_metacharacters",
+  "no_sql_patterns_in_args",
+  "no_agent_spawn_beyond_depth",
+  "cap_external_effect_calls_per_run",
+  "no_destructive_without_confirmation",
+  "no_tool_outside_declared_allowlist",
+]

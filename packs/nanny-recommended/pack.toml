@@ -1,0 +1,36 @@
+name = "nanny:recommended"
+version = "1.0.0"
+description = "Application-agnostic rules every governed agent should start with."
+python = "python"
+rules = [
+  "no_external_effect_after_untrusted_read",
+  "no_untrusted_read_after_secrets",
+  "cap_untrusted_reads_per_run",
+  "no_external_effect_soon_after_untrusted_read",
+  "require_approval_before_external_effect",
+  "no_tool_after_a_prior_denial",
+  "no_agent_spawn_beyond_depth",
+  "prerequisite_tool_ordering",
+  "no_identical_repeat_call",
+  "no_consecutive_identical_tool",
+  "cap_external_effect_calls_per_run",
+  "cap_total_tool_calls_per_run",
+  "no_secret_patterns_in_args",
+  "no_pii_to_external_effect_tools",
+  "no_oversized_args",
+  "no_private_network_urls",
+  "no_urls_outside_declared_pattern",
+  "no_path_traversal",
+  "no_shell_metacharacters",
+  "no_sql_patterns_in_args",
+  "dry_run_denies_all_destructive",
+  "no_destructive_without_confirmation",
+  "cap_destructive_calls_per_run",
+  "no_payment_above_threshold",
+  "cap_money_moving_calls_per_run",
+  "no_payment_without_prior_approval",
+  "cap_cumulative_amount_per_run",
+  "no_external_effect_outside_operating_hours",
+  "no_cross_border_under_residency_mode",
+  "no_tool_outside_declared_allowlist",
+]

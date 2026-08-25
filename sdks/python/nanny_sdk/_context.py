@@ -13,6 +13,14 @@ from typing import Any
 @dataclass
 class PolicyContext:
     elapsed_ms: int = 0
+    now_ms: int = 0
+    """Wall-clock at evaluation, milliseconds since the Unix epoch.
+
+    Present so a rule about *when* an action is permitted stays a pure function
+    of its context. A rule calling ``datetime.now()`` would reach outside its
+    inputs to decide, which is untestable and breaks the guarantee that
+    identical inputs produce identical behaviour.
+    """
     requested_tool: str | None = None
     tokens_spent: int = 0
     tool_call_counts: dict[str, int] = field(default_factory=dict)
@@ -29,6 +37,7 @@ class PolicyContext:
         """
         return cls(
             elapsed_ms=data.get("elapsed_ms", 0),
+            now_ms=data.get("now_ms", 0),
             requested_tool=data.get("requested_tool"),
             tokens_spent=data.get("tokens_spent", 0),
             tool_call_counts=data.get("tool_call_counts", {}),
