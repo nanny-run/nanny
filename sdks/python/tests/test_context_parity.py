@@ -98,3 +98,60 @@ def test_from_dict_ignores_a_field_the_bridge_no_longer_sends() -> None:
 
     assert ctx.tokens_spent == 3
     assert not hasattr(ctx, "step")
+
+
+# ── Rule declaration parity ───────────────────────────────────────────────────
+
+_RUST_EVENT = (
+    Path(__file__).resolve().parents[3] / "crates" / "core" / "src" / "events" / "event.rs"
+)
+
+
+def _rust_rule_decl_fields() -> set[str]:
+    """Field names on the Rust `RuleDecl` struct."""
+    src = _RUST_EVENT.read_text()
+    start = src.index("pub struct RuleDecl {")
+    body = src[start : src.index("\n}", start)]
+    return set(re.findall(r"^\s*pub (\w+):", body, re.MULTILINE))
+
+
+def test_rule_declarations_match_the_rust_shape():
+    """A pack rule must declare the same way from either SDK.
+
+    The declaration is what Cloud reads to answer "which version of this control
+    was in force". If Python omitted a field Rust sends, evidence from a Python
+    agent would be quietly less specific than evidence from a Rust one, and
+    nothing would fail.
+    """
+    from nanny_sdk.packs import LoadedRule
+
+    rust = _rust_rule_decl_fields()
+    python = set(LoadedRule(name="x", version="1", pack="p").to_declaration())
+
+    assert python == rust, (
+        f"RuleDecl fields diverged: only in Rust {rust - python}, "
+        f"only in Python {python - rust}"
+    )
+
+
+def test_a_hand_written_rule_omits_provenance_in_both_languages():
+    """Rust skips `version` and `pack` when they are `None`.
+
+    Python must omit them too, not send nulls: a declaration carrying
+    `version: null` reads as "this pack has no version" rather than "this rule
+    came from no pack".
+    """
+    from nanny_sdk.packs import LoadedRule
+
+    src = _RUST_EVENT.read_text()
+    start = src.index("pub struct RuleDecl {")
+    body = src[start : src.index("\n}", start)]
+    assert body.count('skip_serializing_if = "Option::is_none"') == 2
+
+    assert LoadedRule(name="mine").to_declaration() == {"name": "mine"}
+
+
+def test_wall_clock_is_present_in_both_languages():
+    """`now_ms` exists on both sides, so a time rule ports unchanged."""
+    assert "now_ms" in _rust_policy_context_fields()
+    assert hasattr(PolicyContext(), "now_ms")
