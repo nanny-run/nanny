@@ -50,7 +50,7 @@ def tool(*, tokens: int = 0) -> Callable[[F], F]:
             bound.apply_defaults()
             return {k: str(v) for k, v in bound.arguments.items()}
 
-        def _check_rules(str_args: dict[str, str]) -> None:
+        def _check_rules(str_args: dict[str, str]) -> list[str]:
             """Evaluate all registered rules in registration order.
 
             Fetches live counters from ``GET /status`` first so rules have
@@ -71,18 +71,21 @@ def tool(*, tokens: int = 0) -> Callable[[F], F]:
                 raise BridgeUnavailable()
             ctx.last_tool_args = str_args
             ctx.requested_tool = tool_name
+            cleared: list[str] = []
             for rule_name, rule_fn in _RULES.items():
                 if not rule_fn(ctx):
-                    _client.report_stop_rule(tool_name, rule_name)
+                    _client.report_stop_rule(tool_name, rule_name, cleared)
                     raise RuleDenied(rule_name)
+                cleared.append(rule_name)
+            return cleared
 
         if inspect.iscoroutinefunction(fn):
 
             @functools.wraps(fn)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                 str_args = _str_args(args, kwargs)
-                _check_rules(str_args)
-                _client.call_tool(tool_name, tokens, str_args)
+                cleared = _check_rules(str_args)
+                _client.call_tool(tool_name, tokens, str_args, cleared)
                 return await fn(*args, **kwargs)
 
             return async_wrapper  # type: ignore[return-value]
@@ -90,8 +93,8 @@ def tool(*, tokens: int = 0) -> Callable[[F], F]:
         @functools.wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             str_args = _str_args(args, kwargs)
-            _check_rules(str_args)
-            _client.call_tool(tool_name, tokens, str_args)
+            cleared = _check_rules(str_args)
+            _client.call_tool(tool_name, tokens, str_args, cleared)
             return fn(*args, **kwargs)
 
         return wrapper  # type: ignore[return-value]

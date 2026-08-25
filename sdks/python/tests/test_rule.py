@@ -467,3 +467,91 @@ def test_tools_with_is_sorted() -> None:
 
     assert ctx.tools_with("moves_money") == ["alpha", "zeta"]
     assert ctx.tools_with("nonexistent") == []
+
+
+# ── Rule attribution ──────────────────────────────────────────────────────────
+
+
+def test_an_allowed_call_reports_the_rules_that_cleared_it(monkeypatch, mock_bridge):
+    """A rule that ran clean must leave evidence it operated.
+
+    The engine is required to log every verdict, allow and refuse alike, and a
+    rule returning allow is a verdict. Without this, a control that ran clean
+    nine thousand times is indistinguishable from one never reached.
+    """
+    from nanny_sdk import _client, _decorators
+
+    _decorators._RULES.clear()
+    calls: dict[str, object] = {}
+
+    @_decorators.rule("first_rule")
+    def first(ctx):
+        return True
+
+    @_decorators.rule("second_rule")
+    def second(ctx):
+        return True
+
+    monkeypatch.setattr(_client, "get_status", lambda: PolicyContext())
+    monkeypatch.setattr(
+        _client,
+        "call_tool",
+        lambda tool, tokens, args, cleared_by=None: calls.update(cleared=cleared_by),
+    )
+
+    @_decorators.tool()
+    def send_outreach(to: str) -> str:
+        return "sent"
+
+    send_outreach("a@b.c")
+    assert calls["cleared"] == ["first_rule", "second_rule"], "in evaluation order"
+
+
+def test_a_denial_reports_only_the_rules_that_ran_before_it(monkeypatch, mock_bridge):
+    """Evaluation short-circuits, so rules after the denier never ran.
+
+    Listing them would claim a control operated when it did not, which is the
+    one thing a compliance log must never do.
+    """
+    from nanny_sdk import _client, _decorators
+    from nanny_sdk.exceptions import RuleDenied
+
+    _decorators._RULES.clear()
+    reported: dict[str, object] = {}
+
+    @_decorators.rule("ran_first")
+    def a(ctx):
+        return True
+
+    @_decorators.rule("denies")
+    def b(ctx):
+        return False
+
+    @_decorators.rule("never_reached")
+    def c(ctx):
+        raise AssertionError("a rule after the denier must not be evaluated")
+
+    monkeypatch.setattr(_client, "get_status", lambda: PolicyContext())
+    monkeypatch.setattr(
+        _client,
+        "report_stop_rule",
+        lambda tool, rule, cleared_by=None: reported.update(rule=rule, cleared=cleared_by),
+    )
+    monkeypatch.setattr(_client, "call_tool", lambda *a, **k: None)
+
+    @_decorators.tool()
+    def send_outreach(to: str) -> str:
+        return "sent"
+
+    with pytest.raises(RuleDenied):
+        send_outreach("a@b.c")
+
+    assert reported["rule"] == "denies"
+    assert reported["cleared"] == ["ran_first"]
+
+
+def test_wall_clock_reaches_rules_from_the_bridge():
+    """``now_ms`` is an input, so a time rule stays a pure function."""
+    ctx = PolicyContext.from_dict({"now_ms": 1_756_100_000_000})
+    assert ctx.now_ms == 1_756_100_000_000
+    assert PolicyContext.from_dict({}).now_ms == 0

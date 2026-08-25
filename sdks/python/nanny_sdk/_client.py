@@ -434,14 +434,27 @@ def get_status() -> PolicyContext:
     return PolicyContext.from_dict(resp.json())
 
 
-def call_tool(tool_name: str, tokens: int, args: dict[str, Any]) -> None:
+def call_tool(
+    tool_name: str,
+    tokens: int,
+    args: dict[str, Any],
+    cleared_by: list[str] | None = None,
+) -> None:
     """POST /tool/call: raises a NannyStop subclass if denied, returns None if allowed.
 
     Raises ``BridgeUnavailable`` (also a ``NannyStop``) if the bridge can't be
     reached at all: a governed tool call must fail closed, not silently run
     ungoverned because the governor happened to be down.
     """
-    payload = {"tool": tool_name, "tokens": tokens, "args": args}
+    payload: dict[str, Any] = {"tool": tool_name, "tokens": tokens, "args": args}
+    # Which rules evaluated and allowed this call. Assembled here because this
+    # is the only place it exists: rule bodies run in this process, before the
+    # bridge is contacted, so the governor cannot observe them. Without it a
+    # rule that ran clean and a rule never reached produce identical logs, and
+    # the healthy state, which is the normal state for a good control, becomes
+    # unprovable.
+    if cleared_by:
+        payload["cleared_by"] = cleared_by
     with _bridge_call(), _make_client(timeout=10.0) as c:
         resp = c.post("/tool/call", json=payload, headers=_headers())
     # 410 Gone: this run already stopped, raise a typed stop, not a raw HTTP error.
@@ -501,7 +514,9 @@ def report_stop(reason: str) -> None:
         pass
 
 
-def report_stop_rule(tool_name: str, rule_name: str) -> None:
+def report_stop_rule(
+    tool_name: str, rule_name: str, cleared_by: list[str] | None = None
+) -> None:
     """POST /stop with RuleDenied metadata so the bridge can emit the NDJSON event.
 
     Client-side rule denials never reach ``/tool/call``, so the bridge has no
@@ -512,7 +527,16 @@ def report_stop_rule(tool_name: str, rule_name: str) -> None:
         with _make_client(timeout=2.0) as c:
             c.post(
                 "/stop",
-                json={"reason": "RuleDenied", "tool": tool_name, "rule_name": rule_name},
+                json={
+                    "reason": "RuleDenied",
+                    "tool": tool_name,
+                    "rule_name": rule_name,
+                    # Rules that cleared *before* the one that fired. Evaluation
+                    # short-circuits, so rules after it never produced a verdict
+                    # and listing them would claim a control operated when it
+                    # did not.
+                    "cleared_by": cleared_by or [],
+                },
                 headers=_headers(),
             )
     except Exception:
