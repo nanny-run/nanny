@@ -10,12 +10,29 @@
 
 ## Versioning policy
 
-- Docs are versioned at the **minor** level: `v0.5/`, `v1.0/`, etc, never at the patch level
-- A new docs version is only created when the content would meaningfully mislead a user on a different release line (new mental model, removed commands, changed APIs)
-- Patch releases update the existing version folder in place
-- **Keep at most 4 versions** in the `docs.json` version switcher; drop the oldest when adding a fifth (add a redirect and a banner to the dropped version if it still has active users)
-- All internal links must include the version prefix: `/v0.5/quickstart`, not `/quickstart`
-- Redirects for removed or renamed paths live in the `"redirects"` array in `docs.json`
+**Before v1.0.0 the site carries exactly one version.** A new minor release
+replaces the previous folder outright: delete it, point its paths at the live
+version through `"redirects"`, and leave nothing in the switcher but the current
+release.
+
+This is the present-tense rule applied to whole versions. Pre-1.0 minors are
+breaking by definition, so a kept v0.5 is a published description of a product
+that no longer works the way it says, sitting one click from the version that
+does. Keeping it costs a maintenance surface nobody edits and buys a reader the
+chance to follow instructions that will fail.
+
+`CHANGELOG.md` carries the history. Anyone pinned to an older release reads it
+there, or reads the tag.
+
+- Docs are versioned at the **minor** level: `v0.6/`, `v1.0/`, never at the patch level
+- Patch releases update the existing folder in place
+- All internal links carry the version prefix: `/v0.6/quickstart`, not `/quickstart`
+- Redirects for removed, renamed, or retired paths live in the `"redirects"` array in `docs.json`
+- Every retired version prefix keeps a `:slug*` redirect, so an old bookmark lands on the live page rather than a 404
+
+**From v1.0.0 onward this changes.** Once releases stop being breaking by
+default, older versions earn their keep and the switcher holds up to four, with
+the oldest dropped when a fifth arrives.
 
 ## Docs are present tense
 
