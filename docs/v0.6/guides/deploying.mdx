@@ -1,0 +1,77 @@
+---
+title: Deploying a governed app
+description: Run a Nanny-governed app in a container or on a server. One command, one secret, no state on disk.
+---
+
+## The shape
+
+A deployed Nanny app is one process:
+
+```dockerfile
+CMD ["nanny", "run", "--serve", "--", "discord"]
+```
+
+`--serve` starts the governance server and launches your `[start].cmd` underneath it. Trailing arguments append to that command, exactly as with plain `nanny run`.
+
+Nothing is written to disk to make this work: no credential file, no login step, no state carried between deploys. A fresh container behaves the same as one that has been running for a month, and twenty replicas behave the same as one.
+
+## One secret
+
+```bash
+NANNY_API_KEY=nny_...
+```
+
+Create it in the dashboard under **Settings → API Keys**, then set it however your platform sets secrets: a Fly secret, a Kubernetes `Secret`, a Coolify environment variable. That single variable decides whether runs sync; see [Connect to Nanny Cloud](/v0.5/guides/managed-mode).
+
+Leave it unset and everything still works. Enforcement is local and never depends on the cloud.
+
+<Warning>
+  Do not bake the key into an image or commit it. It is an ordinary deployment
+  secret and belongs with the rest of them.
+</Warning>
+
+## Which command to use
+
+| Your situation | Command |
+| --- | --- |
+| One app, and `nanny.toml` has no `[proxy]` | `nanny run` |
+| One app, and `nanny.toml` declares `[proxy] allowed_hosts` | `nanny run --serve` |
+| Several processes sharing one budget | `nanny run --serve` (governor) + `nanny run --join=<appId>` |
+| A governor with no app of its own | `nanny run --serve` with no `[start]` |
+
+The proxy row is the one that catches people. The egress allowlist is enforced by the governance server, not the in-process bridge. The bridge listens on a Unix socket, and `HTTPS_PROXY` can only name a host and port, so it can never sit in the path of your app's outbound traffic. Rather than silently ignoring the setting, plain `nanny run` refuses to start when `[proxy] allowed_hosts` is set and tells you to use `--serve`.
+
+## Ports
+
+The governor binds `127.0.0.1:62669` by default. If that port is taken it steps to the next free one and says so, then records the real address where `--join` and `nanny status` look for it, so several apps can run on one machine without configuration.
+
+Pass `--addr` only when the governor must be reachable from another machine. A non-loopback address makes mTLS mandatory and requires a certificate bundle (`nanny certs generate`). If a port you named explicitly is busy, that is an error rather than a silent move to a different one. A governor listening somewhere the firewall does not expect is worse than one that refuses to start.
+
+## Signals and shutdown
+
+Run `nanny` as PID 1 (a plain `CMD`, not wrapped in a shell). It receives `SIGTERM` directly, drains connections for up to 10 seconds, and stops the app it launched. If the app exits, the governor shuts down with it.
+
+A shell wrapper breaks this: `sh` does not forward signals to its children, so the governor never drains, and nothing notices if one half dies while the other keeps running half-governed.
+
+## Dependencies and the allowlist
+
+If your start command installs or resolves dependencies at runtime, and your package index is not in `[proxy] allowed_hosts`, the proxy will block it and the app will not start. Install everything at build time:
+
+```dockerfile
+RUN uv sync --frozen        # or pip install -r requirements.txt, npm ci, …
+```
+
+This is working as intended, since the allowlist is doing its job, but it is a surprising way to discover it, so it is worth getting right before the first deploy.
+
+## Checking it worked
+
+```
+nanny: mode managed, syncing to https://api.nanny.run (app: your-app)
+nanny: governance server started  (plain HTTP — loopback)
+  address      : 127.0.0.1:62669
+nanny: running [start] under this governor
+```
+
+Then `nanny status` from the same directory, or the dashboard, which lists the app by the name in `.nanny/app.json`.
+
+If the cloud is unreachable, events are held in `.nanny/spool/` and delivered on the next run. See [Connect to Nanny Cloud](/v0.5/guides/managed-mode). If your platform gives the container a writable filesystem this is automatic; if it does not, a cloud outage costs those events, and everything else still works.
