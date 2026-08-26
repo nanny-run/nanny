@@ -514,6 +514,22 @@ def report_stop(reason: str) -> None:
         pass
 
 
+def declare_rules(rules: list[dict[str, str]]) -> None:
+    """POST /rules: record which rules this process registered.
+
+    The half of declared authority the governor cannot see for itself, since
+    rule bodies are compiled into this process. Fire-and-forget: a failure to
+    declare must never stop a governed run.
+    """
+    if not rules:
+        return
+    try:
+        with _make_client(timeout=2.0) as c:
+            c.post("/rules", json={"rules": rules}, headers=_headers())
+    except Exception:
+        pass
+
+
 def report_stop_rule(
     tool_name: str, rule_name: str, cleared_by: list[str] | None = None
 ) -> None:

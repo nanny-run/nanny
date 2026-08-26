@@ -26,6 +26,24 @@ F = TypeVar("F", bound=Callable[..., Any])
 # Ordered dict so rules are evaluated in registration order.
 _RULES: dict[str, Callable[[PolicyContext], bool]] = {}
 
+_declared = False
+
+
+def _declare_rules_once() -> None:
+    """Declare registered rules on the first governed call.
+
+    Deferred to first use rather than done at import, because packs and local
+    rules are still registering while the module graph loads. Declaring early
+    would record a set smaller than the one that actually runs.
+    """
+    global _declared
+    if _declared:
+        return
+    _declared = True
+    from nanny_sdk.packs import declare_all
+
+    _client.declare_rules(declare_all())
+
 
 def tool(*, tokens: int = 0) -> Callable[[F], F]:
     """Declare a Nanny-governed tool.
@@ -64,6 +82,7 @@ def tool(*, tokens: int = 0) -> Callable[[F], F]:
             Raises ``RuleDenied`` on the first rule that returns ``False``.
             ``/tool/call`` is never reached if a rule denies.
             """
+            _declare_rules_once()
             try:
                 ctx = _client.get_status()
             except Exception:

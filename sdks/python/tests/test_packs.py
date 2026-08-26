@@ -104,3 +104,30 @@ def test_loading_reads_only_the_project_directory(tmp_path, monkeypatch):
 
     install(tmp_path, "nanny:owasp", "2.1.0", RULE_BODY)
     assert len(load_installed_packs(tmp_path)) == 1
+
+
+def test_the_first_governed_call_declares_the_rules(monkeypatch, mock_bridge):
+    """Without this the rules half of declared authority never reaches the log.
+
+    The governor cannot see rule bodies for itself, so a run would record what
+    was refused and never what could have refused.
+    """
+    from nanny_sdk import _client, _decorators
+
+    declared: list = []
+    monkeypatch.setattr(_client, "declare_rules", declared.append)
+    monkeypatch.setattr(_client, "call_tool", lambda *a, **k: None)
+
+    @_decorators.rule("my_own_rule")
+    def mine(ctx):
+        return True
+
+    @_decorators.tool()
+    def do_thing() -> str:
+        return "ok"
+
+    do_thing()
+    do_thing()
+
+    assert len(declared) == 1, "declared once, not on every call"
+    assert declared[0] == [{"name": "my_own_rule"}]
