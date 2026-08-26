@@ -231,7 +231,7 @@ Nesting `#[agent]` functions is supported — limits revert to the caller's set 
 
 `#[agent(...)]` changes which ceiling the run's *one* running total is
 checked against; it does not give a scope its own budget (see
-[Named sets share one counter](/v0.5/concepts/limits#named-sets-share-one-counter-they-are-not-separate-budgets)).
+[Named sets share one counter](/v0.6/concepts/limits#named-sets-share-one-counter-they-are-not-separate-budgets)).
 If your process runs multiple, independent phases back to back and you
 want each one to start from zero rather than inherit whatever an earlier
 phase already spent, that's a new **run**, Nanny's real unit of

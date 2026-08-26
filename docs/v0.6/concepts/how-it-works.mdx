@@ -6,7 +6,7 @@ description: What Nanny actually does when you run a command under it.
 ## The enforcement model
 
 When you run `nanny run`, Nanny becomes the parent process of your agent.
-It reads `[start].cmd` from `nanny.toml`, spawns it as a child, and owns the process lifecycle — it decides when the process lives and when it dies.
+It reads `[start].cmd` from `nanny.toml`, spawns it as a child, and owns the process lifecycle. Every tool call the agent makes is evaluated before it happens.
 
 ```mermaid
 flowchart TD
@@ -23,20 +23,25 @@ flowchart TD
 
         subgraph ENFORCE[" "]
             direction TB
-            STEPS["steps"]
-            TOKENS["tokens"]
-            TIMER["timeout"]
+            ALLOW["allowlist"]
+            RULES["rules"]
         end
 
         AGENT -- "tool call" --> ENFORCE
         ENFORCE -- "✓  allowed" --> AGENT
     end
 
-    ENFORCE -- "✗  limit reached → killed" --> DEAD(["process exits"])
-    DEAD --> LOG["ExecutionStopped\nreason · steps · tokens_spent\n→ stdout"]
+    ENFORCE -- "✗  denied → killed" --> DEAD(["process exits"])
+    DEAD --> LOG["ExecutionStopped\nreason · tokens_spent\n→ stdout"]
 ```
 
-The moment any limit is crossed, Nanny kills the child process immediately — the process cannot catch, delay, or prevent the stop. An `ExecutionStopped` event is emitted with the reason, and Nanny exits with a non-zero status code.
+Two checks, in order. The allowlist runs first: a tool that is not in
+`[tools] allowed` is denied before any rule sees it. Then your rules run, in
+registration order, and the first one to refuse ends the evaluation.
+
+A denial kills the child process immediately. The process cannot catch, delay,
+or prevent the stop. An `ExecutionStopped` event is emitted with the reason, and
+Nanny exits non-zero.
 
 ## Multi-agent governance
 
@@ -60,8 +65,6 @@ flowchart TD
 
         subgraph ENFORCE[" "]
             direction TB
-            STEPS["steps"]
-            TOKENS["tokens"]
             ALLOW["allowlist"]
             RULES["rules"]
         end
@@ -70,28 +73,36 @@ flowchart TD
         ENFORCE -- "✓  allowed" --> A1 & A2 & A3 & A4
     end
 
-    ENFORCE -- "✗  limit reached → killed" --> DEAD(["process exits"])
+    ENFORCE -- "✗  denied → killed" --> DEAD(["process exits"])
     DEAD --> LOG["ExecutionStopped\nreason · agent · tool · tokens_spent\n→ stdout"]
 ```
 
-Each agent activates its own named limit set via `@agent("role")`. Tool calls from any agent flow through Nanny’s enforcement layer. Each agent's budget is tracked independently — hitting the analysis budget does not kill the reporter.
+`@agent("role")` names which phase of the run the events that follow belong to,
+so every verdict in the log can be attributed to the agent that produced it.
+Tool calls from every agent flow through the same allowlist and the same rules:
+one `nanny run` governs the whole fleet.
 
-For cross-process and cross-machine enforcement, use the [governance server](/v0.5/guides/governance-server).
+For cross-process and cross-machine enforcement, use the [governance server](/v0.6/guides/governance-server).
 
 ---
 
 ## What Nanny enforces
 
-All three limits are enforced on every run:
+Two things, and both are about authority:
 
-| Limit     | Requirement                  | Behaviour                                                  |
-| --------- | ---------------------------- | ---------------------------------------------------------- |
-| `timeout` | None — works for any process | Killed when wall-clock time exceeds the configured value     |
-| `steps`   | Rust SDK or Python SDK       | Killed when step count reaches the configured limit          |
-| `tokens`  | Rust SDK or Python SDK       | Killed when accumulated tokens reach the configured budget   |
+| Check | Declared in | Behaviour |
+| --- | --- | --- |
+| Tool permission | `[tools] allowed` in `nanny.toml` | A call to an undeclared tool fires `ToolDenied` and ends the run |
+| Rules | `@rule` in your code, or an installed [rule pack](/v0.6/guides/rule-packs) | The first rule to refuse fires `RuleDenied` and ends the run |
 
-Timeout enforcement works for any process in any language — no SDK required.
-Step and token enforcement require the agent to report tool calls, either via the [Rust SDK](/v0.5/guides/rust-sdk) macros or the Python SDK decorators.
+Both require the agent to report its tool calls, through the
+[Rust SDK](/v0.6/guides/rust-sdk) macros or the [Python SDK](/v0.6/guides/python-sdk)
+decorators.
+
+Tokens are **measured, never enforced**. They are recorded for attribution, so
+you can answer what a run cost, and no ceiling stops a run for spending them.
+Liability attaches to what an agent was allowed to do, not to how much it
+used.
 
 ## Passthrough mode
 

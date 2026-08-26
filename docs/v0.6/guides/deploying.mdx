@@ -21,7 +21,7 @@ Nothing is written to disk to make this work: no credential file, no login step,
 NANNY_API_KEY=nny_...
 ```
 
-Create it in the dashboard under **Settings → API Keys**, then set it however your platform sets secrets: a Fly secret, a Kubernetes `Secret`, a Coolify environment variable. That single variable decides whether runs sync; see [Connect to Nanny Cloud](/v0.5/guides/managed-mode).
+Create it in the dashboard under **Settings → API Keys**, then set it however your platform sets secrets: a Fly secret, a Kubernetes `Secret`, a Coolify environment variable. That single variable decides whether runs sync; see [Connect to Nanny Cloud](/v0.6/guides/managed-mode).
 
 Leave it unset and everything still works. Enforcement is local and never depends on the cloud.
 
@@ -74,4 +74,4 @@ nanny: running [start] under this governor
 
 Then `nanny status` from the same directory, or the dashboard, which lists the app by the name in `.nanny/app.json`.
 
-If the cloud is unreachable, events are held in `.nanny/spool/` and delivered on the next run. See [Connect to Nanny Cloud](/v0.5/guides/managed-mode). If your platform gives the container a writable filesystem this is automatic; if it does not, a cloud outage costs those events, and everything else still works.
+If the cloud is unreachable, events are held in `.nanny/spool/` and delivered on the next run. See [Connect to Nanny Cloud](/v0.6/guides/managed-mode). If your platform gives the container a writable filesystem this is automatic; if it does not, a cloud outage costs those events, and everything else still works.

@@ -47,7 +47,7 @@ This requires the directory to have run `nanny init` first: the server's state i
 nanny run --join=<appId>
 ```
 
-`--join` reads the address and tokens from `~/.nanny/servers/<appId>/`, then injects `NANNY_BRIDGE_ADDR` and `NANNY_SESSION_TOKEN` into the agent process (and, if `[proxy]` is configured, an authenticated proxy URL: see [HTTP proxy mode](/v0.5/guides/http-proxy-mode)). There's no auto-detection: if the target app id isn't reachable, `--join` fails loudly rather than silently falling back to local enforcement.
+`--join` reads the address and tokens from `~/.nanny/servers/<appId>/`, then injects `NANNY_BRIDGE_ADDR` and `NANNY_SESSION_TOKEN` into the agent process (and, if `[proxy]` is configured, an authenticated proxy URL: see [HTTP proxy mode](/v0.6/guides/http-proxy-mode)). There's no auto-detection: if the target app id isn't reachable, `--join` fails loudly rather than silently falling back to local enforcement.
 
 A confirmation message appears before your agent starts:
 
@@ -166,7 +166,7 @@ def handle_request(payload: dict) -> dict:
         return {"error": f"stopped: {type(e).__name__}"}
 ```
 
-If you skip the `try`/`except` and let `NannyStop` propagate out of a request handler, what happens next depends entirely on your web framework's own exception handling. For many frameworks, an unhandled exception in a request handler brings down the whole process, which defeats the reason you reached for a governance server in the first place. Treat it the same way you'd treat any other exception a request handler can raise: catch it at the boundary. See [`fresh_run`](/v0.5/guides/python-sdk#fresh_run-starting-a-fresh-run-mid-process) for giving each request its own clean budget, and [What happens on stop](/v0.5/guides/python-sdk#what-happens-on-stop) for the full list of `NannyStop` subclasses to catch.
+If you skip the `try`/`except` and let `NannyStop` propagate out of a request handler, what happens next depends entirely on your web framework's own exception handling. For many frameworks, an unhandled exception in a request handler brings down the whole process, which defeats the reason you reached for a governance server in the first place. Treat it the same way you'd treat any other exception a request handler can raise: catch it at the boundary. See [`fresh_run`](/v0.6/guides/python-sdk#fresh_run-starting-a-fresh-run-mid-process) for giving each request its own clean budget, and [What happens on stop](/v0.6/guides/python-sdk#what-happens-on-stop) for the full list of `NannyStop` subclasses to catch.
 
 ---
 
@@ -246,7 +246,7 @@ Partial imports are supported: omit any key to leave the existing file unchanged
 
 The governance server can also act as an HTTP CONNECT proxy on the same port. Any outbound HTTP or HTTPS request your agent makes through the proxy is subject to Nanny's allowlist — even calls from code that has no `@nanny_tool` decorator.
 
-See [HTTP proxy mode](/v0.5/guides/http-proxy-mode) for setup and configuration.
+See [HTTP proxy mode](/v0.6/guides/http-proxy-mode) for setup and configuration.
 
 ---
 
