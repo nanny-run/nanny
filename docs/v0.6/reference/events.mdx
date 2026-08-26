@@ -99,6 +99,36 @@ itself a fact worth reading.
 
 ---
 
+## RulesDeclared
+
+Emitted once when the agent declares which rules it registered. The second half
+of [declared authority](/v0.6/concepts/declared-authority).
+
+```json
+{
+  "event": "RulesDeclared",
+  "ts": 1711234567100,
+  "run_id": "a1b2c3d4",
+  "seq": 1,
+  "rules": [
+    {"name": "no_send_after_read", "version": "1.0.0", "pack": "nanny:recommended"},
+    {"name": "my_own_rule"}
+  ]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `rules` | array | Each registered rule, sorted by name. |
+| `rules[].name` | string | The rule name. |
+| `rules[].version` | string | Version of the pack it came from. Absent for a hand-written rule. |
+| `rules[].pack` | string | Pack it came from. Absent for a hand-written rule. |
+
+Deduped: a caller may safely redeclare, and a second event is emitted only when
+the set actually changes.
+
+---
+
 ## AgentScopeEntered
 
 Emitted when a function annotated with `#[nanny::agent("name")]` is entered.
