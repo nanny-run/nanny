@@ -34,12 +34,9 @@ Leave it unset and everything still works. Enforcement is local and never depend
 
 | Your situation | Command |
 | --- | --- |
-| One app, and `nanny.toml` has no `[proxy]` | `nanny run` |
-| One app, and `nanny.toml` declares `[proxy] allowed_hosts` | `nanny run --serve` |
-| Several processes sharing one budget | `nanny run --serve` (governor) + `nanny run --join=<appId>` |
+| One app, one process | `nanny run` |
+| Several processes under one rule set | `nanny run --serve` (governor) + `nanny run --join=<appId>` |
 | A governor with no app of its own | `nanny run --serve` with no `[start]` |
-
-The proxy row is the one that catches people. The egress allowlist is enforced by the governance server, not the in-process bridge. The bridge listens on a Unix socket, and `HTTPS_PROXY` can only name a host and port, so it can never sit in the path of your app's outbound traffic. Rather than silently ignoring the setting, plain `nanny run` refuses to start when `[proxy] allowed_hosts` is set and tells you to use `--serve`.
 
 ## Ports
 
@@ -55,7 +52,7 @@ A shell wrapper breaks this: `sh` does not forward signals to its children, so t
 
 ## Dependencies and the allowlist
 
-If your start command installs or resolves dependencies at runtime, and your package index is not in `[proxy] allowed_hosts`, the proxy will block it and the app will not start. Install everything at build time:
+Install dependencies at build time rather than at start time, so a governed run does not fail on something unrelated to its policy:
 
 ```dockerfile
 RUN uv sync --frozen        # or pip install -r requirements.txt, npm ci, …

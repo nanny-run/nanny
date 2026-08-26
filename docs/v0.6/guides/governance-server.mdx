@@ -9,8 +9,8 @@ For most projects, `nanny run` is all you need. It enforces locally, inside the 
 
 Use the governance server when agents run in **separate processes or on separate machines** and you need a shared enforcement boundary across all of them. Common scenarios:
 
-- **Microservices:** three containers, each running an agent, all sharing a single token budget
-- **CI workers:** a coordinator spins up worker processes on different machines; you want each worker's tool calls counted against the same budget
+- **Microservices:** three containers, each running an agent, all governed by one rule set
+- **CI workers:** a coordinator spins up workers on different machines; you want every worker held to the same rules
 - **Development clusters:** a Kubernetes pod runs the server; a local dev agent connects to it while you iterate
 
 If your agents all run inside a single `nanny run` — even a complex CrewAI or LangGraph pipeline with many agents — you do not need the governance server.
@@ -47,7 +47,7 @@ This requires the directory to have run `nanny init` first: the server's state i
 nanny run --join=<appId>
 ```
 
-`--join` reads the address and tokens from `~/.nanny/servers/<appId>/`, then injects `NANNY_BRIDGE_ADDR` and `NANNY_SESSION_TOKEN` into the agent process (and, if `[proxy]` is configured, an authenticated proxy URL: see [HTTP proxy mode](/v0.6/guides/http-proxy-mode)). There's no auto-detection: if the target app id isn't reachable, `--join` fails loudly rather than silently falling back to local enforcement.
+`--join` reads the address and tokens from `~/.nanny/servers/<appId>/`, then injects `NANNY_BRIDGE_ADDR` and `NANNY_SESSION_TOKEN` into the agent process . There's no auto-detection: if the target app id isn't reachable, `--join` fails loudly rather than silently falling back to local enforcement.
 
 A confirmation message appears before your agent starts:
 
@@ -119,7 +119,7 @@ On each agent machine, create a `.env` file with the token value you just copied
 ```ini
 # .env (never commit this file — add it to .gitignore)
 NANNY_BRIDGE_ADDR=server.example.com:62669
-NANNY_SESSION_TOKEN=<paste value from ~/.nanny/server.token>
+NANNY_SESSION_TOKEN=<paste value from ~/.nanny/servers/<appId>/server.token>
 NANNY_BRIDGE_CERT=/path/to/client.crt
 NANNY_BRIDGE_KEY=/path/to/client.key
 NANNY_BRIDGE_CA=/path/to/ca.crt
@@ -132,9 +132,11 @@ When an agent is launched with `nanny run` and these variables are set, it conne
 
 ---
 
-## Shared budget
+## One shared rule set
 
-All agents connected to the same governance server share one enforcement state. Token budget, steps, and timeout are tracked across all of them simultaneously.
+All agents connected to the same governance server are evaluated against the same allowlist and the same rules. Each connection is its own run, with its own history, so a stop ends that run and never the server or its peers.
+
+Every run writes to the same log, and each event carries the `run_id` that tells them apart.
 
 This means:
 - If Agent A spends 400 tokens and Agent B spends 600, and the budget is 1000, the next call from either agent stops the execution — regardless of which agent makes it.

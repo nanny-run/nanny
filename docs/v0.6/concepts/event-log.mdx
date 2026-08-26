@@ -52,33 +52,39 @@ Always the first event. Emitted immediately before the child process is spawned.
 {
   "event": "ExecutionStarted",
   "ts": 1711234567000,
-  "limits_set": "[limits]",
+  "run_id": "a1b2c3d4",
+  "seq": 0,
   "command": "python agent.py",
-  "limits": {
-    "steps": 100,
-    "tokens": 1000,
-    "timeout": 30000
-  }
+  "allowed_tools": ["web_search", "send_outreach"],
+  "tool_labels": {
+    "web_search": ["reads_untrusted"],
+    "send_outreach": ["external_effect"]
+  },
+  "config_hash": "9f2a41c8"
 }
 ```
 
 ### ExecutionStopped
 
-Always the last event. Emitted on every exit path — clean exit, timeout, error, or signal.
+Always the last event of a complete run. Emitted on every exit path: clean exit, a policy stop, an error, or a signal.
 
 ```json
 {
   "event": "ExecutionStopped",
   "ts": 1711234572000,
+  "run_id": "a1b2c3d4",
+  "seq": 12,
   "reason": "AgentCompleted",
-  "steps": 7,
   "tokens_spent": 70,
   "elapsed_ms": 4823
 }
 ```
 
-If the process was killed, `reason` will be one of the stop reasons listed in
-[Limits & Enforcement](/v0.6/concepts/limits).
+If this event is missing from a run, the process crashed. That absence is itself
+a fact worth reading.
+
+`reason` is one of four: `ToolDenied`, `RuleDenied`, `AgentCompleted`, or
+`ManualStop`. Only the first two are policy violations.
 
 ## SDK events
 
@@ -86,24 +92,24 @@ When the Rust SDK macros or Python SDK decorators are active, additional events 
 
 | Event | When emitted |
 |-------|-------------|
-| `StepCompleted` | After each allowed tool call, immediately following its `ToolAllowed` event |
 | `ToolAllowed` | When Nanny permits a tool call |
 | `ToolDenied` | When a tool call is blocked because the tool is not in the allowlist |
 | `RuleDenied` | When a tool call is blocked by a custom rule or a per-tool `max_calls` limit |
 | `ToolFailed` | When a permitted tool fails at runtime (network error, bad args, etc.) |
 | `AgentScopeEntered` | When a `#[nanny::agent("name")]` function is entered |
 | `AgentScopeExited` | When a `#[nanny::agent("name")]` function returns |
+| `RulesDeclared` | Once, when the agent declares which rules it registered |
 
 `ToolDenied` and `RuleDenied` are distinct denial events — `ToolDenied` means the tool was not permitted at all; `RuleDenied` means the tool was permitted but a rule blocked this specific call.
-`ToolFailed` is different from both — the tool was allowed and called, but encountered a runtime error. No tokens are charged on failure.
+`ToolFailed` is different from both: the tool was allowed and called, but hit a runtime error. No tokens are recorded for a failure.
 
 ## Using the log
 
 The event log is designed to be piped into standard tools:
 
 ```bash
-# Count total steps (every allowed tool call is one step)
-cat nanny.log | grep StepCompleted | wc -l
+# Every event for one run, in order
+cat nanny.log | jq -c 'select(.run_id == "a1b2c3d4")' | sort -t: -k3 -n
 
 # Find all denied tool calls (allowlist blocks and rule denials)
 cat nanny.log | jq 'select(.event == "ToolDenied" or .event == "RuleDenied")'
