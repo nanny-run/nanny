@@ -3,7 +3,7 @@ title: Python
 description: Per-function governance for Python agents using Nanny decorators.
 ---
 
-The Python SDK brings the same enforcement model as the [Rust SDK](/v0.6/guides/rust-sdk) to Python, `@tool`, `@rule`, and `@agent` decorators that enforce limits per function call.
+The Python SDK brings the same enforcement model as the [Rust SDK](/v0.6/guides/rust-sdk) to Python, `@tool`, `@rule`, and `@agent` decorators that govern each call before it executes.
 
 ```bash
 pip install nanny-sdk
@@ -28,7 +28,7 @@ uv run agent.py
 
 ## `@tool` — declare a governed tool
 
-Mark a function as a tool that Nanny should track and charge against the budget:
+Mark a function as a tool that Nanny should govern:
 
 ```python
 from nanny_sdk import tool
@@ -43,7 +43,7 @@ When the agent calls `fetch_page`:
 
 1. Nanny checks: is `fetch_page` in the `[tools] allowed` list?
 2. Nanny checks: has `fetch_page` exceeded `[tools.fetch_page] max_calls`?
-3. Nanny charges 10 tokens against the budget.
+3. Nanny records 10 tokens for attribution.
 4. If any check fails, a `NannyStop` exception is raised — the function body never runs.
 
 Works identically for async functions:
@@ -76,21 +76,16 @@ allowed = ["fetch_page", "read_file"]
 
 [tools.fetch_page]
 max_calls       = 20
-tokens_per_call = 10   # nanny.toml value overrides the decorator default
+max_calls = 10   # most calls to this tool in one run
 ```
-
-<Frame>
-  <img
-    src="https://raw.githubusercontent.com/nanny-run/nanny/main/assets/demo/metrics-crew-tool-denied.gif"
-    alt="metrics_crew — ToolDenied fires when the analysis agent calls write_report, a tool outside its allowlist"
-  />
-</Frame>
 
 ---
 
 ## `instrument` — automatic LLM token tracking
 
-Call `nanny_sdk.instrument(client)` once at agent startup to automatically report LLM token usage to Nanny's budget. Every completion response is intercepted and its token counts are debited from the same ledger that `@tool` charges against.
+Call `nanny_sdk.instrument(client)` once at startup to report LLM token usage automatically. Every completion response is intercepted and its counts recorded.
+
+Measurement only. Nothing here stops a run: tokens are recorded so you can answer what a run cost, and Nanny never decides from them.
 
 ```python
 import openai
@@ -149,13 +144,14 @@ The `ctx` parameter gives you a snapshot of the current execution state:
 
 | Field               | Type             | Description                                |
 | ------------------- | ---------------- | ------------------------------------------ |
-| `step_count`        | `int`            | Steps completed so far                     |
-| `elapsed_ms`        | `int`            | Wall-clock time elapsed                    |
-| `tokens_spent`      | `int`            | Total tokens spent                         |
-| `tool_call_counts`  | `dict[str, int]` | Per-tool call counts                       |
-| `tool_call_history` | `list[str]`      | Ordered log of tool names called           |
-| `requested_tool`    | `str \| None`    | The tool being evaluated right now         |
-| `last_tool_args`    | `dict[str, str]` | Arguments of the tool call being evaluated |
+| `requested_tool`    | `str \| None`          | The tool being evaluated right now |
+| `last_tool_args`    | `dict[str, str]`       | Arguments of that call |
+| `tool_labels`       | `dict[str, list[str]]` | Labels for **every** allowed tool, not only the pending one |
+| `tool_call_history` | `list[str]`            | Ordered log of tool names already called |
+| `tool_call_counts`  | `dict[str, int]`       | Per-tool call counts |
+| `tokens_spent`      | `int`                  | Tokens measured so far |
+| `elapsed_ms`        | `int`                  | Wall-clock time since the run started |
+| `now_ms`            | `int`                  | Wall-clock at evaluation, milliseconds since the epoch |
 
 Rules are evaluated **before** the tool runs — `requested_tool` is set to the tool name being checked. Use `last_tool_args` for content-based enforcement:
 
@@ -166,93 +162,69 @@ def block_sensitive(ctx) -> bool:
     return ".env" not in path and "secret" not in path
 ```
 
-All fields are live. Before each rule evaluation, the SDK fetches current counters from Nanny’s enforcement layer — `step_count`, `tokens_spent`, `tool_call_counts`, and `tool_call_history` reflect the actual execution state at the moment your rule runs.
+All fields are live: the SDK fetches current state before every rule evaluation.
 
-<Frame>
-  <img
-    src="https://raw.githubusercontent.com/nanny-run/nanny/main/assets/demo/metrics-crew-rule-denied.gif"
-    alt="metrics_crew — RuleDenied fires on the loop-detection rule, stopping the analysis agent from repeating the same computation"
-  />
-</Frame>
+`tool_labels` covers every allowed tool, not just the pending one, because a
+rule usually needs to ask what an *already-called* tool was:
+
+```python
+@rule("no_send_after_read")
+def taint(ctx) -> bool:
+    pending = ctx.requested_tool
+    if pending is None or not ctx.tool_has(pending, "external_effect"):
+        return True
+    return not any(ctx.tool_has(t, "reads_untrusted") for t in ctx.tool_call_history)
+```
+
+`ctx.tool_has(tool, label)` returns `False` for an unknown tool and for an
+unknown label, which is the safe answer in both directions.
+`ctx.tools_with(label)` returns every allowed tool carrying a label, sorted.
+
+`now_ms` is supplied rather than read from the clock, so a rule about when an
+action is permitted stays a pure function of its inputs and can be tested.
 
 ---
 
 ## `@agent` — activate named limits for a scope
 
-In a multi-agent system, each agent has a different role and a different risk profile. The analysis agent makes expensive API calls and deserves a tight token ceiling. The reporter just writes a file and barely needs a budget at all. `@agent` activates the right named limit set when each role runs, then reverts automatically when it's done.
+In a multi-agent system each phase does different work, and a denial in one is worth attributing to that phase rather than to the process as a whole. `@agent` names the phase, and every event between entering and exiting belongs to it.
 
 ```python
 from nanny_sdk import agent
 
 @agent("researcher")
 def run_research(topic: str) -> list[str]:
-    # Runs under [limits.researcher] from nanny.toml
-    pages = [fetch_page(f"https://en.wikipedia.org/wiki/{topic}")]
-    return pages
-```
-
-```toml
-# nanny.toml
-[limits.researcher]
-steps   = 200
-tokens  = 5000
-timeout = 120000
-```
-
-The named set inherits from `[limits]` and overrides only the declared fields.
-Works identically for async functions. Limits revert on exit whether the function returns normally or raises.
-
-<Frame>
-  <img
-    src="https://raw.githubusercontent.com/nanny-run/nanny/main/assets/demo/metrics-crew-agent-scopes.gif"
-    alt="metrics_crew running under nanny run — ingestion, analysis, visualization, and reporter agent scopes entering and exiting with structured NDJSON events"
-  />
-</Frame>
-
----
-
-## `fresh_run` — starting a fresh run mid-process
-
-`@agent` changes which ceiling the run's *one* running total is checked
-against; it does not give a role its own budget (see
-[Named sets share one counter](/v0.6/concepts/limits#named-sets-share-one-counter-they-are-not-separate-budgets)).
-If your process genuinely runs multiple, independent phases back to back,
-say, a research phase that hands off to a drafting phase, or a long-lived
-server that should give each incoming request its own clean slate, and you
-want each one to start from zero rather than inherit whatever an earlier
-phase already spent, that's a new **run**, Nanny's real unit of governance:
-one cumulative counter, one stop state, "a stop is final."
-
-```python
-import nanny_sdk
-
-nanny_sdk.fresh_run()   # everything governed after this point is a fresh run
-```
-
-Only meaningful when governed through a network server (`nanny run --serve`
-/ `--join`): the server keys independent state per run, so a stop in the run
-you just left has zero effect on the one you're starting. Under local
-`nanny run` (no `--serve`), one process is already always exactly one run,
-so this is a safe no-op there, code that might run under either mode
-doesn't need to branch on which one it's in.
-
-```python
-from nanny_sdk import agent, fresh_run
-
-def handle_request(payload: dict) -> dict:
-    fresh_run()  # this request's tokens/steps start from zero, unrelated to
-               # whatever the previous request already spent
-    return process(payload)
-
-@agent("researcher")
-def research(topic: str) -> list[str]:
     ...
 ```
 
-Before this existed, the only way to do this was setting the `NANNY_RUN_ID`
-environment variable directly, an internal detail the client happens to read
-fresh on every call, never documented as something to rely on. `fresh_run()`
-is that same mechanism, given a real, discoverable name.
+`AgentScopeEntered` and `AgentScopeExited` bracket the events in between, so the
+audit log can answer which phase a denial came from. Nesting is supported.
+Works identically for async functions. Limits revert on exit whether the function returns normally or raises.
+
+---
+
+## `run_scope` — an independent run inside one process
+
+A **run** is Nanny's unit of governance: one rule set, one stop state, final
+once stopped. A long-lived server wants each request to be its own run, so a
+stop in one never affects another.
+
+```python
+from nanny_sdk import run_scope
+
+def handle_request(payload: dict) -> dict:
+    with run_scope():
+        return process(payload)
+```
+
+Safe under concurrency: the run id lives in a context variable, so threads and
+async tasks each get their own rather than sharing one process-global value.
+The scope self-cleans on exit.
+
+Only meaningful when governed through a governance server (`nanny run --serve`
+or `--join`), which keys state per run. Under local `nanny run` one process is
+always exactly one run, so this is a no-op and code that might run under either
+mode does not need to branch.
 
 ---
 
@@ -293,27 +265,20 @@ except NannyStop as e:
 
 Under plain `nanny run` (single process, no `--serve`), you do not need to handle stop reasons in most agent code. They propagate up the call stack and terminate the process, since `nanny run` is watching that process and exits it for you. Catching them there is useful mainly in test code and at the CLI entry point.
 
-**This is not true once you're running under `nanny run --serve` / `--join`.** When your process joins a governance server, the wrapping `nanny run --join` command does not watch your process for stops at all: no polling loop, no kill on budget exhaustion, nothing. That's deliberate. [The stop guarantee](/v0.6/guides/governance-server#long-lived-processes-and-nannystop) is that a stop ends one *run*, not your whole process, so a long-lived server (a web app, a Discord bot, anything handling more than one request per process) has to keep running after another request's run gets stopped. Nothing does that for you. If a request handler lets `NannyStop` propagate uncaught, your framework's own crash behavior decides what happens next, which for many servers means the whole process going down over one governed request. Catch it at the boundary of whatever "one governed unit of work" means for your app, typically each request handler, and turn it into a failure response for that one request, not an unhandled exception:
+**This is not true once you're running under `nanny run --serve` / `--join`.** When your process joins a governance server, the wrapping `nanny run --join` command does not watch your process for stops at all: no polling loop, no kill on a stop, nothing. That's deliberate. [The stop guarantee](/v0.6/guides/governance-server#long-lived-processes-and-nannystop) is that a stop ends one *run*, not your whole process, so a long-lived server (a web app, a Discord bot, anything handling more than one request per process) has to keep running after another request's run gets stopped. Nothing does that for you. If a request handler lets `NannyStop` propagate uncaught, your framework's own crash behavior decides what happens next, which for many servers means the whole process going down over one governed request. Catch it at the boundary of whatever "one governed unit of work" means for your app, typically each request handler, and turn it into a failure response for that one request, not an unhandled exception:
 
 ```python
-from nanny_sdk import fresh_run, NannyStop
+from nanny_sdk import run_scope, NannyStop
 
 def handle_request(payload: dict) -> dict:
-    fresh_run()  # this request's budget starts clean, independent of others
     try:
-        return process(payload)
+        with run_scope():
+            return process(payload)
     except NannyStop as e:
         return {"error": f"stopped: {type(e).__name__}"}
 ```
 
 See [Long-lived processes and NannyStop](/v0.6/guides/governance-server#long-lived-processes-and-nannystop) for the full explanation of why this only applies under `--serve`/`--join`.
-
-<Frame>
-  <img
-    src="https://raw.githubusercontent.com/nanny-run/nanny/main/assets/demo/metrics-crew-budget-exhausted.gif"
-    alt="metrics_crew — BudgetExhausted stops the analysis agent when it hits its token ceiling"
-  />
-</Frame>
 
 ---
 
@@ -365,7 +330,7 @@ python agent.py
 
 ## Multi-agent pattern
 
-The canonical use case: a pipeline where each agent has a specific role, a specific budget, and access to only the tools it needs. This is the `metrics_crew` pattern — four specialized agents, each governed independently.
+A pipeline where each phase has a role, its own tools, and rules that apply across all of them.
 
 ```python
 from nanny_sdk import tool, rule, agent
@@ -391,62 +356,36 @@ def check_loop(ctx) -> bool:
     _recent.append(tool)
     return not (len(_recent) == 5 and all(t == "compute_stats" for t in _recent))
 
-# Each agent activates its own limit scope.
+# @agent names the phase, so every verdict is attributed to it.
 @agent("analysis")
 def run_analysis(path: str):
-    # Governed by [limits.analysis]: steps=60, tokens=200, timeout=60000
-    # Tool allowlist: ["compute_stats", "detect_anomalies"] only
-    # write_report() here would raise ToolDenied immediately
     stats = compute_stats("cpu_usage", path)
     anomalies = detect_anomalies("cpu_usage", path)
     return anomalies
 
 @agent("reporter")
 def run_reporter(findings: list, output_dir: str):
-    # Governed by [limits.reporter]: steps=20, tokens=50, timeout=30000
-    # Tool allowlist: ["write_report"] only
-    # compute_stats() here would raise ToolDenied immediately
     return write_report(str(findings), f"{output_dir}/report.md")
 ```
 
 ```toml
 # nanny.toml
-[limits]
-steps   = 200
-tokens  = 500
-timeout = 120000
-
-[limits.analysis]
-steps   = 60
-tokens  = 200
-timeout = 60000
-
-[limits.reporter]
-steps   = 20
-tokens  = 50
-timeout = 30000
-
 [tools]
 allowed = ["compute_stats", "detect_anomalies", "write_report"]
+
+[tools.write_report]
+external_effect = true
+max_calls       = 3
 ```
 
 The key properties this gives you:
 
-- **A ceiling tailored to each role:** the analysis agent gets a tighter check than the reporter while it's running, expressed once in `nanny.toml`. Worth being precise about what this is *not*: tokens spent is one running total for the whole run, not a separate pool per role, so if analysis exhausts its own ceiling, the run stops there, the reporter never gets to run at all. See [Named sets share one counter](/v0.6/concepts/limits#named-sets-share-one-counter-they-are-not-separate-budgets) for the full explanation, and `fresh_run()` below if you actually want each phase to have its own independent budget.
-- **Least-privilege tool access:** each agent only receives the tools it needs; calling outside its role raises `ToolDenied` immediately
-- **Loop detection:** the `@rule` fires client-side before Nanny’s enforcement layer is contacted — the denied tool never runs and no tokens are charged
-- **Full audit trail:** every tool call, every limit activation, every stop reason logged to NDJSON
-
-<Frame>
-  <img
-    src="https://raw.githubusercontent.com/nanny-run/nanny/main/assets/demo/metrics-crew-max-steps.gif"
-    alt="metrics_crew — MaxStepsReached stops the analysis agent after it exhausts its step allowance"
-  />
-</Frame>
+- **Least privilege:** a tool outside `[tools] allowed` raises `ToolDenied` before any rule runs
+- **Loop detection:** the `@rule` fires before Nanny's enforcement layer is contacted, so the denied tool never runs
+- **Attribution:** every verdict is bracketed by the `@agent` scope that produced it
+- **Full audit trail:** every tool call and every stop reason logged to NDJSON
 
 For cross-process and cross-machine enforcement, use the [governance server](/v0.6/guides/governance-server).
-
-See [`examples/python/metrics_crew`](https://github.com/nanny-run/nanny/tree/main/examples/python/metrics_crew) for the complete working implementation of this pattern with four agents, Plotly chart generation, and a full incident report output.
 
 ---
 
@@ -486,4 +425,4 @@ def generate_chart(metric: str, output_dir: str) -> str:
     return output_path
 ```
 
-See [`examples/python/dev_assist`](https://github.com/nanny-run/nanny/tree/main/examples/python/dev_assist) for a complete LangGraph integration and [`examples/python/metrics_crew`](https://github.com/nanny-run/nanny/tree/main/examples/python/metrics_crew) for the canonical multi-agent governance example with four specialized agents, per-role limits, and per-role tool allowlists.
+Rule packs ship the same shape as the rules above. See [Rule packs](/v0.6/guides/rule-packs).
