@@ -116,6 +116,14 @@ impl Environment {
             Environment::Sandbox => "sandbox",
         }
     }
+
+    /// The one this run is *not* — the side C2's startup notice checks.
+    fn other(self) -> Self {
+        match self {
+            Environment::Live => Environment::Sandbox,
+            Environment::Sandbox => Environment::Live,
+        }
+    }
 }
 
 /// Why a run is not syncing. Drives the startup line, so the reason is always
@@ -285,13 +293,50 @@ impl Spool {
     /// environment's subdirectory this instance reads and writes — see the
     /// struct docs.
     pub fn new(base_dir: &Path, api_key: &str) -> Self {
-        let environment = Environment::from_api_key(api_key);
+        Self::for_environment(base_dir, Environment::from_api_key(api_key))
+    }
+
+    /// Same as `new`, given an already-resolved `Environment` rather than a
+    /// key to derive one from — how C2's startup notice inspects the sibling
+    /// side without a key for it.
+    fn for_environment(base_dir: &Path, environment: Environment) -> Self {
         Self {
             dir: base_dir
                 .join(".nanny")
                 .join("spool")
                 .join(environment.dir_name()),
             base_dir: base_dir.to_path_buf(),
+        }
+    }
+
+    /// How many batches are held here, without touching any of them.
+    fn count(&self) -> usize {
+        self.entries().len()
+    }
+
+    /// C2's startup notice, as text — `None` when there is nothing to say. A
+    /// pure function so the message itself is directly assertable, with the
+    /// `eprintln!` side effect kept to the one-line caller below.
+    fn other_environment_notice(base_dir: &Path, environment: Environment) -> Option<String> {
+        let other = environment.other();
+        let held = Self::for_environment(base_dir, other).count();
+        (held > 0).then(|| {
+            format!(
+                "nanny: sync: {held} batch(es) held for {}, not sent: this run is {}",
+                other.dir_name(),
+                environment.dir_name()
+            )
+        })
+    }
+
+    /// If the *other* environment's outbox has batches held, say so — before
+    /// this run's own forwarding starts, so switching from a sandbox key back
+    /// to live (or vice versa) doesn't silently leave a pile of events
+    /// unaccounted for. Never touches what it finds; drain only ever runs
+    /// against the environment a run's own key resolved to.
+    fn warn_about_the_other_environment(base_dir: &Path, environment: Environment) {
+        if let Some(notice) = Self::other_environment_notice(base_dir, environment) {
+            eprintln!("{notice}");
         }
     }
 
@@ -450,6 +495,7 @@ impl CloudSync {
             .build()
             .ok()?;
 
+        Spool::warn_about_the_other_environment(base_dir, Environment::from_api_key(&api_key));
         let spool = Spool::new(base_dir, &api_key);
         let (tx, rx) = std::sync::mpsc::channel::<String>();
         let handle = std::thread::spawn(move || {
@@ -494,6 +540,7 @@ impl ServerForwarder {
         server_secret: String,
         base_dir: &Path,
     ) {
+        Spool::warn_about_the_other_environment(base_dir, Environment::from_api_key(&api_key));
         let spool = Spool::new(base_dir, &api_key);
         std::thread::spawn(move || {
             let Ok(client) = reqwest::blocking::Client::builder()
@@ -1086,6 +1133,83 @@ mod tests {
         Spool::new(&dir, "nny_oldformat").store("s", r#"{"event":"X"}"#);
 
         assert_eq!(spooled_files(&dir, "nny_live_anything").len(), 1);
+    }
+
+    // ── A mismatched spool is skipped, not sent (Stage 37, C2) ─────────────────
+
+    #[test]
+    fn the_notice_names_the_count_and_which_side_is_which() {
+        let dir = temp_app_dir();
+        Spool::new(&dir, "nny_sdbx_x").store("s1", r#"{"n":1}"#);
+        Spool::new(&dir, "nny_sdbx_x").store("s2", r#"{"n":2}"#);
+
+        let notice = Spool::other_environment_notice(&dir, Environment::Live)
+            .expect("two sandbox batches are held");
+        assert!(notice.contains("2 batch"), "{notice}");
+        assert!(notice.contains("held for sandbox"), "{notice}");
+        assert!(notice.contains("this run is live"), "{notice}");
+    }
+
+    #[test]
+    fn no_notice_when_the_other_environment_is_empty() {
+        let dir = temp_app_dir();
+        assert_eq!(
+            Spool::other_environment_notice(&dir, Environment::Live),
+            None
+        );
+    }
+
+    #[test]
+    fn counts_what_the_other_environment_is_holding_without_touching_it() {
+        let dir = temp_app_dir();
+        Spool::new(&dir, "nny_sdbx_x").store("s1", r#"{"n":1}"#);
+        Spool::new(&dir, "nny_sdbx_x").store("s2", r#"{"n":2}"#);
+
+        assert_eq!(
+            Spool::for_environment(&dir, Environment::Sandbox).count(),
+            2
+        );
+        // The check itself must not consume anything — a count, not a drain.
+        Spool::warn_about_the_other_environment(&dir, Environment::Live);
+        assert_eq!(
+            spooled_files(&dir, "nny_sdbx_x").len(),
+            2,
+            "checking the other environment's outbox must not touch it"
+        );
+    }
+
+    #[test]
+    fn a_live_run_never_drains_batches_held_for_sandbox_end_to_end() {
+        // Switching keys back and forth (live today, sandbox tomorrow) must
+        // recover cleanly: nothing spooled under one environment is ever sent
+        // by a run authenticated under the other, all the way through
+        // `CloudSync::start`, not just the lower-level `Spool::drain`.
+        let dir = temp_app_dir();
+        Spool::new(&dir, "nny_sdbx_x").store("held-for-sandbox", r#"{"event":"Sandbox"}"#);
+
+        let (port, rx_srv) = mock_ingest_server();
+        let sender = CloudSync::start(
+            format!("http://127.0.0.1:{port}/v1/ingest"),
+            "nny_live_x".to_string(),
+            "live-session",
+            &dir,
+        )
+        .expect("sender starts");
+        sender.enqueue(r#"{"event":"LiveOnly"}"#.to_string());
+        sender.flush_and_join();
+
+        let req = rx_srv
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the live run's own batch was sent");
+        assert!(
+            !req.contains("Sandbox"),
+            "a live run must never send a batch held for sandbox:\n{req}"
+        );
+        assert_eq!(
+            spooled_files(&dir, "nny_sdbx_x").len(),
+            1,
+            "switching back to sandbox later must recover this batch — it must survive, not be deleted"
+        );
     }
 
     #[test]
