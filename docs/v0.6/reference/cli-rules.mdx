@@ -1,0 +1,73 @@
+---
+title: nanny rules
+description: Install and inspect rule packs.
+---
+
+```bash
+nanny rules add <pack> --from <dir>
+nanny rules list
+nanny rules remove <pack>
+```
+
+`<pack>` is always `name@version`. See [Rule packs](/v0.6/guides/rule-packs) for
+the concepts.
+
+---
+
+## nanny rules add
+
+Vendors a pack into `.nanny/rules/` and declares it in `[rules] extends`.
+
+| Argument | Type | Description |
+| --- | --- | --- |
+| `<pack>` | string | **Required.** The pack to install, as `name@version`. |
+| `--from` | path | **Required.** Directory holding the pack to install. |
+
+```bash
+nanny rules add nanny:owasp@1.0.0 --from ./packs/nanny-owasp
+```
+
+```
+nanny: nanny:owasp@1.0.0 integrity verified
+nanny: installed nanny:owasp@1.0.0 to .nanny/rules/nanny-owasp@1.0.0
+nanny: declared in [rules] extends
+nanny: 15 rule(s): [...]
+nanny: commit .nanny/rules/ so every run of this project enforces the same controls
+```
+
+Your source files are not modified. Comments and ordering in `nanny.toml` are
+preserved.
+
+Fails without writing anything if the pack is unpinned, if `--from` holds a
+different pack than you named, or if the contents do not match the digest in the
+manifest.
+
+---
+
+## nanny rules list
+
+Every pack installed in this project, with its version, whether its contents
+were verified on install, and how many rules it registers.
+
+```bash
+nanny rules list
+```
+
+---
+
+## nanny rules remove
+
+Deletes the vendored pack and removes its line from `[rules] extends`.
+
+```bash
+nanny rules remove nanny:owasp@1.0.0
+```
+
+---
+
+## Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Success |
+| `1` | Unpinned pack, missing or mismatched source, or a failed integrity check |
