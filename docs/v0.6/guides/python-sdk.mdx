@@ -228,6 +228,44 @@ mode does not need to branch.
 
 ---
 
+## `get_run_events` — read a run's events from your own code
+
+Returns the events a governance server has buffered for one run:
+
+```python
+from nanny_sdk import get_run_events
+
+for event in get_run_events(run_id):
+    if event["event"] == "RuleDenied":
+        notify(event["rule_name"], event["tool"])
+```
+
+You pass the `run_id` explicitly rather than it being read from the current
+scope, because the caller is usually a background worker polling several runs
+and has no run of its own.
+
+Every call returns the run's full buffered list, so track how many you have
+already consumed, by index or by `seq`. Returns `[]` for a run with no events
+yet and for an unreachable server: this is a side channel, and it should never
+crash a session over a blip that governed calls already handle by failing
+closed.
+
+---
+
+## `set_app` — declare which app this process is
+
+```python
+from nanny_sdk import set_app
+
+set_app()   # reads .nanny/app.json
+```
+
+Emits `AppIdentified`, so runs from several apps sharing one governance server
+are attributed separately. A process that declares nothing inherits the
+governor's identity.
+
+---
+
 ## What happens on stop
 
 When Nanny stops execution, it raises a `NannyStop` exception. All stop reasons are distinct subclasses:
