@@ -17,8 +17,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
-use nanny_core::events::event::{ExecutionEvent, LoggedEvent, RuleDecl};
 use nanny_core::agent::state::StopReason;
+use nanny_core::events::event::{ExecutionEvent, LoggedEvent, RuleDecl};
 use nanny_core::policy::{Policy, PolicyContext, PolicyDecision};
 use nanny_core::tool::{ToolArgs, ToolCallError, ToolExecutor};
 use nanny_runtime::{RuleEvaluator, ToolPermissionPolicy, ToolRegistry};
@@ -46,9 +46,9 @@ pub enum ExecutionState {
 /// Final accounting snapshot read by the CLI when writing `ExecutionStopped`.
 #[derive(Debug, Clone, Default)]
 pub struct BridgeMetrics {
-    pub tokens_spent:  u64,
+    pub tokens_spent: u64,
     /// Total number of tool calls made during execution.
-    pub tool_call_count:  usize,
+    pub tool_call_count: usize,
     /// Number of distinct tools that were allowed (configured in `[tools]`).
     pub allowed_tool_count: usize,
 }
@@ -171,8 +171,7 @@ impl Bridge {
     pub fn start(components: BridgeComponents, run_id: String) -> Result<Self, BridgeError> {
         let token = Uuid::new_v4().to_string();
 
-        let tool_permission_policy =
-            ToolPermissionPolicy::new(components.allowed_tools.clone());
+        let tool_permission_policy = ToolPermissionPolicy::new(components.allowed_tools.clone());
         let rule_evaluator = RuleEvaluator::new(components.per_tool_max_calls);
 
         // `seq` starts at 1: the CLI writes `ExecutionStarted` before the
@@ -227,7 +226,9 @@ fn start_transport(
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut s) = stream else { continue };
-                let Some(req) = parse_http_request(&mut s) else { continue };
+                let Some(req) = parse_http_request(&mut s) else {
+                    continue;
+                };
                 let resp = dispatch(req, &shared, &registry);
                 write_http_response(&mut s, &resp);
             }
@@ -252,8 +253,8 @@ fn start_transport(
     // conflict. The actual bound port is read back via server_addr() and injected
     // into the child process environment as NANNY_BRIDGE_PORT — child processes
     // never hardcode the port themselves.
-    let server = tiny_http::Server::http("127.0.0.1:0")
-        .map_err(|e| BridgeError::Start(e.to_string()))?;
+    let server =
+        tiny_http::Server::http("127.0.0.1:0").map_err(|e| BridgeError::Start(e.to_string()))?;
 
     let port = server
         .server_addr()
@@ -275,7 +276,6 @@ fn start_transport(
 }
 
 impl Bridge {
-
     /// Read the current execution state.
     /// The next unused `seq` for this run.
     ///
@@ -303,8 +303,8 @@ impl Bridge {
     pub fn metrics(&self) -> BridgeMetrics {
         let guard = self.shared.lock().unwrap();
         BridgeMetrics {
-            tokens_spent:       guard.tokens_spent,
-            tool_call_count:    guard.tool_call_history.len(),
+            tokens_spent: guard.tokens_spent,
+            tool_call_count: guard.tool_call_history.len(),
             allowed_tool_count: guard.allowed_tools.len(),
         }
     }
@@ -377,11 +377,19 @@ pub(crate) struct BridgeResp {
 
 impl BridgeResp {
     fn json(status: u16, body: impl Into<String>) -> Self {
-        Self { status, body: body.into(), content_type: ContentType::Json }
+        Self {
+            status,
+            body: body.into(),
+            content_type: ContentType::Json,
+        }
     }
 
     fn ndjson(body: impl Into<String>) -> Self {
-        Self { status: 200, body: body.into(), content_type: ContentType::Ndjson }
+        Self {
+            status: 200,
+            body: body.into(),
+            content_type: ContentType::Ndjson,
+        }
     }
 }
 
@@ -425,15 +433,15 @@ fn dispatch(
     }
 
     match (method, path) {
-        ("POST", "/tool/call")     => handle_tool_call(&req.body, shared, registry),
+        ("POST", "/tool/call") => handle_tool_call(&req.body, shared, registry),
         ("POST", "/rule/evaluate") => handle_rule_evaluate(&req.body, shared),
-        ("POST", "/agent/enter")   => handle_agent_enter(&req.body, shared),
-        ("POST", "/agent/exit")    => handle_agent_exit(shared),
-        ("POST", "/llm/usage")     => handle_llm_usage(&req.body, shared),
-        ("POST", "/harness")       => handle_harness(&req.body, shared),
-        ("POST", "/rules")         => handle_rules(&req.body, shared),
-        ("POST", "/app")           => handle_app(&req.body, shared),
-        _                          => BridgeResp::json(404, r#"{"error":"Not Found"}"#),
+        ("POST", "/agent/enter") => handle_agent_enter(&req.body, shared),
+        ("POST", "/agent/exit") => handle_agent_exit(shared),
+        ("POST", "/llm/usage") => handle_llm_usage(&req.body, shared),
+        ("POST", "/harness") => handle_harness(&req.body, shared),
+        ("POST", "/rules") => handle_rules(&req.body, shared),
+        ("POST", "/app") => handle_app(&req.body, shared),
+        _ => BridgeResp::json(404, r#"{"error":"Not Found"}"#),
     }
 }
 
@@ -442,10 +450,10 @@ fn dispatch(
 pub(crate) fn handle_health(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
     let guard = shared.lock().unwrap();
     let body = match &guard.execution {
-        ExecutionState::Running =>
-            r#"{"state":"running"}"#.to_string(),
-        ExecutionState::Stopped { reason } =>
-            format!(r#"{{"state":"stopped","reason":"{}"}}"#, reason),
+        ExecutionState::Running => r#"{"state":"running"}"#.to_string(),
+        ExecutionState::Stopped { reason } => {
+            format!(r#"{{"state":"stopped","reason":"{}"}}"#, reason)
+        }
     };
     BridgeResp::json(200, body)
 }
@@ -453,19 +461,33 @@ pub(crate) fn handle_health(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
 pub(crate) fn handle_status(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
     let guard = shared.lock().unwrap();
     let elapsed_ms = guard.start_time.elapsed().as_millis() as u64;
-    let counts_json = serde_json::to_string(&guard.tool_call_counts).unwrap_or_else(|_| "{}".to_string());
-    let history_json = serde_json::to_string(&guard.tool_call_history).unwrap_or_else(|_| "[]".to_string());
+    let counts_json =
+        serde_json::to_string(&guard.tool_call_counts).unwrap_or_else(|_| "{}".to_string());
+    let history_json =
+        serde_json::to_string(&guard.tool_call_history).unwrap_or_else(|_| "[]".to_string());
     // Labels ride on /status because an out-of-process SDK has no other way to
     // learn them: it never reads nanny.toml, only the governor does.
-    let labels_json = serde_json::to_string(&guard.tool_labels).unwrap_or_else(|_| "{}".to_string());
+    let labels_json =
+        serde_json::to_string(&guard.tool_labels).unwrap_or_else(|_| "{}".to_string());
     let body = match &guard.execution {
         ExecutionState::Running => format!(
             r#"{{"state":"running","tokens_spent":{},"elapsed_ms":{},"now_ms":{},"tool_call_counts":{},"tool_call_history":{},"tool_labels":{}}}"#,
-            guard.tokens_spent, elapsed_ms, now_ms(), counts_json, history_json, labels_json
+            guard.tokens_spent,
+            elapsed_ms,
+            now_ms(),
+            counts_json,
+            history_json,
+            labels_json
         ),
         ExecutionState::Stopped { reason } => format!(
             r#"{{"state":"stopped","reason":"{}","tokens_spent":{},"elapsed_ms":{},"now_ms":{},"tool_call_counts":{},"tool_call_history":{},"tool_labels":{}}}"#,
-            reason, guard.tokens_spent, elapsed_ms, now_ms(), counts_json, history_json, labels_json
+            reason,
+            guard.tokens_spent,
+            elapsed_ms,
+            now_ms(),
+            counts_json,
+            history_json,
+            labels_json
         ),
     };
     BridgeResp::json(200, body)
@@ -497,7 +519,11 @@ pub(crate) fn handle_tool_call(
     // Build PolicyContext and evaluate — hold lock briefly, then release.
     // The engine's own `max_calls` rule, if it governs this tool. Recorded as
     // cleared when the call is allowed, the same as any SDK-side rule.
-    let engine_rule = shared.lock().unwrap().rule_evaluator.rule_name_for(&call.tool);
+    let engine_rule = shared
+        .lock()
+        .unwrap()
+        .rule_evaluator
+        .rule_name_for(&call.tool);
     let mut cleared_by = call.cleared_by.clone();
 
     let decision = {
@@ -564,29 +590,42 @@ pub(crate) fn handle_tool_call(
                         guard.tokens_spent += cost;
                         *guard.tool_call_counts.entry(call.tool.clone()).or_insert(0) += 1;
                         guard.tool_call_history.push(call.tool.clone());
-                        append_event(&mut guard, ExecutionEvent::ToolAllowed {
-                            ts: now_ms(),
-                            tool: call.tool.clone(),
-                            cleared_by: cleared_by.clone(),
-                        });
+                        append_event(
+                            &mut guard,
+                            ExecutionEvent::ToolAllowed {
+                                ts: now_ms(),
+                                tool: call.tool.clone(),
+                                cleared_by: cleared_by.clone(),
+                            },
+                        );
                     }
-                    BridgeResp::json(200, serde_json::to_string(
-                        &ToolCallResponse::Allowed { result: String::new() }
-                    ).unwrap())
+                    BridgeResp::json(
+                        200,
+                        serde_json::to_string(&ToolCallResponse::Allowed {
+                            result: String::new(),
+                        })
+                        .unwrap(),
+                    )
                 }
                 Err(ToolCallError::Execution { tool_name, source }) => {
                     {
                         let mut guard = shared.lock().unwrap();
-                        append_event(&mut guard, ExecutionEvent::ToolFailed {
-                            ts:    now_ms(),
-                            tool:  tool_name.clone(),
-                            error: source.to_string(),
-                        });
+                        append_event(
+                            &mut guard,
+                            ExecutionEvent::ToolFailed {
+                                ts: now_ms(),
+                                tool: tool_name.clone(),
+                                error: source.to_string(),
+                            },
+                        );
                     }
-                    BridgeResp::json(500, format!(
-                        r#"{{"error":"tool execution failed","tool_name":"{}","message":"{}"}}"#,
-                        tool_name, source
-                    ))
+                    BridgeResp::json(
+                        500,
+                        format!(
+                            r#"{{"error":"tool execution failed","tool_name":"{}","message":"{}"}}"#,
+                            tool_name, source
+                        ),
+                    )
                 }
                 Ok(output) => {
                     {
@@ -594,15 +633,22 @@ pub(crate) fn handle_tool_call(
                         guard.tokens_spent += cost;
                         *guard.tool_call_counts.entry(call.tool.clone()).or_insert(0) += 1;
                         guard.tool_call_history.push(call.tool.clone());
-                        append_event(&mut guard, ExecutionEvent::ToolAllowed {
-                            ts: now_ms(),
-                            tool: call.tool.clone(),
-                            cleared_by: cleared_by.clone(),
-                        });
+                        append_event(
+                            &mut guard,
+                            ExecutionEvent::ToolAllowed {
+                                ts: now_ms(),
+                                tool: call.tool.clone(),
+                                cleared_by: cleared_by.clone(),
+                            },
+                        );
                     }
-                    BridgeResp::json(200, serde_json::to_string(
-                        &ToolCallResponse::Allowed { result: output.content }
-                    ).unwrap())
+                    BridgeResp::json(
+                        200,
+                        serde_json::to_string(&ToolCallResponse::Allowed {
+                            result: output.content,
+                        })
+                        .unwrap(),
+                    )
                 }
             }
         }
@@ -617,7 +663,8 @@ pub(crate) fn handle_rule_evaluate(body: &[u8], shared: &Arc<Mutex<BridgeState>>
         let ctx = PolicyContext {
             tool_labels: guard.tool_labels.clone(),
             now_ms: now_ms(),
-            elapsed_ms: req.elapsed
+            elapsed_ms: req
+                .elapsed
                 .unwrap_or_else(|| guard.start_time.elapsed().as_millis() as u64),
             requested_tool: req.tool.clone(),
             tokens_spent: req.tokens_spent.unwrap_or(guard.tokens_spent),
@@ -637,12 +684,14 @@ pub(crate) fn handle_rule_evaluate(body: &[u8], shared: &Arc<Mutex<BridgeState>>
     };
 
     let body = match decision {
-        PolicyDecision::Allow =>
-            r#"{"status":"allowed"}"#.to_string(),
-        PolicyDecision::Deny { reason: StopReason::RuleDenied { rule_name } } =>
-            format!(r#"{{"status":"denied","rule_name":"{}"}}"#, rule_name),
-        PolicyDecision::Deny { reason } =>
-            format!(r#"{{"status":"denied","reason":"{}"}}"#, stop_reason_name(&reason)),
+        PolicyDecision::Allow => r#"{"status":"allowed"}"#.to_string(),
+        PolicyDecision::Deny {
+            reason: StopReason::RuleDenied { rule_name },
+        } => format!(r#"{{"status":"denied","rule_name":"{}"}}"#, rule_name),
+        PolicyDecision::Deny { reason } => format!(
+            r#"{{"status":"denied","reason":"{}"}}"#,
+            stop_reason_name(&reason)
+        ),
     };
     BridgeResp::json(200, body)
 }
@@ -656,10 +705,13 @@ pub(crate) fn handle_agent_enter(body: &[u8], shared: &Arc<Mutex<BridgeState>>) 
     {
         let mut guard = shared.lock().unwrap();
         guard.agent_name_stack.push(req.name.clone());
-        append_event(&mut guard, ExecutionEvent::AgentScopeEntered {
-            ts: now_ms(),
-            name: req.name.clone(),
-        });
+        append_event(
+            &mut guard,
+            ExecutionEvent::AgentScopeEntered {
+                ts: now_ms(),
+                name: req.name.clone(),
+            },
+        );
     }
 
     BridgeResp::json(200, r#"{"status":"ok"}"#)
@@ -668,10 +720,10 @@ pub(crate) fn handle_agent_enter(body: &[u8], shared: &Arc<Mutex<BridgeState>>) 
 pub(crate) fn handle_agent_exit(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
     let mut guard = shared.lock().unwrap();
     let name = guard.agent_name_stack.pop().unwrap_or_default();
-    append_event(&mut guard, ExecutionEvent::AgentScopeExited {
-        ts: now_ms(),
-        name,
-    });
+    append_event(
+        &mut guard,
+        ExecutionEvent::AgentScopeExited { ts: now_ms(), name },
+    );
     BridgeResp::json(200, r#"{"status":"ok"}"#)
 }
 
@@ -740,15 +792,18 @@ pub(crate) fn handle_llm_usage(body: &[u8], shared: &Arc<Mutex<BridgeState>>) ->
 
     guard.tokens_spent += total;
 
-    append_event(&mut guard, ExecutionEvent::LlmUsageRecorded {
-        ts: now_ms(),
-        input: req.input,
-        output: req.output,
-        model: req.model,
-        provider: req.provider,
-        cache_read: req.cache_read,
-        cache_write: req.cache_write,
-    });
+    append_event(
+        &mut guard,
+        ExecutionEvent::LlmUsageRecorded {
+            ts: now_ms(),
+            input: req.input,
+            output: req.output,
+            model: req.model,
+            provider: req.provider,
+            cache_read: req.cache_read,
+            cache_write: req.cache_write,
+        },
+    );
 
     BridgeResp::json(200, r#"{"status":"ok"}"#)
 }
@@ -817,14 +872,28 @@ pub(crate) fn handle_rules(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> Bri
     #[serde(untagged)]
     enum RuleInput {
         Name(String),
-        Decl { name: String, #[serde(default)] version: Option<String>, #[serde(default)] pack: Option<String> },
+        Decl {
+            name: String,
+            #[serde(default)]
+            version: Option<String>,
+            #[serde(default)]
+            pack: Option<String>,
+        },
     }
 
     impl From<RuleInput> for RuleDecl {
         fn from(v: RuleInput) -> Self {
             match v {
                 RuleInput::Name(name) => RuleDecl::local(name),
-                RuleInput::Decl { name, version, pack } => RuleDecl { name, version, pack },
+                RuleInput::Decl {
+                    name,
+                    version,
+                    pack,
+                } => RuleDecl {
+                    name,
+                    version,
+                    pack,
+                },
             }
         }
     }
@@ -835,7 +904,10 @@ pub(crate) fn handle_rules(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> Bri
     };
 
     let mut guard = shared.lock().unwrap();
-    record_rules(&mut guard, req.rules.into_iter().map(RuleDecl::from).collect());
+    record_rules(
+        &mut guard,
+        req.rules.into_iter().map(RuleDecl::from).collect(),
+    );
 
     BridgeResp::json(200, r#"{"status":"ok"}"#)
 }
@@ -861,7 +933,13 @@ pub(crate) fn record_rules(state: &mut BridgeState, rules: Vec<RuleDecl>) {
         return;
     }
     state.last_rules = Some(rules.clone());
-    append_event(state, ExecutionEvent::RulesDeclared { ts: now_ms(), rules });
+    append_event(
+        state,
+        ExecutionEvent::RulesDeclared {
+            ts: now_ms(),
+            rules,
+        },
+    );
 }
 
 /// POST /app {"app_id": "app_...", "name": "..."}
@@ -929,15 +1007,17 @@ fn parse_http_request(stream: &mut impl std::io::Read) -> Option<BridgeReq> {
     let first = lines.next()?;
     let mut parts = first.split_ascii_whitespace();
     let method = parts.next()?.to_string();
-    let path   = parts.next()?.to_string();
+    let path = parts.next()?.to_string();
 
     let mut token: Option<String> = None;
     let mut content_length: usize = 0;
 
     for line in lines {
-        if line.is_empty() { break; }
+        if line.is_empty() {
+            break;
+        }
         if let Some((name, value)) = line.split_once(':') {
-            let name  = name.trim();
+            let name = name.trim();
             let value = value.trim();
             if name.eq_ignore_ascii_case("x-nanny-session-token") {
                 token = Some(value.to_string());
@@ -952,14 +1032,19 @@ fn parse_http_request(stream: &mut impl std::io::Read) -> Option<BridgeReq> {
         stream.read_exact(&mut body).ok()?;
     }
 
-    Some(BridgeReq { method, path, token, body })
+    Some(BridgeReq {
+        method,
+        path,
+        token,
+        body,
+    })
 }
 
 /// Write an HTTP/1.1 response to any byte stream.
 #[cfg(unix)]
 fn write_http_response(stream: &mut impl std::io::Write, resp: &BridgeResp) {
     let ct = match resp.content_type {
-        ContentType::Json   => "application/json",
+        ContentType::Json => "application/json",
         ContentType::Ndjson => "application/x-ndjson",
     };
     let body = resp.body.as_bytes();
@@ -987,7 +1072,10 @@ fn serve_tcp(
             .headers()
             .iter()
             .find(|h| {
-                h.field.as_str().as_str().eq_ignore_ascii_case("x-nanny-session-token")
+                h.field
+                    .as_str()
+                    .as_str()
+                    .eq_ignore_ascii_case("x-nanny-session-token")
             })
             .map(|h| h.value.as_str().to_string());
 
@@ -996,7 +1084,7 @@ fn serve_tcp(
 
         let req = BridgeReq {
             method: request.method().as_str().to_string(),
-            path:   request.url().to_string(),
+            path: request.url().to_string(),
             token,
             body,
         };
@@ -1006,18 +1094,14 @@ fn serve_tcp(
 }
 
 #[cfg(not(unix))]
-fn make_tiny_response(
-    resp: BridgeResp,
-) -> tiny_http::Response<std::io::Cursor<Vec<u8>>> {
+fn make_tiny_response(resp: BridgeResp) -> tiny_http::Response<std::io::Cursor<Vec<u8>>> {
     let ct = match resp.content_type {
-        ContentType::Json   => "application/json",
+        ContentType::Json => "application/json",
         ContentType::Ndjson => "application/x-ndjson",
     };
     tiny_http::Response::from_data(resp.body.into_bytes())
         .with_status_code(tiny_http::StatusCode(resp.status))
-        .with_header(
-            tiny_http::Header::from_bytes("Content-Type", ct).unwrap(),
-        )
+        .with_header(tiny_http::Header::from_bytes("Content-Type", ct).unwrap())
 }
 
 // ── Request / response types ──────────────────────────────────────────────────
@@ -1044,11 +1128,16 @@ struct ToolCallRequest {
 
 #[derive(serde::Deserialize, Default)]
 struct RuleEvalRequest {
-    #[serde(default)] elapsed:           Option<u64>,
-    #[serde(default)] tool:              Option<String>,
-    #[serde(default)] tool_call_counts:  HashMap<String, u32>,
-    #[serde(default)] tool_call_history: Vec<String>,
-    #[serde(default)] tokens_spent:      Option<u64>,
+    #[serde(default)]
+    elapsed: Option<u64>,
+    #[serde(default)]
+    tool: Option<String>,
+    #[serde(default)]
+    tool_call_counts: HashMap<String, u32>,
+    #[serde(default)]
+    tool_call_history: Vec<String>,
+    #[serde(default)]
+    tokens_spent: Option<u64>,
 }
 
 #[derive(serde::Deserialize)]
@@ -1095,8 +1184,8 @@ fn stop_reason_name(reason: &StopReason) -> &'static str {
     match reason {
         StopReason::ToolDenied { .. } => "ToolDenied",
         StopReason::RuleDenied { .. } => "RuleDenied",
-        StopReason::ManualStop        => "ManualStop",
-        StopReason::AgentCompleted    => "AgentCompleted",
+        StopReason::ManualStop => "ManualStop",
+        StopReason::AgentCompleted => "AgentCompleted",
     }
 }
 
@@ -1116,16 +1205,25 @@ pub(crate) fn handle_stop(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> Brid
     // and the tool that triggered it — emit the RuleDenied event here so the
     // NDJSON stream contains it even though no /tool/call ever reached the bridge.
     if reason == "RuleDenied" {
-        let tool      = parsed["tool"].as_str().unwrap_or("").to_string();
+        let tool = parsed["tool"].as_str().unwrap_or("").to_string();
         let rule_name = parsed["rule_name"].as_str().unwrap_or("").to_string();
         if !tool.is_empty() && !rule_name.is_empty() {
             let cleared_by: Vec<String> = parsed["cleared_by"]
                 .as_array()
-                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default();
             append_event(
                 &mut guard,
-                ExecutionEvent::RuleDenied { ts: now_ms(), tool, rule_name, cleared_by },
+                ExecutionEvent::RuleDenied {
+                    ts: now_ms(),
+                    tool,
+                    rule_name,
+                    cleared_by,
+                },
             );
         }
     }
@@ -1142,7 +1240,9 @@ pub(crate) fn mark_stopped(state: &mut BridgeState, reason: &str) {
     if matches!(state.execution, ExecutionState::Stopped { .. }) {
         return;
     }
-    state.execution = ExecutionState::Stopped { reason: reason.to_string() };
+    state.execution = ExecutionState::Stopped {
+        reason: reason.to_string(),
+    };
 }
 
 pub(crate) fn append_event(state: &mut BridgeState, event: ExecutionEvent) {
@@ -1230,7 +1330,10 @@ pub(crate) fn stopped_reason(shared: &Arc<Mutex<BridgeState>>) -> Option<String>
 /// `reason` is always one of the closed set of stop-reason identifiers, so it
 /// needs no JSON escaping.
 pub(crate) fn stopped_response(reason: &str) -> BridgeResp {
-    BridgeResp::json(410, format!(r#"{{"error":"execution stopped","reason":"{reason}"}}"#))
+    BridgeResp::json(
+        410,
+        format!(r#"{{"error":"execution stopped","reason":"{reason}"}}"#),
+    )
 }
 
 // ── Network server factory ────────────────────────────────────────────────────
@@ -1255,8 +1358,7 @@ impl RunTemplate {
     /// Each call produces a distinct execution with zeroed counters, so a
     /// stop on one run never touches another.
     pub(crate) fn build_state(&self, run_id: &str) -> Arc<Mutex<BridgeState>> {
-        let tool_permission_policy =
-            ToolPermissionPolicy::new(self.allowed_tools.clone());
+        let tool_permission_policy = ToolPermissionPolicy::new(self.allowed_tools.clone());
         let rule_evaluator = RuleEvaluator::new(self.per_tool_max_calls.clone());
 
         Arc::new(Mutex::new(BridgeState {
@@ -1309,17 +1411,27 @@ mod tests {
 
     struct EchoTool;
     impl Tool for EchoTool {
-        fn name(&self) -> &str { "echo" }
-        fn declared_cost(&self) -> u64 { 10 }
+        fn name(&self) -> &str {
+            "echo"
+        }
+        fn declared_cost(&self) -> u64 {
+            10
+        }
         fn execute(&self, args: &ToolArgs) -> Result<ToolOutput, ToolError> {
-            Ok(ToolOutput { content: args.get("message").cloned().unwrap_or_default() })
+            Ok(ToolOutput {
+                content: args.get("message").cloned().unwrap_or_default(),
+            })
         }
     }
 
     struct FailingTool;
     impl Tool for FailingTool {
-        fn name(&self) -> &str { "fail" }
-        fn declared_cost(&self) -> u64 { 5 }
+        fn name(&self) -> &str {
+            "fail"
+        }
+        fn declared_cost(&self) -> u64 {
+            5
+        }
         fn execute(&self, _args: &ToolArgs) -> Result<ToolOutput, ToolError> {
             Err(ToolError::ExecutionFailed("simulated network error".into()))
         }
@@ -1371,14 +1483,18 @@ mod tests {
             write!(
                 s,
                 "GET {path} HTTP/1.0\r\nX-Nanny-Session-Token: {token}\r\n\r\n"
-            ).unwrap();
+            )
+            .unwrap();
             let mut raw = String::new();
             s.read_to_string(&mut raw).unwrap();
             return parse_http(raw);
         }
         // TCP fallback (Windows)
         #[allow(unreachable_patterns)]
-        let BridgeAddress::Tcp(port) = addr else { unreachable!() };
+        let BridgeAddress::Tcp(port) = addr
+        else {
+            unreachable!()
+        };
         tcp_get(*port, token, path)
     }
 
@@ -1399,7 +1515,10 @@ mod tests {
         }
         // TCP fallback (Windows)
         #[allow(unreachable_patterns)]
-        let BridgeAddress::Tcp(port) = addr else { unreachable!() };
+        let BridgeAddress::Tcp(port) = addr
+        else {
+            unreachable!()
+        };
         tcp_post(*port, token, path, body)
     }
 
@@ -1419,7 +1538,8 @@ mod tests {
         write!(
             s,
             "GET {path} HTTP/1.0\r\nHost: 127.0.0.1\r\nX-Nanny-Session-Token: {token}\r\n\r\n"
-        ).unwrap();
+        )
+        .unwrap();
         let mut raw = String::new();
         s.read_to_string(&mut raw).unwrap();
         parse_http(raw)
@@ -1440,11 +1560,16 @@ mod tests {
     }
 
     fn parse_http(raw: String) -> (u16, String) {
-        let status = raw.lines().next()
+        let status = raw
+            .lines()
+            .next()
             .and_then(|l| l.split_whitespace().nth(1))
             .and_then(|s| s.parse().ok())
             .unwrap_or(0u16);
-        let body = raw.split_once("\r\n\r\n").map(|(_, b)| b.to_string()).unwrap_or_default();
+        let body = raw
+            .split_once("\r\n\r\n")
+            .map(|(_, b)| b.to_string())
+            .unwrap_or_default();
         (status, body)
     }
 
@@ -1460,7 +1585,7 @@ mod tests {
         match &b.address {
             #[cfg(unix)]
             BridgeAddress::Unix(path) => assert!(path.exists(), "socket file must exist"),
-            BridgeAddress::Tcp(port)  => assert!(*port > 0, "TCP port must be non-zero"),
+            BridgeAddress::Tcp(port) => assert!(*port > 0, "TCP port must be non-zero"),
         }
     }
 
@@ -1517,7 +1642,11 @@ mod tests {
     #[test]
     fn tool_call_returns_allowed_and_result() {
         let b = started(1000);
-        let (s, body) = post(&b, "/tool/call", r#"{"tool":"echo","args":{"message":"hi"}}"#);
+        let (s, body) = post(
+            &b,
+            "/tool/call",
+            r#"{"tool":"echo","args":{"message":"hi"}}"#,
+        );
         assert_eq!(s, 200);
         let v = json_val(&body);
         assert_eq!(v["status"], "allowed");
@@ -1527,8 +1656,16 @@ mod tests {
     #[test]
     fn tool_call_charges_cost_and_tracks_counts() {
         let b = started(1000);
-        post(&b, "/tool/call", r#"{"tool":"echo","args":{"message":"a"}}"#);
-        post(&b, "/tool/call", r#"{"tool":"echo","args":{"message":"b"}}"#);
+        post(
+            &b,
+            "/tool/call",
+            r#"{"tool":"echo","args":{"message":"a"}}"#,
+        );
+        post(
+            &b,
+            "/tool/call",
+            r#"{"tool":"echo","args":{"message":"b"}}"#,
+        );
 
         let (_, body) = get(&b, "/status");
         let v = json_val(&body);
@@ -1543,22 +1680,37 @@ mod tests {
     #[test]
     fn tool_call_is_counted_and_charged_in_metrics() {
         let b = started(1000);
-        post(&b, "/tool/call", r#"{"tool":"echo","args":{"message":"x"}}"#);
-        post(&b, "/tool/call", r#"{"tool":"echo","args":{"message":"y"}}"#);
+        post(
+            &b,
+            "/tool/call",
+            r#"{"tool":"echo","args":{"message":"x"}}"#,
+        );
+        post(
+            &b,
+            "/tool/call",
+            r#"{"tool":"echo","args":{"message":"y"}}"#,
+        );
 
         let m = b.metrics();
-        assert_eq!(m.tool_call_count, 2,  "every tool call must be recorded");
-        assert_eq!(m.tokens_spent,   20, "each tool call must charge declared token cost");
+        assert_eq!(m.tool_call_count, 2, "every tool call must be recorded");
+        assert_eq!(
+            m.tokens_spent, 20,
+            "each tool call must charge declared token cost"
+        );
     }
 
     #[test]
     fn denied_tool_returns_denied_with_tool_name() {
-        let b = Bridge::start(BridgeComponents {
-            registry: ToolRegistry::new(),
-            allowed_tools: vec![],   // empty allowlist — all tools denied
-            per_tool_max_calls: Default::default(),
-            tool_labels: Default::default(),
-        }, "test-run".to_string()).unwrap();
+        let b = Bridge::start(
+            BridgeComponents {
+                registry: ToolRegistry::new(),
+                allowed_tools: vec![], // empty allowlist — all tools denied
+                per_tool_max_calls: Default::default(),
+                tool_labels: Default::default(),
+            },
+            "test-run".to_string(),
+        )
+        .unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
 
         let (s, body) = post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);
@@ -1571,24 +1723,39 @@ mod tests {
 
     #[test]
     fn denied_tool_stops_execution() {
-        let b = Bridge::start(BridgeComponents {
-            registry: ToolRegistry::new(),
-            allowed_tools: vec![],
-            per_tool_max_calls: Default::default(),
-            tool_labels: Default::default(),
-        }, "test-run".to_string()).unwrap();
+        let b = Bridge::start(
+            BridgeComponents {
+                registry: ToolRegistry::new(),
+                allowed_tools: vec![],
+                per_tool_max_calls: Default::default(),
+                tool_labels: Default::default(),
+            },
+            "test-run".to_string(),
+        )
+        .unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
 
         post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);
-        assert!(matches!(b.execution_state(), ExecutionState::Stopped { .. }));
+        assert!(matches!(
+            b.execution_state(),
+            ExecutionState::Stopped { .. }
+        ));
     }
 
     #[test]
     fn tokens_accumulate_without_stopping_execution() {
         // Tokens are measured, never enforced: no count ends a run.
         let b = started(10); // echo costs 10
-        post(&b, "/tool/call", r#"{"tool":"echo","args":{"message":"x"}}"#);
-        post(&b, "/tool/call", r#"{"tool":"echo","args":{"message":"y"}}"#);
+        post(
+            &b,
+            "/tool/call",
+            r#"{"tool":"echo","args":{"message":"x"}}"#,
+        );
+        post(
+            &b,
+            "/tool/call",
+            r#"{"tool":"echo","args":{"message":"y"}}"#,
+        );
 
         assert!(matches!(b.execution_state(), ExecutionState::Running));
         let (_, status) = get(&b, "/status");
@@ -1631,12 +1798,16 @@ mod tests {
         registry.register(Box::new(EchoTool));
         let mut per_tool_max_calls = HashMap::new();
         per_tool_max_calls.insert("echo".to_string(), 1u32);
-        let b = Bridge::start(BridgeComponents {
-            registry,
-            allowed_tools: vec!["echo".to_string()],
-            per_tool_max_calls,
-            tool_labels: Default::default(),
-        }, "test-run".to_string()).unwrap();
+        let b = Bridge::start(
+            BridgeComponents {
+                registry,
+                allowed_tools: vec!["echo".to_string()],
+                per_tool_max_calls,
+                tool_labels: Default::default(),
+            },
+            "test-run".to_string(),
+        )
+        .unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
 
         // First call: allowed
@@ -1646,7 +1817,10 @@ mod tests {
         // Second call: denied (max_calls = 1, already called once)
         let (_, body) = post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);
         assert_eq!(json_val(&body)["status"], "denied");
-        assert!(matches!(b.execution_state(), ExecutionState::Stopped { .. }));
+        assert!(matches!(
+            b.execution_state(),
+            ExecutionState::Stopped { .. }
+        ));
     }
 
     // ── Day 3 tests ───────────────────────────────────────────────────────────
@@ -1663,12 +1837,16 @@ mod tests {
     fn rule_evaluate_denies_at_max_calls_with_provided_context() {
         let mut per_tool_max_calls = HashMap::new();
         per_tool_max_calls.insert("echo".to_string(), 2u32);
-        let b = Bridge::start(BridgeComponents {
-            registry: ToolRegistry::new(),
-            allowed_tools: vec!["echo".to_string()],
-            per_tool_max_calls,
-            tool_labels: Default::default(),
-        }, "test-run".to_string()).unwrap();
+        let b = Bridge::start(
+            BridgeComponents {
+                registry: ToolRegistry::new(),
+                allowed_tools: vec!["echo".to_string()],
+                per_tool_max_calls,
+                tool_labels: Default::default(),
+            },
+            "test-run".to_string(),
+        )
+        .unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
 
         let ctx = r#"{"tool":"echo","tool_call_counts":{"echo":2}}"#;
@@ -1684,12 +1862,16 @@ mod tests {
         per_tool_max_calls.insert("echo".to_string(), 1u32);
         let mut registry = ToolRegistry::new();
         registry.register(Box::new(EchoTool));
-        let b = Bridge::start(BridgeComponents {
-            registry,
-            allowed_tools: vec!["echo".to_string()],
-            per_tool_max_calls,
-            tool_labels: Default::default(),
-        }, "test-run".to_string()).unwrap();
+        let b = Bridge::start(
+            BridgeComponents {
+                registry,
+                allowed_tools: vec!["echo".to_string()],
+                per_tool_max_calls,
+                tool_labels: Default::default(),
+            },
+            "test-run".to_string(),
+        )
+        .unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
 
         // Make one tool call so bridge tracks 1 echo call.
@@ -1720,7 +1902,11 @@ mod tests {
             .filter(|v| v["event"] == "RulesDeclared")
             .collect();
 
-        assert_eq!(declared.len(), 1, "redeclaring the same set must not re-emit");
+        assert_eq!(
+            declared.len(),
+            1,
+            "redeclaring the same set must not re-emit"
+        );
         assert_eq!(
             declared[0]["rules"],
             serde_json::json!([{"name": "a_rule"}, {"name": "b_rule"}]),
@@ -1798,12 +1984,16 @@ mod tests {
         tool_labels.insert("quiet".to_string(), Vec::new());
         let mut registry = ToolRegistry::new();
         registry.register(Box::new(EchoTool));
-        let b = Bridge::start(BridgeComponents {
-            registry,
-            allowed_tools: vec!["echo".to_string(), "quiet".to_string()],
-            per_tool_max_calls: Default::default(),
-            tool_labels,
-        }, "test-run".to_string()).unwrap();
+        let b = Bridge::start(
+            BridgeComponents {
+                registry,
+                allowed_tools: vec!["echo".to_string(), "quiet".to_string()],
+                per_tool_max_calls: Default::default(),
+                tool_labels,
+            },
+            "test-run".to_string(),
+        )
+        .unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
 
         let (_, body) = get(&b, "/status");
@@ -1863,11 +2053,14 @@ mod tests {
 
         post(&b, "/agent/enter", r#"{"name":"a"}"#);
         post(&b, "/agent/enter", r#"{"name":"b"}"#);
-        post(&b, "/agent/exit",  "{}");
-        post(&b, "/agent/exit",  "{}");
+        post(&b, "/agent/exit", "{}");
+        post(&b, "/agent/exit", "{}");
 
         let guard = b.shared.lock().unwrap();
-        assert!(guard.agent_name_stack.is_empty(), "every scope must be popped");
+        assert!(
+            guard.agent_name_stack.is_empty(),
+            "every scope must be popped"
+        );
     }
 
     // ── Day 5 tests ───────────────────────────────────────────────────────────
@@ -1884,7 +2077,6 @@ mod tests {
         assert_eq!(v["state"], "running");
         assert_eq!(v["tool_call_history"][0], "echo");
     }
-
 
     #[test]
     fn llm_usage_debits_tokens_and_records_event() {
@@ -2086,17 +2278,31 @@ mod tests {
         let before = b.metrics();
         post(&b, "/app", r#"{"app_id":"app_abc","name":"gotm-nanny"}"#);
         let after = b.metrics();
-        assert_eq!(before.tokens_spent, after.tokens_spent, "must not charge tokens");
-        assert_eq!(before.tool_call_count, after.tool_call_count, "must not count a tool call");
+        assert_eq!(
+            before.tokens_spent, after.tokens_spent,
+            "must not charge tokens"
+        );
+        assert_eq!(
+            before.tool_call_count, after.tool_call_count,
+            "must not count a tool call"
+        );
     }
 
     #[test]
     fn llm_usage_carries_harness_and_dedups() {
         let b = started(1000);
         // Harness rides on the usage report (the "every request" path).
-        post(&b, "/llm/usage", r#"{"input":5,"output":5,"harness":{"name":"opencode"}}"#);
+        post(
+            &b,
+            "/llm/usage",
+            r#"{"input":5,"output":5,"harness":{"name":"opencode"}}"#,
+        );
         // Same harness again — must NOT emit a second HarnessIdentified.
-        post(&b, "/llm/usage", r#"{"input":5,"output":5,"harness":{"name":"opencode"}}"#);
+        post(
+            &b,
+            "/llm/usage",
+            r#"{"input":5,"output":5,"harness":{"name":"opencode"}}"#,
+        );
         let (_, events) = get(&b, "/events");
         let harness_events = events
             .lines()
@@ -2163,7 +2369,8 @@ mod tests {
         let b = started(1000);
         post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);
         let (_, body) = get(&b, "/events");
-        let events: Vec<serde_json::Value> = body.lines()
+        let events: Vec<serde_json::Value> = body
+            .lines()
             .filter_map(|l| serde_json::from_str(l).ok())
             .collect();
         assert!(events.iter().any(|v| v["event"] == "ToolAllowed"));
@@ -2175,19 +2382,24 @@ mod tests {
         // and must NOT stop execution (tool failure is an audit event, not a hard stop).
         let mut registry = ToolRegistry::new();
         registry.register(Box::new(FailingTool));
-        let b = Bridge::start(BridgeComponents {
-            registry,
-            allowed_tools: vec!["fail".to_string()],
-            per_tool_max_calls: Default::default(),
-            tool_labels: Default::default(),
-        }, "test-run".to_string()).unwrap();
+        let b = Bridge::start(
+            BridgeComponents {
+                registry,
+                allowed_tools: vec!["fail".to_string()],
+                per_tool_max_calls: Default::default(),
+                tool_labels: Default::default(),
+            },
+            "test-run".to_string(),
+        )
+        .unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
 
         let (status, _body) = post(&b, "/tool/call", r#"{"tool":"fail","args":{}}"#);
         assert_eq!(status, 500, "tool execution failure must return 500");
 
         let (_, events_body) = get(&b, "/events");
-        let events: Vec<serde_json::Value> = events_body.lines()
+        let events: Vec<serde_json::Value> = events_body
+            .lines()
             .filter_map(|l| serde_json::from_str(l).ok())
             .collect();
         assert!(
@@ -2209,10 +2421,14 @@ mod tests {
         b.stop("ManualStop");
         std::thread::sleep(std::time::Duration::from_millis(10));
         let (_, body) = get(&b, "/events");
-        let has_stopped = body.lines()
+        let has_stopped = body
+            .lines()
             .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
             .any(|v| v["event"] == "ExecutionStopped");
-        assert!(!has_stopped, "bridge must not emit ExecutionStopped — that is the CLI's job");
+        assert!(
+            !has_stopped,
+            "bridge must not emit ExecutionStopped — that is the CLI's job"
+        );
     }
 
     #[test]
@@ -2228,11 +2444,8 @@ mod tests {
         let b = started(1000);
         b.stop("ToolDenied");
         b.stop("ManualStop"); // second call is ignored
-        // Reason is from the first stop, not the second
-        assert_eq!(
-            json_val(&get(&b, "/health").1)["reason"],
-            "ToolDenied"
-        );
+                              // Reason is from the first stop, not the second
+        assert_eq!(json_val(&get(&b, "/health").1)["reason"], "ToolDenied");
     }
 
     // ── Day 7 — Security ──────────────────────────────────────────────────────
@@ -2264,7 +2477,9 @@ mod tests {
     fn socket_file_is_removed_on_drop() {
         let path = {
             let b = started(1000);
-            let BridgeAddress::Unix(ref p) = b.address else { panic!("expected Unix") };
+            let BridgeAddress::Unix(ref p) = b.address else {
+                panic!("expected Unix")
+            };
             p.clone()
         }; // bridge dropped here
         assert!(!path.exists(), "socket file must be removed on drop");
@@ -2278,11 +2493,11 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(10));
 
         for (path, body) in &[
-            ("/tool/call",     r#"{"tool":"echo","args":{}}"#),
+            ("/tool/call", r#"{"tool":"echo","args":{}}"#),
             ("/rule/evaluate", "{}"),
-            ("/agent/enter",   r#"{"name":"researcher"}"#),
-            ("/agent/exit",    "{}"),
-            ("/llm/usage",     r#"{"input":1,"output":1}"#),
+            ("/agent/enter", r#"{"name":"researcher"}"#),
+            ("/agent/exit", "{}"),
+            ("/llm/usage", r#"{"input":1,"output":1}"#),
         ] {
             let (status, _) = post(&b, path, body);
             assert_eq!(status, 410, "POST {path} must return 410 when stopped");
@@ -2295,7 +2510,11 @@ mod tests {
         let b = started(1000);
         b.stop("ToolDenied");
         for path in &["/health", "/status", "/events"] {
-            assert_eq!(get(&b, path).0, 200, "{path} must stay available after stop");
+            assert_eq!(
+                get(&b, path).0,
+                200,
+                "{path} must stay available after stop"
+            );
         }
     }
 
@@ -2320,13 +2539,19 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(10));
 
         let lines = b.drain_events();
-        assert!(!lines.is_empty(), "drain must return at least one event after a tool call");
+        assert!(
+            !lines.is_empty(),
+            "drain must return at least one event after a tool call"
+        );
 
         // Every line must be valid JSON with an "event" field.
         for line in &lines {
             let v: serde_json::Value = serde_json::from_str(line)
                 .unwrap_or_else(|_| panic!("drain_events line is not valid JSON: {line}"));
-            assert!(v.get("event").is_some(), "every drained line must have an 'event' field");
+            assert!(
+                v.get("event").is_some(),
+                "every drained line must have an 'event' field"
+            );
         }
 
         // Buffer is now empty.
@@ -2347,7 +2572,10 @@ mod tests {
                 .map(|v| v["event"] == "ToolAllowed")
                 .unwrap_or(false)
         });
-        assert!(has_tool_allowed, "drain must contain ToolAllowed after an allowed tool call");
+        assert!(
+            has_tool_allowed,
+            "drain must contain ToolAllowed after an allowed tool call"
+        );
     }
 
     // ── handle_stop — RuleDenied event emission ───────────────────────────────
@@ -2369,12 +2597,19 @@ mod tests {
         let lines = b.drain_events();
         let event = lines.iter().find_map(|l| {
             let v: serde_json::Value = serde_json::from_str(l).ok()?;
-            if v["event"] == "RuleDenied" { Some(v) } else { None }
+            if v["event"] == "RuleDenied" {
+                Some(v)
+            } else {
+                None
+            }
         });
 
         let event = event.expect("drain must contain a RuleDenied event after /stop with metadata");
-        assert_eq!(event["tool"],      "read_file",           "tool field must match");
-        assert_eq!(event["rule_name"], "no_sensitive_files",  "rule_name field must match");
+        assert_eq!(event["tool"], "read_file", "tool field must match");
+        assert_eq!(
+            event["rule_name"], "no_sensitive_files",
+            "rule_name field must match"
+        );
         assert!(event["ts"].is_number(), "ts field must be present");
     }
 
@@ -2394,14 +2629,21 @@ mod tests {
                 .map(|v| v["event"] == "RuleDenied")
                 .unwrap_or(false)
         });
-        assert!(!has_rule_denied, "no RuleDenied event must be emitted when tool/rule_name are absent");
+        assert!(
+            !has_rule_denied,
+            "no RuleDenied event must be emitted when tool/rule_name are absent"
+        );
     }
 
     /// POST /stop with RuleDenied and empty-string fields does not emit an event.
     #[test]
     fn handle_stop_rule_denied_empty_fields_emits_no_rule_denied_event() {
         let b = started(1000);
-        post(&b, "/stop", r#"{"reason":"RuleDenied","tool":"","rule_name":""}"#);
+        post(
+            &b,
+            "/stop",
+            r#"{"reason":"RuleDenied","tool":"","rule_name":""}"#,
+        );
         std::thread::sleep(std::time::Duration::from_millis(10));
 
         let lines = b.drain_events();
@@ -2410,14 +2652,21 @@ mod tests {
                 .map(|v| v["event"] == "RuleDenied")
                 .unwrap_or(false)
         });
-        assert!(!has_rule_denied, "no RuleDenied event must be emitted when tool/rule_name are empty strings");
+        assert!(
+            !has_rule_denied,
+            "no RuleDenied event must be emitted when tool/rule_name are empty strings"
+        );
     }
 
     /// POST /stop with a non-RuleDenied reason never emits a RuleDenied event.
     #[test]
     fn handle_stop_other_reason_emits_no_rule_denied_event() {
         let b = started(1000);
-        post(&b, "/stop", r#"{"reason":"AgentCompleted","tool":"read_file","rule_name":"some_rule"}"#);
+        post(
+            &b,
+            "/stop",
+            r#"{"reason":"AgentCompleted","tool":"read_file","rule_name":"some_rule"}"#,
+        );
         std::thread::sleep(std::time::Duration::from_millis(10));
 
         let lines = b.drain_events();
@@ -2426,7 +2675,10 @@ mod tests {
                 .map(|v| v["event"] == "RuleDenied")
                 .unwrap_or(false)
         });
-        assert!(!has_rule_denied, "RuleDenied event must only fire for RuleDenied reason, not AgentCompleted");
+        assert!(
+            !has_rule_denied,
+            "RuleDenied event must only fire for RuleDenied reason, not AgentCompleted"
+        );
     }
 
     // ── Run envelope ──────────────────────────────────────────────────────────
@@ -2446,12 +2698,23 @@ mod tests {
         let state = template_for_envelope().build_state("run-a");
         let mut guard = state.lock().unwrap();
         for i in 0..3 {
-            append_event(&mut guard, ExecutionEvent::ToolAllowed { ts: i, tool: "echo".into(), cleared_by: Vec::new() });
+            append_event(
+                &mut guard,
+                ExecutionEvent::ToolAllowed {
+                    ts: i,
+                    tool: "echo".into(),
+                    cleared_by: Vec::new(),
+                },
+            );
         }
         let seqs: Vec<u64> = guard
             .events
             .iter()
-            .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap()["seq"].as_u64().unwrap())
+            .map(|l| {
+                serde_json::from_str::<serde_json::Value>(l).unwrap()["seq"]
+                    .as_u64()
+                    .unwrap()
+            })
             .collect();
         assert_eq!(seqs, vec![0, 1, 2]);
     }
@@ -2467,12 +2730,33 @@ mod tests {
 
         {
             let mut ga = a.lock().unwrap();
-            append_event(&mut ga, ExecutionEvent::ToolAllowed { ts: 1, tool: "echo".into(), cleared_by: Vec::new() });
-            append_event(&mut ga, ExecutionEvent::ToolAllowed { ts: 2, tool: "echo".into(), cleared_by: Vec::new() });
+            append_event(
+                &mut ga,
+                ExecutionEvent::ToolAllowed {
+                    ts: 1,
+                    tool: "echo".into(),
+                    cleared_by: Vec::new(),
+                },
+            );
+            append_event(
+                &mut ga,
+                ExecutionEvent::ToolAllowed {
+                    ts: 2,
+                    tool: "echo".into(),
+                    cleared_by: Vec::new(),
+                },
+            );
         }
         {
             let mut gb = b.lock().unwrap();
-            append_event(&mut gb, ExecutionEvent::ToolAllowed { ts: 3, tool: "echo".into(), cleared_by: Vec::new() });
+            append_event(
+                &mut gb,
+                ExecutionEvent::ToolAllowed {
+                    ts: 3,
+                    tool: "echo".into(),
+                    cleared_by: Vec::new(),
+                },
+            );
         }
 
         let read = |st: &Arc<Mutex<BridgeState>>| -> Vec<(String, u64)> {
@@ -2482,7 +2766,10 @@ mod tests {
                 .iter()
                 .map(|l| {
                     let v: serde_json::Value = serde_json::from_str(l).unwrap();
-                    (v["run_id"].as_str().unwrap().to_string(), v["seq"].as_u64().unwrap())
+                    (
+                        v["run_id"].as_str().unwrap().to_string(),
+                        v["seq"].as_u64().unwrap(),
+                    )
                 })
                 .collect()
         };
@@ -2516,7 +2803,6 @@ mod tests {
             .find(|v| v["event"] == name)
             .unwrap_or_else(|| panic!("no {name} event in the stream"))
     }
-
 
     /// A call the SDK cleared through two rules records both, in order.
     #[test]
@@ -2566,7 +2852,11 @@ mod tests {
     #[test]
     fn a_call_no_rule_governed_records_nothing() {
         let b = started(1000);
-        post(&b, "/tool/call", r#"{"tool":"echo","args":{"message":"hi"}}"#);
+        post(
+            &b,
+            "/tool/call",
+            r#"{"tool":"echo","args":{"message":"hi"}}"#,
+        );
 
         let allowed = one_event(&b, "ToolAllowed");
         assert!(
@@ -2580,7 +2870,11 @@ mod tests {
     #[test]
     fn the_engine_records_its_own_rule_as_cleared() {
         let b = started_with_max_calls("echo", 5);
-        post(&b, "/tool/call", r#"{"tool":"echo","args":{"message":"hi"},"cleared_by":["sdk_rule"]}"#);
+        post(
+            &b,
+            "/tool/call",
+            r#"{"tool":"echo","args":{"message":"hi"},"cleared_by":["sdk_rule"]}"#,
+        );
 
         let allowed = one_event(&b, "ToolAllowed");
         assert_eq!(
@@ -2589,5 +2883,4 @@ mod tests {
             "the engine's control must not be the one control with no evidence"
         );
     }
-
 }

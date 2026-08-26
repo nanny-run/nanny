@@ -46,10 +46,10 @@ use uuid::Uuid;
 use nanny_runtime::ToolRegistry;
 
 use super::{
-    BridgeComponents, BridgeResp, BridgeState, ContentType,
-    handle_agent_enter, handle_agent_exit, handle_app, handle_events, handle_harness, handle_health,
-    handle_llm_usage, handle_rule_evaluate, handle_status, handle_stop,
-    handle_tool_call, init_run_template, stopped_reason, take_run_events, RunTemplate,
+    handle_agent_enter, handle_agent_exit, handle_app, handle_events, handle_harness,
+    handle_health, handle_llm_usage, handle_rule_evaluate, handle_status, handle_stop,
+    handle_tool_call, init_run_template, stopped_reason, take_run_events, BridgeComponents,
+    BridgeResp, BridgeState, ContentType, RunTemplate,
 };
 use std::sync::mpsc::Sender;
 
@@ -193,12 +193,15 @@ fn write_secret_file(path: &Path, contents: &str) -> Result<()> {
 #[derive(Clone)]
 struct RateLimiter {
     inner: Arc<Mutex<std::collections::HashMap<IpAddr, (u32, Instant)>>>,
-    rps:   u32,
+    rps: u32,
 }
 
 impl RateLimiter {
     fn new(rps: u32) -> Self {
-        Self { inner: Arc::new(Mutex::new(std::collections::HashMap::new())), rps }
+        Self {
+            inner: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            rps,
+        }
     }
 
     /// Returns `true` if the request is within the rate limit.
@@ -297,7 +300,10 @@ impl AppState {
 
 /// Checks the `X-Nanny-Session-Token` header; guards every ordinary request.
 fn session_token_ok(headers: &HeaderMap, expected: &str) -> bool {
-    match headers.get("x-nanny-session-token").and_then(|v| v.to_str().ok()) {
+    match headers
+        .get("x-nanny-session-token")
+        .and_then(|v| v.to_str().ok())
+    {
         Some(got) => secure_compare(got, expected),
         None => false,
     }
@@ -311,11 +317,10 @@ fn rate_limit_ok(app: &AppState, peer: SocketAddr) -> bool {
 
 fn to_response(resp: BridgeResp) -> Response {
     let ct = match resp.content_type {
-        ContentType::Json   => "application/json",
+        ContentType::Json => "application/json",
         ContentType::Ndjson => "application/x-ndjson",
     };
-    let status = StatusCode::from_u16(resp.status)
-        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let status = StatusCode::from_u16(resp.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     (status, [(axum::http::header::CONTENT_TYPE, ct)], resp.body).into_response()
 }
 
@@ -357,7 +362,11 @@ async fn route_tool_call(State(app): State<AppState>, headers: HeaderMap, body: 
     to_response(handle_tool_call(&body, &shared, &app.registry))
 }
 
-async fn route_rule_evaluate(State(app): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+async fn route_rule_evaluate(
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
     let shared = app.run_state(&headers);
     if let Some(reason) = stopped_reason(&shared) {
         return stopped_gone(&reason);
@@ -365,7 +374,11 @@ async fn route_rule_evaluate(State(app): State<AppState>, headers: HeaderMap, bo
     to_response(handle_rule_evaluate(&body, &shared))
 }
 
-async fn route_agent_enter(State(app): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+async fn route_agent_enter(
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
     let shared = app.run_state(&headers);
     if let Some(reason) = stopped_reason(&shared) {
         return stopped_gone(&reason);
@@ -479,7 +492,9 @@ impl TowerService<hyper::Request<Incoming>> for GovernorService {
             }
 
             if !session_token_ok(req.headers(), &app.session_token) {
-                return Ok((StatusCode::UNAUTHORIZED, r#"{"error":"Unauthorized"}"#).into_response());
+                return Ok(
+                    (StatusCode::UNAUTHORIZED, r#"{"error":"Unauthorized"}"#).into_response()
+                );
             }
             let mut req = req.map(axum::body::Body::new);
             req.extensions_mut().insert(ConnectInfo(peer));
@@ -500,19 +515,19 @@ impl TowerService<hyper::Request<Incoming>> for GovernorService {
 fn build_router(app: AppState) -> Router {
     Router::new()
         // Read-only — always available
-        .route("/health",        get(route_health))
-        .route("/status",        get(route_status))
-        .route("/events",        get(route_events))
+        .route("/health", get(route_health))
+        .route("/status", get(route_status))
+        .route("/events", get(route_events))
         // /stop — always accepted (idempotent)
-        .route("/stop",          post(route_stop))
+        .route("/stop", post(route_stop))
         // Action endpoints — return 410 when stopped
-        .route("/tool/call",     post(route_tool_call))
+        .route("/tool/call", post(route_tool_call))
         .route("/rule/evaluate", post(route_rule_evaluate))
-        .route("/agent/enter",   post(route_agent_enter))
-        .route("/agent/exit",    post(route_agent_exit))
-        .route("/llm/usage",     post(route_llm_usage))
-        .route("/harness",       post(route_harness))
-        .route("/app",           post(route_app))
+        .route("/agent/enter", post(route_agent_enter))
+        .route("/agent/exit", post(route_agent_exit))
+        .route("/llm/usage", post(route_llm_usage))
+        .route("/harness", post(route_harness))
+        .route("/app", post(route_app))
         // Fallback for genuinely unmatched requests. CONNECT never reaches this;
         // GovernorService (see above) intercepts it before the router at all.
         .fallback(route_not_found)
@@ -539,7 +554,9 @@ fn build_tls_config(
 
     let mut root_store = RootCertStore::empty();
     for cert in ca_certs {
-        root_store.add(cert).context("failed to add CA cert to root store")?;
+        root_store
+            .add(cert)
+            .context("failed to add CA cert to root store")?;
     }
 
     // Require client certificate signed by our CA.
@@ -574,8 +591,8 @@ async fn graceful_shutdown_signal() {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{signal, SignalKind};
-        let mut sigterm = signal(SignalKind::terminate())
-            .expect("failed to install SIGTERM handler");
+        let mut sigterm =
+            signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
         sigterm.recv().await;
     }
     #[cfg(not(unix))]
@@ -616,8 +633,16 @@ impl NetworkServer {
         state_dir: PathBuf,
     ) -> Result<()> {
         Self::start_blocking_synced(
-            addr, cert_path, key_path, ca_path, components, session_token,
-            rate_limit_rps, None, state_dir, None,
+            addr,
+            cert_path,
+            key_path,
+            ca_path,
+            components,
+            session_token,
+            rate_limit_rps,
+            None,
+            state_dir,
+            None,
         )
     }
 
@@ -643,9 +668,9 @@ impl NetworkServer {
         ca_path: PathBuf,
         components: BridgeComponents,
         session_token: Option<String>,
-        rate_limit_rps: u32,  // max req/s per client IP — DoS protection, default 100
+        rate_limit_rps: u32, // max req/s per client IP — DoS protection, default 100
         event_sink: Option<Sender<(String, Vec<String>)>>,
-        state_dir: PathBuf,   // ~/.nanny/servers/<app_id>/, keyed, per-app, never shared
+        state_dir: PathBuf, // ~/.nanny/servers/<app_id>/, keyed, per-app, never shared
         local_log_path: Option<PathBuf>,
     ) -> Result<()> {
         // Install ring crypto provider — safe to call multiple times.
@@ -667,9 +692,10 @@ impl NetworkServer {
         // action endpoint is hit. Distinct run ids are minted lazily on demand.
         let runs: Arc<Mutex<HashMap<String, Arc<Mutex<BridgeState>>>>> =
             Arc::new(Mutex::new(HashMap::new()));
-        runs.lock()
-            .unwrap()
-            .insert(DEFAULT_RUN_ID.to_string(), template.build_state(DEFAULT_RUN_ID));
+        runs.lock().unwrap().insert(
+            DEFAULT_RUN_ID.to_string(),
+            template.build_state(DEFAULT_RUN_ID),
+        );
 
         // Draining hook: when either a cloud sink or a local log path is
         // attached, a background thread drains each run's events. Draining is
@@ -685,10 +711,17 @@ impl NetworkServer {
         if event_sink.is_some() || local_log_path.is_some() {
             let drain_runs = Arc::clone(&runs);
             let mut local_log_file = match &local_log_path {
-                Some(path) => match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                Some(path) => match std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                {
                     Ok(f) => Some(f),
                     Err(e) => {
-                        eprintln!("nanny: failed to open local log file '{}': {e}", path.display());
+                        eprintln!(
+                            "nanny: failed to open local log file '{}': {e}",
+                            path.display()
+                        );
                         None
                     }
                 },
@@ -773,7 +806,9 @@ impl NetworkServer {
             println!("Cross-machine agents — set these in your deployment config:");
             println!("  NANNY_BRIDGE_ADDR={addr}");
             println!("  NANNY_SESSION_TOKEN=$(cat {})", token_file.display());
-            println!("  NANNY_BRIDGE_CERT, NANNY_BRIDGE_KEY, NANNY_BRIDGE_CA  (from ~/.nanny/certs/)");
+            println!(
+                "  NANNY_BRIDGE_CERT, NANNY_BRIDGE_KEY, NANNY_BRIDGE_CA  (from ~/.nanny/certs/)"
+            );
         }
         println!();
         println!("Press CTRL-C to stop.");
@@ -837,14 +872,17 @@ impl NetworkServer {
                     let (tx, rx) = std::sync::mpsc::channel();
                     match RecommendedWatcher::new(tx, notify::Config::default()) {
                         Ok(mut watcher) => {
-                            if watcher.watch(&cert_dir, RecursiveMode::NonRecursive).is_ok() {
+                            if watcher
+                                .watch(&cert_dir, RecursiveMode::NonRecursive)
+                                .is_ok()
+                            {
                                 // Leak the watcher — it must stay alive for the
                                 // lifetime of the process to keep delivering events.
                                 std::mem::forget(watcher);
 
-                                let rc  = rustls_config.clone();
-                                let cp  = cert_path.clone();
-                                let kp  = key_path.clone();
+                                let rc = rustls_config.clone();
+                                let cp = cert_path.clone();
+                                let kp = key_path.clone();
                                 let cap = ca_path.clone();
 
                                 std::thread::spawn(move || {
@@ -854,14 +892,14 @@ impl NetworkServer {
                                         while rx.try_recv().is_ok() {}
                                         // Brief settle delay so all files are flushed
                                         // to disk before we re-read them.
-                                        std::thread::sleep(
-                                            std::time::Duration::from_millis(150),
-                                        );
+                                        std::thread::sleep(std::time::Duration::from_millis(150));
 
                                         match build_tls_config(&cp, &kp, &cap) {
                                             Ok(new_cfg) => {
                                                 rc.reload_from_config(Arc::new(new_cfg));
-                                                eprintln!("nanny: governance server certs hot-reloaded");
+                                                eprintln!(
+                                                    "nanny: governance server certs hot-reloaded"
+                                                );
                                             }
                                             Err(e) => {
                                                 eprintln!(
@@ -909,7 +947,7 @@ fn gen_certs_for_test(dir: &Path) {
     use time::OffsetDateTime;
 
     let not_before = OffsetDateTime::now_utc();
-    let not_after  = not_before + time::Duration::days(30);
+    let not_after = not_before + time::Duration::days(30);
 
     // CA
     let mut ca_dn = DistinguishedName::new();
@@ -925,7 +963,8 @@ fn gen_certs_for_test(dir: &Path) {
     // Server cert
     let mut srv_dn = DistinguishedName::new();
     srv_dn.push(DnType::CommonName, "Test Server");
-    let mut srv_params = CertificateParams::new(vec!["localhost".to_string(), "127.0.0.1".to_string()]).unwrap();
+    let mut srv_params =
+        CertificateParams::new(vec!["localhost".to_string(), "127.0.0.1".to_string()]).unwrap();
     srv_params.distinguished_name = srv_dn;
     srv_params.not_before = not_before;
     srv_params.not_after = not_after;
@@ -942,8 +981,8 @@ fn gen_certs_for_test(dir: &Path) {
     let cli_key = KeyPair::generate().unwrap();
     let cli_cert = cli_params.signed_by(&cli_key, &ca_cert, &ca_key).unwrap();
 
-    std::fs::write(dir.join("ca.crt"),     ca_cert.pem()).unwrap();
-    std::fs::write(dir.join("ca.key"),     ca_key.serialize_pem()).unwrap();
+    std::fs::write(dir.join("ca.crt"), ca_cert.pem()).unwrap();
+    std::fs::write(dir.join("ca.key"), ca_key.serialize_pem()).unwrap();
     std::fs::write(dir.join("server.crt"), srv_cert.pem()).unwrap();
     std::fs::write(dir.join("server.key"), srv_key.serialize_pem()).unwrap();
     std::fs::write(dir.join("client.crt"), cli_cert.pem()).unwrap();
@@ -988,22 +1027,7 @@ mod tests {
 
     // host_is_allowed ─────────────────────────────────────────────────────────
 
-
-
-
-
-
-
-
     // is_blocked_host ─────────────────────────────────────────────────────────
-
-
-
-
-
-
-
-
 
     // ── Test fixtures ─────────────────────────────────────────────────────────
 
@@ -1044,8 +1068,8 @@ mod tests {
         use std::sync::atomic::AtomicU64;
         static CNT: AtomicU64 = AtomicU64::new(0);
         let id = CNT.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir()
-            .join(format!("nanny-net-test-{}-{}", std::process::id(), id));
+        let dir =
+            std::env::temp_dir().join(format!("nanny-net-test-{}-{}", std::process::id(), id));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -1057,7 +1081,11 @@ mod tests {
         use std::sync::atomic::AtomicU64;
         static CNT: AtomicU64 = AtomicU64::new(0);
         let id = CNT.fetch_add(1, Ordering::SeqCst);
-        std::env::temp_dir().join(format!("nanny-net-test-state-{}-{}", std::process::id(), id))
+        std::env::temp_dir().join(format!(
+            "nanny-net-test-state-{}-{}",
+            std::process::id(),
+            id
+        ))
     }
 
     // ── Tests ─────────────────────────────────────────────────────────────────
@@ -1078,55 +1106,75 @@ mod tests {
         let addr_str = format!("127.0.0.1:{port}");
 
         // ── Build server TLS config (pure rustls, ring explicit) ──────────────
-        let ca_pem    = std::fs::read(dir.join("ca.crt")).unwrap();
-        let srv_pem   = std::fs::read(dir.join("server.crt")).unwrap();
-        let srv_key   = std::fs::read(dir.join("server.key")).unwrap();
-        let cli_pem   = std::fs::read(dir.join("client.crt")).unwrap();
-        let cli_key   = std::fs::read(dir.join("client.key")).unwrap();
+        let ca_pem = std::fs::read(dir.join("ca.crt")).unwrap();
+        let srv_pem = std::fs::read(dir.join("server.crt")).unwrap();
+        let srv_key = std::fs::read(dir.join("server.key")).unwrap();
+        let cli_pem = std::fs::read(dir.join("client.crt")).unwrap();
+        let cli_key = std::fs::read(dir.join("client.key")).unwrap();
 
         let provider = Arc::new(rustls::crypto::ring::default_provider());
 
         // Build server config
-        let ca_der: Vec<CertificateDer<'static>> =
-            rustls_pemfile::certs(&mut ca_pem.as_ref()).collect::<Result<Vec<_>, _>>().unwrap();
+        let ca_der: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut ca_pem.as_ref())
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
         let mut srv_root = rustls::RootCertStore::empty();
-        for c in ca_der.clone() { srv_root.add(c).unwrap(); }
+        for c in ca_der.clone() {
+            srv_root.add(c).unwrap();
+        }
 
         let srv_verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
-            Arc::new(srv_root), provider.clone()
-        ).build().unwrap();
+            Arc::new(srv_root),
+            provider.clone(),
+        )
+        .build()
+        .unwrap();
 
-        let srv_certs: Vec<CertificateDer<'static>> =
-            rustls_pemfile::certs(&mut srv_pem.as_ref()).collect::<Result<Vec<_>, _>>().unwrap();
+        let srv_certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut srv_pem.as_ref())
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
         let srv_private: PrivateKeyDer<'static> =
-            rustls_pemfile::private_key(&mut srv_key.as_ref()).unwrap().unwrap();
+            rustls_pemfile::private_key(&mut srv_key.as_ref())
+                .unwrap()
+                .unwrap();
 
         let mut server_config = rustls::ServerConfig::builder_with_provider(provider.clone())
-            .with_safe_default_protocol_versions().unwrap()
+            .with_safe_default_protocol_versions()
+            .unwrap()
             .with_client_cert_verifier(srv_verifier)
-            .with_single_cert(srv_certs, srv_private).unwrap();
+            .with_single_cert(srv_certs, srv_private)
+            .unwrap();
         server_config.alpn_protocols = vec![b"http/1.1".to_vec()];
 
         // ── Build client TLS config ────────────────────────────────────────────
         let mut cli_root = rustls::RootCertStore::empty();
-        for c in ca_der { cli_root.add(c).unwrap(); }
+        for c in ca_der {
+            cli_root.add(c).unwrap();
+        }
 
-        let cli_certs: Vec<CertificateDer<'static>> =
-            rustls_pemfile::certs(&mut cli_pem.as_ref()).collect::<Result<Vec<_>, _>>().unwrap();
+        let cli_certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cli_pem.as_ref())
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
         let cli_private: PrivateKeyDer<'static> =
-            rustls_pemfile::private_key(&mut cli_key.as_ref()).unwrap().unwrap();
+            rustls_pemfile::private_key(&mut cli_key.as_ref())
+                .unwrap()
+                .unwrap();
 
         let client_config = rustls::ClientConfig::builder_with_provider(provider)
-            .with_safe_default_protocol_versions().unwrap()
+            .with_safe_default_protocol_versions()
+            .unwrap()
             .with_root_certificates(cli_root)
-            .with_client_auth_cert(cli_certs, cli_private).unwrap();
+            .with_client_auth_cert(cli_certs, cli_private)
+            .unwrap();
 
         // ── Start a simple TCP+TLS echo server in background ──────────────────
         let srv_cfg = Arc::new(server_config);
         let addr_clone = addr_str.clone();
         std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all().build().unwrap();
+                .enable_all()
+                .build()
+                .unwrap();
             rt.block_on(async move {
                 use tokio::net::TcpListener;
                 let listener = TcpListener::bind(&addr_clone).await.unwrap();
@@ -1148,7 +1196,10 @@ mod tests {
 
         // Write something to trigger the handshake
         let result = stream.write_all(b"GET / HTTP/1.1\r\n\r\n");
-        assert!(result.is_ok(), "raw tokio-rustls mTLS handshake must succeed: {result:?}");
+        assert!(
+            result.is_ok(),
+            "raw tokio-rustls mTLS handshake must succeed: {result:?}"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1162,23 +1213,28 @@ mod tests {
         let dir = test_certs_dir();
         gen_certs_for_test(&dir);
 
-        let ca_pem  = std::fs::read(dir.join("ca.crt")).unwrap();
+        let ca_pem = std::fs::read(dir.join("ca.crt")).unwrap();
         let srv_pem = std::fs::read(dir.join("server.crt")).unwrap();
         let key_pem = std::fs::read(dir.join("server.key")).unwrap();
 
         use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-        let ca_der: Vec<CertificateDer<'static>> =
-            rustls_pemfile::certs(&mut ca_pem.as_ref()).collect::<Result<Vec<_>, _>>().unwrap();
-        let srv_der: Vec<CertificateDer<'static>> =
-            rustls_pemfile::certs(&mut srv_pem.as_ref()).collect::<Result<Vec<_>, _>>().unwrap();
-        let key: PrivateKeyDer<'static> =
-            rustls_pemfile::private_key(&mut key_pem.as_ref()).unwrap().unwrap();
+        let ca_der: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut ca_pem.as_ref())
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let srv_der: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut srv_pem.as_ref())
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let key: PrivateKeyDer<'static> = rustls_pemfile::private_key(&mut key_pem.as_ref())
+            .unwrap()
+            .unwrap();
 
         assert!(!ca_der.is_empty(), "CA cert must parse");
         assert!(!srv_der.is_empty(), "server cert must parse");
 
         let mut root_store = rustls::RootCertStore::empty();
-        for cert in ca_der { root_store.add(cert).unwrap(); }
+        for cert in ca_der {
+            root_store.add(cert).unwrap();
+        }
 
         // Build a ServerConfig — proves cert+key are a valid pair.
         let server_cfg = rustls::ServerConfig::builder()
@@ -1195,29 +1251,35 @@ mod tests {
         // We do this by doing a TLS handshake in memory using rustls directly.
         use rustls::pki_types::ServerName;
         let server_name = ServerName::try_from("localhost").unwrap().to_owned();
-        let mut client_conn = rustls::ClientConnection::new(
-            Arc::new(client_cfg), server_name
-        ).unwrap();
+        let mut client_conn =
+            rustls::ClientConnection::new(Arc::new(client_cfg), server_name).unwrap();
         let mut server_conn = rustls::ServerConnection::new(Arc::new(server_cfg)).unwrap();
 
         // Run the handshake in memory.
         let mut handshake_done = false;
         for _ in 0..20 {
-            if !client_conn.wants_write() && !server_conn.wants_write()
-                && !client_conn.is_handshaking() && !server_conn.is_handshaking() {
+            if !client_conn.wants_write()
+                && !server_conn.wants_write()
+                && !client_conn.is_handshaking()
+                && !server_conn.is_handshaking()
+            {
                 handshake_done = true;
                 break;
             }
             let mut buf = Vec::new();
             if client_conn.wants_write() {
                 client_conn.write_tls(&mut buf).unwrap();
-                server_conn.read_tls(&mut std::io::Cursor::new(&buf)).unwrap();
+                server_conn
+                    .read_tls(&mut std::io::Cursor::new(&buf))
+                    .unwrap();
                 server_conn.process_new_packets().unwrap();
             }
             let mut buf = Vec::new();
             if server_conn.wants_write() {
                 server_conn.write_tls(&mut buf).unwrap();
-                client_conn.read_tls(&mut std::io::Cursor::new(&buf)).unwrap();
+                client_conn
+                    .read_tls(&mut std::io::Cursor::new(&buf))
+                    .unwrap();
                 client_conn.process_new_packets().unwrap();
             }
         }
@@ -1245,8 +1307,17 @@ mod tests {
         let ca2 = ca.clone();
         let token2 = token.clone();
         std::thread::spawn(move || {
-            NetworkServer::start_blocking(addr, cert2, key2, ca2, test_components(), Some(token2), 100, test_state_dir())
-                .ok();
+            NetworkServer::start_blocking(
+                addr,
+                cert2,
+                key2,
+                ca2,
+                test_components(),
+                Some(token2),
+                100,
+                test_state_dir(),
+            )
+            .ok();
         });
 
         // Wait for the server to bind (poll instead of fixed sleep).
@@ -1262,7 +1333,7 @@ mod tests {
         let client = reqwest::blocking::Client::builder()
             .add_root_certificate(ca_cert)
             .identity(identity)
-            .use_rustls_tls()                      // Identity::from_pem = rustls identity
+            .use_rustls_tls() // Identity::from_pem = rustls identity
             .danger_accept_invalid_hostnames(true) // test certs use "localhost"
             .timeout(std::time::Duration::from_secs(5))
             .build()
@@ -1301,7 +1372,17 @@ mod tests {
         let ca2 = ca.clone();
         let tok2 = token.clone();
         std::thread::spawn(move || {
-            NetworkServer::start_blocking(addr, cert2, key2, ca2, test_components(), Some(tok2), 100, test_state_dir()).ok();
+            NetworkServer::start_blocking(
+                addr,
+                cert2,
+                key2,
+                ca2,
+                test_components(),
+                Some(tok2),
+                100,
+                test_state_dir(),
+            )
+            .ok();
         });
         wait_for_port(port);
 
@@ -1330,8 +1411,6 @@ mod tests {
 
         std::fs::remove_dir_all(&dir).ok();
     }
-
-
 
     /// Poll TCP connect until the port is accepting connections (up to 10 s).
     /// Replaces fixed sleep(350ms): under heavy parallel test load, the fixed
@@ -1389,8 +1468,15 @@ mod tests {
             .expect("a busy default must fall forward, not fail");
         let got = listener.local_addr().unwrap();
 
-        assert_ne!(got.port(), DEFAULT_GOVERNOR_PORT, "must not claim the held port");
-        assert!(got.port() > DEFAULT_GOVERNOR_PORT, "must step forward, not backward");
+        assert_ne!(
+            got.port(),
+            DEFAULT_GOVERNOR_PORT,
+            "must not claim the held port"
+        );
+        assert!(
+            got.port() > DEFAULT_GOVERNOR_PORT,
+            "must step forward, not backward"
+        );
         drop(held);
     }
 
@@ -1414,14 +1500,22 @@ mod tests {
         let port = next_port();
         let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
         let listener = bind_with_fallforward(addr).expect("a free port must bind");
-        assert_eq!(listener.local_addr().unwrap(), addr, "no drift when the port is free");
+        assert_eq!(
+            listener.local_addr().unwrap(),
+            addr,
+            "no drift when the port is free"
+        );
     }
 
     #[test]
     fn port_zero_lets_the_kernel_choose() {
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let listener = bind_with_fallforward(addr).expect("port 0 must bind");
-        assert_ne!(listener.local_addr().unwrap().port(), 0, "kernel must assign a real port");
+        assert_ne!(
+            listener.local_addr().unwrap().port(),
+            0,
+            "kernel must assign a real port"
+        );
     }
 
     #[test]
@@ -1439,17 +1533,6 @@ mod tests {
             Ok(_) => panic!("nothing should have connected to a just-bound test port"),
         }
     }
-
-
-
-
-
-
-
-
-
-
-
 
     #[test]
     fn no_client_cert_is_rejected_at_tls() {
@@ -1469,7 +1552,17 @@ mod tests {
         let ca2 = ca.clone();
         let tok2 = token.clone();
         std::thread::spawn(move || {
-            NetworkServer::start_blocking(addr, cert2, key2, ca2, test_components(), Some(tok2), 100, test_state_dir()).ok();
+            NetworkServer::start_blocking(
+                addr,
+                cert2,
+                key2,
+                ca2,
+                test_components(),
+                Some(tok2),
+                100,
+                test_state_dir(),
+            )
+            .ok();
         });
         wait_for_port(port);
 
@@ -1492,7 +1585,10 @@ mod tests {
             .send();
 
         // Must fail — server requires client cert
-        assert!(result.is_err(), "connection without client cert must be rejected");
+        assert!(
+            result.is_err(),
+            "connection without client cert must be rejected"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1502,10 +1598,10 @@ mod tests {
     /// Build a blocking mTLS reqwest client that trusts the test CA and
     /// presents the test client cert.
     fn make_mtls_client(dir: &Path, _port: u16) -> reqwest::blocking::Client {
-        let ca_pem   = std::fs::read(dir.join("ca.crt")).unwrap();
-        let ca_cert  = reqwest::Certificate::from_pem(&ca_pem).unwrap();
+        let ca_pem = std::fs::read(dir.join("ca.crt")).unwrap();
+        let ca_cert = reqwest::Certificate::from_pem(&ca_pem).unwrap();
         let cert_pem = std::fs::read(dir.join("client.crt")).unwrap();
-        let key_pem  = std::fs::read(dir.join("client.key")).unwrap();
+        let key_pem = std::fs::read(dir.join("client.key")).unwrap();
         let identity = reqwest::Identity::from_pem(&[cert_pem, key_pem].concat()).unwrap();
         reqwest::blocking::Client::builder()
             .add_root_certificate(ca_cert)
@@ -1528,12 +1624,12 @@ mod tests {
     ) -> axum_server::Handle<SocketAddr> {
         let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
         let cert = dir.join("server.crt");
-        let key  = dir.join("server.key");
-        let ca   = dir.join("ca.crt");
+        let key = dir.join("server.key");
+        let ca = dir.join("ca.crt");
 
-        let handle      = axum_server::Handle::new();
+        let handle = axum_server::Handle::new();
         let handle_inner = handle.clone();
-        let tok         = token.clone();
+        let tok = token.clone();
 
         std::thread::spawn(move || {
             let _ = rustls::crypto::ring::default_provider().install_default();
@@ -1542,9 +1638,10 @@ mod tests {
             let template = Arc::new(template);
             let runs: Arc<Mutex<HashMap<String, Arc<Mutex<BridgeState>>>>> =
                 Arc::new(Mutex::new(HashMap::new()));
-            runs.lock()
-                .unwrap()
-                .insert(DEFAULT_RUN_ID.to_string(), template.build_state(DEFAULT_RUN_ID));
+            runs.lock().unwrap().insert(
+                DEFAULT_RUN_ID.to_string(),
+                template.build_state(DEFAULT_RUN_ID),
+            );
             let app = AppState {
                 runs,
                 template,
@@ -1557,9 +1654,7 @@ mod tests {
                 .build()
                 .unwrap();
             let _ = rt.block_on(async move {
-                let rc = axum_server::tls_rustls::RustlsConfig::from_config(
-                    Arc::new(tls_config),
-                );
+                let rc = axum_server::tls_rustls::RustlsConfig::from_config(Arc::new(tls_config));
                 // Route through GovernorMakeService, not the router directly;
                 // rate limiting and auth are enforced there now, not as router
                 // layers (see GovernorService's doc comment). Using the router
@@ -1579,8 +1674,8 @@ mod tests {
     /// tokens are measured, never enforced.
     fn test_components_with_cost(_max_tokens: u64) -> BridgeComponents {
         BridgeComponents {
-            registry:          ToolRegistry::new(),
-            allowed_tools:     vec!["http_get".to_string()],
+            registry: ToolRegistry::new(),
+            allowed_tools: vec!["http_get".to_string()],
             per_tool_max_calls: HashMap::new(),
             tool_labels: Default::default(),
         }
@@ -1589,8 +1684,8 @@ mod tests {
     /// BridgeComponents for the agent enter/exit tests.
     fn test_components_with_named_limit() -> BridgeComponents {
         BridgeComponents {
-            registry:          ToolRegistry::new(),
-            allowed_tools:     vec!["http_get".to_string()],
+            registry: ToolRegistry::new(),
+            allowed_tools: vec!["http_get".to_string()],
             per_tool_max_calls: HashMap::new(),
             tool_labels: Default::default(),
         }
@@ -1604,13 +1699,13 @@ mod tests {
         // at least one 429 Too Many Requests.
         let dir = test_certs_dir();
         gen_certs_for_test(&dir);
-        let port  = next_port();
+        let port = next_port();
         let token = format!("rl-{port}");
 
         let _h = start_server_with_handle(test_components(), port, token.clone(), &dir, 5);
 
         let client = make_mtls_client(&dir, port);
-        let base   = format!("https://127.0.0.1:{port}");
+        let base = format!("https://127.0.0.1:{port}");
 
         let mut saw_429 = false;
         for _ in 0..7 {
@@ -1624,7 +1719,10 @@ mod tests {
                 break;
             }
         }
-        assert!(saw_429, "rate limiter must fire within 7 rapid requests (limit 5 req/s)");
+        assert!(
+            saw_429,
+            "rate limiter must fire within 7 rapid requests (limit 5 req/s)"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1635,13 +1733,13 @@ mod tests {
         // drain) → wait for drain to finish → confirm new connections are refused.
         let dir = test_certs_dir();
         gen_certs_for_test(&dir);
-        let port  = next_port();
+        let port = next_port();
         let token = format!("drain-{port}");
 
         let handle = start_server_with_handle(test_components(), port, token.clone(), &dir, 100);
 
         let client = make_mtls_client(&dir, port);
-        let base   = format!("https://127.0.0.1:{port}");
+        let base = format!("https://127.0.0.1:{port}");
 
         // Server must respond normally before drain.
         let pre = client
@@ -1662,7 +1760,10 @@ mod tests {
             .get(format!("{base}/health"))
             .header("X-Nanny-Session-Token", &token)
             .send();
-        assert!(post.is_err(), "server must refuse connections after graceful shutdown");
+        assert!(
+            post.is_err(),
+            "server must refuse connections after graceful shutdown"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1672,13 +1773,13 @@ mod tests {
         // POST /stop → subsequent action endpoints must return 410 Gone.
         let dir = test_certs_dir();
         gen_certs_for_test(&dir);
-        let port  = next_port();
+        let port = next_port();
         let token = format!("stop410-{port}");
 
         let _h = start_server_with_handle(test_components(), port, token.clone(), &dir, 100);
 
         let client = make_mtls_client(&dir, port);
-        let base   = format!("https://127.0.0.1:{port}");
+        let base = format!("https://127.0.0.1:{port}");
 
         // Stop the execution.
         let stop = client
@@ -1698,7 +1799,8 @@ mod tests {
                 .send()
                 .expect("post-stop request must complete");
             assert_eq!(
-                resp.status(), 410,
+                resp.status(),
+                410,
                 "{path} must return 410 after execution stopped"
             );
         }
@@ -1712,13 +1814,13 @@ mod tests {
     fn stopping_one_run_does_not_affect_other_runs() {
         let dir = test_certs_dir();
         gen_certs_for_test(&dir);
-        let port  = next_port();
+        let port = next_port();
         let token = format!("runs-{port}");
 
         let _h = start_server_with_handle(test_components(), port, token.clone(), &dir, 100);
 
         let client = make_mtls_client(&dir, port);
-        let base   = format!("https://127.0.0.1:{port}");
+        let base = format!("https://127.0.0.1:{port}");
 
         // Stop run "alpha" specifically.
         let stop = client
@@ -1740,7 +1842,10 @@ mod tests {
             .expect("alpha tool call must complete");
         assert_eq!(a.status(), 410, "the stopped run must return 410");
         let a_body: serde_json::Value = a.json().unwrap();
-        assert_eq!(a_body["reason"], "ManualStop", "410 must carry the typed reason");
+        assert_eq!(
+            a_body["reason"], "ManualStop",
+            "410 must carry the typed reason"
+        );
 
         // Run "beta" is a different run → unaffected, tool call still allowed.
         let b = client
@@ -1750,7 +1855,11 @@ mod tests {
             .body(r#"{"tool":"echo","args":{"message":"hi"}}"#)
             .send()
             .expect("beta tool call must complete");
-        assert_eq!(b.status(), 200, "a different run must keep working after another stops");
+        assert_eq!(
+            b.status(),
+            200,
+            "a different run must keep working after another stops"
+        );
         let b_body: serde_json::Value = b.json().unwrap();
         assert_eq!(b_body["status"], "allowed");
 
@@ -1761,7 +1870,11 @@ mod tests {
             .body(r#"{"tool":"echo","args":{"message":"hi"}}"#)
             .send()
             .expect("default tool call must complete");
-        assert_eq!(d.status(), 200, "the default run must be unaffected by another run's stop");
+        assert_eq!(
+            d.status(),
+            200,
+            "the default run must be unaffected by another run's stop"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1775,7 +1888,7 @@ mod tests {
         // call history accumulate across both of them rather than per-client.
         let dir = test_certs_dir();
         gen_certs_for_test(&dir);
-        let port  = next_port();
+        let port = next_port();
         let token = format!("budget-{port}");
 
         let _h = start_server_with_handle(
@@ -1786,8 +1899,8 @@ mod tests {
             100,
         );
 
-        let c1   = make_mtls_client(&dir, port);
-        let c2   = make_mtls_client(&dir, port);
+        let c1 = make_mtls_client(&dir, port);
+        let c2 = make_mtls_client(&dir, port);
         let base = format!("https://127.0.0.1:{port}");
 
         macro_rules! tool_call {
@@ -1827,7 +1940,7 @@ mod tests {
         // /agent/enter + /agent/exit round-trip over the network server.
         let dir = test_certs_dir();
         gen_certs_for_test(&dir);
-        let port  = next_port();
+        let port = next_port();
         let token = format!("agentev-{port}");
 
         let _h = start_server_with_handle(
@@ -1839,7 +1952,7 @@ mod tests {
         );
 
         let client = make_mtls_client(&dir, port);
-        let base   = format!("https://127.0.0.1:{port}");
+        let base = format!("https://127.0.0.1:{port}");
 
         // Enter "researcher" scope.
         let enter = client
@@ -1884,12 +1997,17 @@ mod tests {
                 .unwrap_or(false)
         });
 
-        assert!(has_entered, "AgentScopeEntered must appear in event log\ngot: {events_text}");
-        assert!(has_exited,  "AgentScopeExited must appear in event log\ngot: {events_text}");
+        assert!(
+            has_entered,
+            "AgentScopeEntered must appear in event log\ngot: {events_text}"
+        );
+        assert!(
+            has_exited,
+            "AgentScopeExited must appear in event log\ngot: {events_text}"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
-
 
     // ── Day 10 tests: security ────────────────────────────────────────────────
 
@@ -1913,25 +2031,35 @@ mod tests {
         let dir_b = test_certs_dir(); // independent CA
         gen_certs_for_test(&dir_b);
 
-        let port  = next_port();
+        let port = next_port();
         let addr: SocketAddr = format!("0.0.0.0:{port}").parse().unwrap();
         let token = format!("wrong-ca-{port}");
 
         // Start server with CA-A certs.
-        let cert  = dir_a.join("server.crt");
-        let key   = dir_a.join("server.key");
-        let ca    = dir_a.join("ca.crt");
-        let tok2  = token.clone();
+        let cert = dir_a.join("server.crt");
+        let key = dir_a.join("server.key");
+        let ca = dir_a.join("ca.crt");
+        let tok2 = token.clone();
         std::thread::spawn(move || {
-            NetworkServer::start_blocking(addr, cert, key, ca, test_components(), Some(tok2), 100, test_state_dir()).ok();
+            NetworkServer::start_blocking(
+                addr,
+                cert,
+                key,
+                ca,
+                test_components(),
+                Some(tok2),
+                100,
+                test_state_dir(),
+            )
+            .ok();
         });
         wait_for_port(port);
 
         // Build a client that trusts CA-A but presents a cert signed by CA-B.
-        let ca_pem_a    = std::fs::read(dir_a.join("ca.crt")).unwrap();
-        let ca_cert_a   = reqwest::Certificate::from_pem(&ca_pem_a).unwrap();
-        let cert_pem_b  = std::fs::read(dir_b.join("client.crt")).unwrap();
-        let key_pem_b   = std::fs::read(dir_b.join("client.key")).unwrap();
+        let ca_pem_a = std::fs::read(dir_a.join("ca.crt")).unwrap();
+        let ca_cert_a = reqwest::Certificate::from_pem(&ca_pem_a).unwrap();
+        let cert_pem_b = std::fs::read(dir_b.join("client.crt")).unwrap();
+        let key_pem_b = std::fs::read(dir_b.join("client.key")).unwrap();
         let bad_identity = reqwest::Identity::from_pem(&[cert_pem_b, key_pem_b].concat()).unwrap();
 
         let bad_client = reqwest::blocking::Client::builder()
@@ -1965,18 +2093,28 @@ mod tests {
         //
         // This verifies that the token check is independent of mTLS: passing
         // the TLS layer does not bypass the session-token gate.
-        let dir   = test_certs_dir();
+        let dir = test_certs_dir();
         gen_certs_for_test(&dir);
-        let port  = next_port();
+        let port = next_port();
         let addr: SocketAddr = format!("0.0.0.0:{port}").parse().unwrap();
         let correct_token = format!("correct-{port}");
 
         let cert = dir.join("server.crt");
-        let key  = dir.join("server.key");
-        let ca   = dir.join("ca.crt");
+        let key = dir.join("server.key");
+        let ca = dir.join("ca.crt");
         let tok2 = correct_token.clone();
         std::thread::spawn(move || {
-            NetworkServer::start_blocking(addr, cert, key, ca, test_components(), Some(tok2), 100, test_state_dir()).ok();
+            NetworkServer::start_blocking(
+                addr,
+                cert,
+                key,
+                ca,
+                test_components(),
+                Some(tok2),
+                100,
+                test_state_dir(),
+            )
+            .ok();
         });
         wait_for_port(port);
 
@@ -1991,7 +2129,8 @@ mod tests {
             .expect("request must reach server (TLS succeeds)");
 
         assert_eq!(
-            resp.status(), 401,
+            resp.status(),
+            401,
             "valid cert + wrong token must return 401"
         );
 
@@ -2052,7 +2191,7 @@ mod tests {
     #[test]
     fn loopback_plain_http_health_returns_running() {
         let token = format!("plain-health-{}", next_port());
-        let (port, _state_dir)  = start_plain_http_server(&token);
+        let (port, _state_dir) = start_plain_http_server(&token);
         let client = plain_http_client();
 
         let resp = client
@@ -2061,10 +2200,16 @@ mod tests {
             .send()
             .expect("plain HTTP GET /health must succeed");
 
-        assert_eq!(resp.status(), 200, "loopback plain HTTP must return 200 on /health");
+        assert_eq!(
+            resp.status(),
+            200,
+            "loopback plain HTTP must return 200 on /health"
+        );
         let body: serde_json::Value = resp.json().unwrap();
-        assert_eq!(body["state"], "running",
-            "health response must carry state=running; got: {body}");
+        assert_eq!(
+            body["state"], "running",
+            "health response must carry state=running; got: {body}"
+        );
     }
 
     // T2 — Wrong token returns 401 over plain HTTP.
@@ -2072,7 +2217,7 @@ mod tests {
     #[test]
     fn loopback_plain_http_wrong_token_returns_401() {
         let token = format!("plain-auth-{}", next_port());
-        let (port, _state_dir)  = start_plain_http_server(&token);
+        let (port, _state_dir) = start_plain_http_server(&token);
         let client = plain_http_client();
 
         let resp = client
@@ -2081,8 +2226,11 @@ mod tests {
             .send()
             .expect("request must reach server even with wrong token");
 
-        assert_eq!(resp.status(), 401,
-            "wrong token on plain HTTP must return 401");
+        assert_eq!(
+            resp.status(),
+            401,
+            "wrong token on plain HTTP must return 401"
+        );
     }
 
     // T3 — POST /tool/call allows a tool within budget over plain HTTP.
@@ -2090,7 +2238,7 @@ mod tests {
     #[test]
     fn loopback_plain_http_tool_call_allowed() {
         let token = format!("plain-tool-{}", next_port());
-        let (port, _state_dir)  = start_plain_http_server(&token);
+        let (port, _state_dir) = start_plain_http_server(&token);
         let client = plain_http_client();
 
         let resp = client
@@ -2100,11 +2248,16 @@ mod tests {
             .send()
             .expect("POST /tool/call must reach plain HTTP server");
 
-        assert_eq!(resp.status(), 200,
-            "allowed tool on plain HTTP must return 200");
+        assert_eq!(
+            resp.status(),
+            200,
+            "allowed tool on plain HTTP must return 200"
+        );
         let body: serde_json::Value = resp.json().unwrap();
-        assert_eq!(body["status"], "allowed",
-            "tool within budget must be allowed; got: {body}");
+        assert_eq!(
+            body["status"], "allowed",
+            "tool within budget must be allowed; got: {body}"
+        );
     }
 
     // T4 — POST /stop → action endpoints return 410 over plain HTTP.
@@ -2112,9 +2265,9 @@ mod tests {
     #[test]
     fn loopback_plain_http_410_after_stop() {
         let token = format!("plain-stop-{}", next_port());
-        let (port, _state_dir)  = start_plain_http_server(&token);
+        let (port, _state_dir) = start_plain_http_server(&token);
         let client = plain_http_client();
-        let base   = format!("http://127.0.0.1:{port}");
+        let base = format!("http://127.0.0.1:{port}");
 
         // Stop the execution.
         let stop = client
@@ -2133,8 +2286,11 @@ mod tests {
                 .body("{}")
                 .send()
                 .expect("post-stop request must reach server");
-            assert_eq!(resp.status(), 410,
-                "{path} must return 410 after execution stopped on plain HTTP path");
+            assert_eq!(
+                resp.status(),
+                410,
+                "{path} must return 410 after execution stopped on plain HTTP path"
+            );
         }
     }
 
@@ -2144,7 +2300,7 @@ mod tests {
     #[test]
     fn loopback_plain_http_shared_state_across_clients() {
         let token = format!("plain-shared-{}", next_port());
-        let port  = {
+        let port = {
             let p = next_port();
             let addr: SocketAddr = format!("127.0.0.1:{p}").parse().unwrap();
             let tok = token.clone();
@@ -2158,7 +2314,8 @@ mod tests {
                     Some(tok),
                     100,
                     test_state_dir(),
-                ).ok();
+                )
+                .ok();
             });
             wait_for_port(p);
             p
@@ -2209,9 +2366,9 @@ mod tests {
     #[test]
     fn status_returns_correct_fields_after_tool_call() {
         let token = format!("status-fields-{}", next_port());
-        let (port, _state_dir)  = start_plain_http_server(&token);
+        let (port, _state_dir) = start_plain_http_server(&token);
         let client = plain_http_client();
-        let base   = format!("http://127.0.0.1:{port}");
+        let base = format!("http://127.0.0.1:{port}");
 
         // Make one tool call so the counters are non-zero.
         client
@@ -2231,25 +2388,41 @@ mod tests {
         let body: serde_json::Value = resp.json().unwrap();
 
         // These are the exact field names the Python SDK reads.
-        assert!(body["tokens_spent"].is_number(),
-            "/status must have numeric 'tokens_spent' field; got: {body}");
-        assert!(body["elapsed_ms"].is_number(),
-            "/status must have numeric 'elapsed_ms' field; got: {body}");
-        assert!(body["tool_call_counts"].is_object(),
-            "/status must have object 'tool_call_counts' field; got: {body}");
-        assert!(body["tool_call_history"].is_array(),
-            "/status must have array 'tool_call_history' field; got: {body}");
-        assert!(body["tool_labels"].is_object(),
-            "/status must have object 'tool_labels' field; got: {body}");
+        assert!(
+            body["tokens_spent"].is_number(),
+            "/status must have numeric 'tokens_spent' field; got: {body}"
+        );
+        assert!(
+            body["elapsed_ms"].is_number(),
+            "/status must have numeric 'elapsed_ms' field; got: {body}"
+        );
+        assert!(
+            body["tool_call_counts"].is_object(),
+            "/status must have object 'tool_call_counts' field; got: {body}"
+        );
+        assert!(
+            body["tool_call_history"].is_array(),
+            "/status must have array 'tool_call_history' field; got: {body}"
+        );
+        assert!(
+            body["tool_labels"].is_object(),
+            "/status must have object 'tool_labels' field; got: {body}"
+        );
 
         // Verify the values reflect the call we just made.
-        assert_eq!(body["tokens_spent"], 7,
-            "tokens_spent must equal the charged tokens; got: {body}");
-        assert!(body["tool_call_counts"]["echo"].as_u64().unwrap_or(0) >= 1,
-            "tool_call_counts must count the echo call; got: {body}");
+        assert_eq!(
+            body["tokens_spent"], 7,
+            "tokens_spent must equal the charged tokens; got: {body}"
+        );
+        assert!(
+            body["tool_call_counts"]["echo"].as_u64().unwrap_or(0) >= 1,
+            "tool_call_counts must count the echo call; got: {body}"
+        );
         let history = body["tool_call_history"].as_array().unwrap();
-        assert!(history.iter().any(|v| v == "echo"),
-            "tool_call_history must include 'echo'; got: {body}");
+        assert!(
+            history.iter().any(|v| v == "echo"),
+            "tool_call_history must include 'echo'; got: {body}"
+        );
     }
 
     // ── T11: repeated tool calls accumulate in /status ───────────────────────
@@ -2257,9 +2430,9 @@ mod tests {
     #[test]
     fn repeated_tool_calls_accumulate_in_status() {
         let token = format!("call-count-{}", next_port());
-        let (port, _state_dir)  = start_plain_http_server(&token);
+        let (port, _state_dir) = start_plain_http_server(&token);
         let client = plain_http_client();
-        let base   = format!("http://127.0.0.1:{port}");
+        let base = format!("http://127.0.0.1:{port}");
 
         // POST /tool/call twice.
         for _ in 0..2 {
@@ -2280,10 +2453,15 @@ mod tests {
             .json()
             .unwrap();
 
-        assert_eq!(status["tool_call_counts"]["echo"], 2,
-            "both calls must be counted; got: {status}");
-        assert_eq!(status["tool_call_history"].as_array().unwrap().len(), 2,
-            "both calls must be in history; got: {status}");
+        assert_eq!(
+            status["tool_call_counts"]["echo"], 2,
+            "both calls must be counted; got: {status}"
+        );
+        assert_eq!(
+            status["tool_call_history"].as_array().unwrap().len(),
+            2,
+            "both calls must be in history; got: {status}"
+        );
     }
 
     // ── T12–T13: Tool call events in network server ───────────────────────────
@@ -2292,9 +2470,9 @@ mod tests {
     #[test]
     fn tool_call_emits_tool_allowed_event_in_network_server() {
         let token = format!("ev-allowed-{}", next_port());
-        let (port, _state_dir)  = start_plain_http_server(&token);
+        let (port, _state_dir) = start_plain_http_server(&token);
         let client = plain_http_client();
-        let base   = format!("http://127.0.0.1:{port}");
+        let base = format!("http://127.0.0.1:{port}");
 
         client
             .post(format!("{base}/tool/call"))
@@ -2316,17 +2494,19 @@ mod tests {
                 .map(|v| v["event"] == "ToolAllowed")
                 .unwrap_or(false)
         });
-        assert!(has_allowed,
-            "ToolAllowed event must appear after a successful tool call\ngot: {events}");
+        assert!(
+            has_allowed,
+            "ToolAllowed event must appear after a successful tool call\ngot: {events}"
+        );
     }
 
     // T13 — POST /tool/call for a denied tool emits ToolDenied in /events.
     #[test]
     fn tool_call_denied_emits_tool_denied_event_in_network_server() {
         let token = format!("ev-denied-{}", next_port());
-        let (port, _state_dir)  = start_plain_http_server(&token);
+        let (port, _state_dir) = start_plain_http_server(&token);
         let client = plain_http_client();
-        let base   = format!("http://127.0.0.1:{port}");
+        let base = format!("http://127.0.0.1:{port}");
 
         // "not_allowed_tool" is not in the allowed_tools list ("echo" only in test_components).
         client
@@ -2349,8 +2529,10 @@ mod tests {
                 .map(|v| v["event"] == "ToolDenied")
                 .unwrap_or(false)
         });
-        assert!(has_denied,
-            "ToolDenied event must appear after a denied tool call\ngot: {events}");
+        assert!(
+            has_denied,
+            "ToolDenied event must appear after a denied tool call\ngot: {events}"
+        );
     }
 
     // ── T14: Token file permissions ───────────────────────────────────────────
@@ -2367,7 +2549,10 @@ mod tests {
 
         let token_file = state_dir.join("server.token");
 
-        assert!(token_file.exists(), "server.token must exist in the state dir after server start");
+        assert!(
+            token_file.exists(),
+            "server.token must exist in the state dir after server start"
+        );
 
         let mode = std::fs::metadata(&token_file)
             .expect("must read token file metadata")
@@ -2376,8 +2561,10 @@ mod tests {
 
         // 0o600 = owner read+write only. No group or world bits.
         let group_world_bits = mode & 0o077;
-        assert_eq!(group_world_bits, 0,
-            "server.token must not be group- or world-readable; mode was 0o{mode:o}");
+        assert_eq!(
+            group_world_bits, 0,
+            "server.token must not be group- or world-readable; mode was 0o{mode:o}"
+        );
     }
 
     // ── T16: Rate limiter window reset ────────────────────────────────────────
@@ -2389,13 +2576,13 @@ mod tests {
         // Then send 3 more requests — all must succeed (window reset, fresh count).
         let dir = test_certs_dir();
         gen_certs_for_test(&dir);
-        let port  = next_port();
+        let port = next_port();
         let token = format!("rl-reset-{port}");
 
         let _h = start_server_with_handle(test_components(), port, token.clone(), &dir, 3);
 
         let client = make_mtls_client(&dir, port);
-        let base   = format!("https://127.0.0.1:{port}");
+        let base = format!("https://127.0.0.1:{port}");
 
         // Exhaust the window — at least one 429 expected.
         let mut saw_429 = false;
@@ -2405,7 +2592,9 @@ mod tests {
                 .header("X-Nanny-Session-Token", &token)
                 .send()
                 .expect("health request must reach server");
-            if resp.status() == 429 { saw_429 = true; }
+            if resp.status() == 429 {
+                saw_429 = true;
+            }
         }
         assert!(saw_429, "rate limiter must fire 429 when limit is exceeded");
 
@@ -2419,8 +2608,11 @@ mod tests {
                 .header("X-Nanny-Session-Token", &token)
                 .send()
                 .expect("health must succeed after window reset");
-            assert_eq!(resp.status(), 200,
-                "request {i} after window reset must return 200 — rate limiter must have reset");
+            assert_eq!(
+                resp.status(),
+                200,
+                "request {i} after window reset must return 200 — rate limiter must have reset"
+            );
         }
 
         std::fs::remove_dir_all(&dir).ok();
@@ -2429,8 +2621,6 @@ mod tests {
     //
     // is_blocked_host unit tests prove the logic. These integration tests prove
     // the handler actually calls is_blocked_host before forwarding.
-
-
 
     // ── T19: In-flight request completes before graceful drain ────────────────
     //
@@ -2446,12 +2636,12 @@ mod tests {
     fn in_flight_request_completes_before_drain_deadline() {
         let dir = test_certs_dir();
         gen_certs_for_test(&dir);
-        let port  = next_port();
+        let port = next_port();
         let token = format!("inflight-{port}");
 
         let handle = start_server_with_handle(test_components(), port, token.clone(), &dir, 100);
         let client = make_mtls_client(&dir, port);
-        let base   = format!("https://127.0.0.1:{port}");
+        let base = format!("https://127.0.0.1:{port}");
 
         // Confirm server is up before the test begins.
         let pre = client
@@ -2473,8 +2663,11 @@ mod tests {
             .header("X-Nanny-Session-Token", &token)
             .send();
         match during_drain {
-            Ok(resp) => assert_eq!(resp.status(), 200,
-                "a response received during the drain window must be 200, not an error"),
+            Ok(resp) => assert_eq!(
+                resp.status(),
+                200,
+                "a response received during the drain window must be 200, not an error"
+            ),
             Err(_) => { /* connection refused — we lost the race, acceptable */ }
         }
 
@@ -2486,8 +2679,10 @@ mod tests {
             .get(format!("{base}/health"))
             .header("X-Nanny-Session-Token", &token)
             .send();
-        assert!(post.is_err(),
-            "server must refuse all connections after graceful drain expires");
+        assert!(
+            post.is_err(),
+            "server must refuse all connections after graceful drain expires"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -70,7 +70,11 @@ fn deny_repeat_calls(ctx: &PolicyContext) -> bool {
     if ctx.requested_tool.as_deref() != Some("counted_tool") {
         return true;
     }
-    ctx.tool_call_counts.get("counted_tool").copied().unwrap_or(0) < 2
+    ctx.tool_call_counts
+        .get("counted_tool")
+        .copied()
+        .unwrap_or(0)
+        < 2
 }
 
 /// The label-driven form of `deny_after_untrusted_read`: identical logic, but
@@ -79,19 +83,23 @@ fn deny_repeat_calls(ctx: &PolicyContext) -> bool {
 /// app happens to call its tools.
 #[nanny::rule("deny_external_effect_after_untrusted_read")]
 fn deny_external_effect_after_untrusted_read(ctx: &PolicyContext) -> bool {
-    let Some(pending) = ctx.requested_tool.as_deref() else { return true };
+    let Some(pending) = ctx.requested_tool.as_deref() else {
+        return true;
+    };
     if !ctx.tool_has(pending, "external_effect") {
         return true;
     }
-    !ctx.tool_call_history.iter().any(|t| ctx.tool_has(t, "reads_untrusted"))
+    !ctx.tool_call_history
+        .iter()
+        .any(|t| ctx.tool_has(t, "reads_untrusted"))
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn start_bridge(allowed: &[&str]) -> Bridge {
     let components = BridgeComponents {
-        registry:           nanny_runtime::default_registry(),
-        allowed_tools:      allowed.iter().map(|s| s.to_string()).collect(),
+        registry: nanny_runtime::default_registry(),
+        allowed_tools: allowed.iter().map(|s| s.to_string()).collect(),
         per_tool_max_calls: HashMap::new(),
         tool_labels: Default::default(),
     };
@@ -102,13 +110,16 @@ fn start_bridge(allowed: &[&str]) -> Bridge {
 /// `build_bridge_components` derives from `[tools.<name>]`.
 fn start_labelled_bridge(tools: &[(&str, &[&str])]) -> Bridge {
     let components = BridgeComponents {
-        registry:           nanny_runtime::default_registry(),
-        allowed_tools:      tools.iter().map(|(n, _)| n.to_string()).collect(),
+        registry: nanny_runtime::default_registry(),
+        allowed_tools: tools.iter().map(|(n, _)| n.to_string()).collect(),
         per_tool_max_calls: HashMap::new(),
-        tool_labels:        tools
+        tool_labels: tools
             .iter()
             .map(|(n, labels)| {
-                (n.to_string(), labels.iter().map(|l| l.to_string()).collect())
+                (
+                    n.to_string(),
+                    labels.iter().map(|l| l.to_string()).collect(),
+                )
             })
             .collect(),
     };
@@ -138,7 +149,10 @@ fn clear_env() {
 }
 
 fn args(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-    pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    pairs
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
 }
 
 // ── Rules fire ────────────────────────────────────────────────────────────────
@@ -172,7 +186,10 @@ fn rules_allow_a_tool_none_of_them_govern() {
     let denied = evaluate_local_rules("search_web", HashMap::new());
 
     clear_env();
-    assert!(denied.is_none(), "ungoverned tool must be allowed; got {denied:?}");
+    assert!(
+        denied.is_none(),
+        "ungoverned tool must be allowed; got {denied:?}"
+    );
 }
 
 // ── PolicyContext is populated ────────────────────────────────────────────────
@@ -211,7 +228,10 @@ fn rule_receives_populated_tool_call_history() {
     let after = evaluate_local_rules("privileged_tool", HashMap::new());
 
     clear_env();
-    assert!(before.is_none(), "privileged tool must be allowed before any untrusted read");
+    assert!(
+        before.is_none(),
+        "privileged tool must be allowed before any untrusted read"
+    );
     assert_eq!(
         after,
         Some("deny_after_untrusted_read"),
@@ -233,7 +253,10 @@ fn rule_receives_tool_call_counts() {
     let after_two = evaluate_local_rules("counted_tool", HashMap::new());
 
     clear_env();
-    assert!(after_one.is_none(), "one prior call is under the rule's threshold");
+    assert!(
+        after_one.is_none(),
+        "one prior call is under the rule's threshold"
+    );
     assert_eq!(
         after_two,
         Some("deny_repeat_calls"),
@@ -269,7 +292,7 @@ fn rules_still_evaluate_in_passthrough_mode() {
 fn a_label_driven_rule_denies_using_history() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let bridge = start_labelled_bridge(&[
-        ("search_web",    &["reads_untrusted"]),
+        ("search_web", &["reads_untrusted"]),
         ("send_outreach", &["external_effect"]),
     ]);
     inject_env(&bridge);
@@ -282,7 +305,10 @@ fn a_label_driven_rule_denies_using_history() {
     let after = evaluate_local_rules("send_outreach", HashMap::new());
 
     clear_env();
-    assert!(before.is_none(), "external-effect tool must be allowed before any untrusted read");
+    assert!(
+        before.is_none(),
+        "external-effect tool must be allowed before any untrusted read"
+    );
     assert_eq!(
         after,
         Some("deny_external_effect_after_untrusted_read"),
@@ -295,10 +321,7 @@ fn a_label_driven_rule_denies_using_history() {
 #[test]
 fn the_same_rule_allows_when_the_tools_are_unlabelled() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let bridge = start_labelled_bridge(&[
-        ("search_web",    &[]),
-        ("send_outreach", &[]),
-    ]);
+    let bridge = start_labelled_bridge(&[("search_web", &[]), ("send_outreach", &[])]);
     inject_env(&bridge);
 
     call_tool("search_web", 0);

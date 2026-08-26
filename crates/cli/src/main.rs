@@ -16,7 +16,7 @@ mod sync;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use nanny_bridge::{Bridge, BridgeAddress, ExecutionState};
-use nanny_core::events::event::{ExecutionEvent, now_ms};
+use nanny_core::events::event::{now_ms, ExecutionEvent};
 use std::io::Write;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -159,7 +159,17 @@ fn main() {
 
     let result = match cli.command {
         Command::Init => cmd_init(),
-        Command::Run { no_sync, env, join, serve, addr, cert, key, ca, extra_args } => {
+        Command::Run {
+            no_sync,
+            env,
+            join,
+            serve,
+            addr,
+            cert,
+            key,
+            ca,
+            extra_args,
+        } => {
             if serve {
                 if join.is_some() {
                     Err(anyhow::anyhow!(
@@ -247,7 +257,9 @@ fn cmd_init() -> Result<()> {
         print!("nanny.toml already exists. Replace it with the default template?\nYour current configuration will be lost. [y/N] ");
         std::io::stdout().flush().ok();
         let mut input = String::new();
-        std::io::stdin().read_line(&mut input).context("failed to read input")?;
+        std::io::stdin()
+            .read_line(&mut input)
+            .context("failed to read input")?;
         if !matches!(input.trim().to_lowercase().as_str(), "y" | "yes") {
             println!("Skipped, your existing nanny.toml was not changed.");
         } else {
@@ -282,14 +294,19 @@ fn cmd_init() -> Result<()> {
             print!("App name [{default_name}]: ");
             std::io::stdout().flush().ok();
             let mut name_input = String::new();
-            std::io::stdin().read_line(&mut name_input).context("failed to read input")?;
+            std::io::stdin()
+                .read_line(&mut name_input)
+                .context("failed to read input")?;
             let name = match name_input.trim() {
                 "" => default_name,
                 trimmed => trimmed.to_string(),
             };
 
             let created = identity::AppIdentity::create(cwd, name)?;
-            println!("App identity created (name: {}, appId: {}).", created.name, created.app_id);
+            println!(
+                "App identity created (name: {}, appId: {}).",
+                created.name, created.app_id
+            );
         }
     }
 
@@ -305,8 +322,7 @@ fn cmd_init() -> Result<()> {
 // ── nanny uninstall ───────────────────────────────────────────────────────────
 
 fn cmd_uninstall() -> Result<()> {
-    let exe = std::env::current_exe()
-        .context("failed to determine current binary path")?;
+    let exe = std::env::current_exe().context("failed to determine current binary path")?;
 
     // Homebrew manages its own metadata — removing the binary directly leaves
     // the formula in a broken state. Redirect to `brew uninstall nannyd`.
@@ -428,9 +444,11 @@ fn detect_joined_server(app_id: &str) -> Result<NetworkServerInfo> {
         );
     }
 
-    Ok(NetworkServerInfo { addr: connect_addr, token })
+    Ok(NetworkServerInfo {
+        addr: connect_addr,
+        token,
+    })
 }
-
 
 fn cmd_run_via_network_server(command: Vec<String>, server: NetworkServerInfo) -> Result<()> {
     println!("nanny: network server detected at {}", server.addr);
@@ -492,18 +510,24 @@ fn build_governed_child(
 
     let mut cmd = std::process::Command::new(program);
     cmd.args(args);
-    cmd.env("NANNY_BRIDGE_ADDR",    &server.addr);
-    cmd.env("NANNY_SESSION_TOKEN",  &server.token);
-    cmd.env("NANNY_RUN_ID",         &run_id);
+    cmd.env("NANNY_BRIDGE_ADDR", &server.addr);
+    cmd.env("NANNY_SESSION_TOKEN", &server.token);
+    cmd.env("NANNY_RUN_ID", &run_id);
 
     // Only inject cert paths that actually exist — agents on remote machines
     // may have already set these env vars themselves via their deployment config.
     let cert_file = certs_dir.join("client.crt");
-    let key_file  = certs_dir.join("client.key");
-    let ca_file   = certs_dir.join("ca.crt");
-    if cert_file.exists() { cmd.env("NANNY_BRIDGE_CERT", &cert_file); }
-    if key_file.exists()  { cmd.env("NANNY_BRIDGE_KEY",  &key_file); }
-    if ca_file.exists()   { cmd.env("NANNY_BRIDGE_CA",   &ca_file); }
+    let key_file = certs_dir.join("client.key");
+    let ca_file = certs_dir.join("ca.crt");
+    if cert_file.exists() {
+        cmd.env("NANNY_BRIDGE_CERT", &cert_file);
+    }
+    if key_file.exists() {
+        cmd.env("NANNY_BRIDGE_KEY", &key_file);
+    }
+    if ca_file.exists() {
+        cmd.env("NANNY_BRIDGE_CA", &ca_file);
+    }
 
     Ok((cmd, run_id))
 }
@@ -545,7 +569,13 @@ fn cmd_run(
     // Guard: exactly one nanny*.toml allowed per directory.
     let config_dir = config_path
         .parent()
-        .map(|p| if p == Path::new("") { Path::new(".") } else { p })
+        .map(|p| {
+            if p == Path::new("") {
+                Path::new(".")
+            } else {
+                p
+            }
+        })
         .unwrap_or(Path::new("."));
     let existing = nanny_tomls_in_dir(config_dir)?;
     if existing.len() > 1 {
@@ -600,16 +630,19 @@ fn cmd_run(
     let _ = &declared_packs;
 
     // Require [start] — nanny run always reads the command from config.
-    let start = config.start.as_ref()
+    let start = config
+        .start
+        .as_ref()
         .ok_or_else(|| anyhow::anyhow!("no start config found in nanny.toml"))?;
 
     // Build command: parse [start].cmd with shell quoting rules, then append extra args.
     // shlex::split handles quoted paths and escaped spaces — e.g. 'python "my agent.py"'.
-    let mut command: Vec<String> = shlex::split(&start.cmd)
-        .ok_or_else(|| anyhow::anyhow!(
+    let mut command: Vec<String> = shlex::split(&start.cmd).ok_or_else(|| {
+        anyhow::anyhow!(
             "invalid [start].cmd in nanny.toml: unterminated quote or invalid shell syntax: {:?}",
             start.cmd
-        ))?;
+        )
+    })?;
     if command.is_empty() {
         return Err(anyhow::anyhow!("[start].cmd in nanny.toml is empty"));
     }
@@ -631,7 +664,11 @@ fn cmd_run(
     println!("nanny: tools allowed — {:?}", config.tools.allowed);
 
     let registered = components.registry.registered_names();
-    println!("nanny: registry — {} tool(s) registered: {:?}", registered.len(), registered);
+    println!(
+        "nanny: registry — {} tool(s) registered: {:?}",
+        registered.len(),
+        registered
+    );
     println!();
 
     let started_at = Instant::now();
@@ -649,8 +686,8 @@ fn cmd_run(
 
     // ── Start bridge ──────────────────────────────────────────────────────
     let bridge_components = runtime::build_bridge_components(&config);
-    let bridge = Bridge::start(bridge_components, run_id.clone())
-        .context("failed to start bridge")?;
+    let bridge =
+        Bridge::start(bridge_components, run_id.clone()).context("failed to start bridge")?;
 
     // ── Cloud sync (off unless NANNY_API_KEY is set) ────────────────────────
     // Forwards a copy of the NDJSON event log to the cloud; enforcement stays
@@ -670,35 +707,46 @@ fn cmd_run(
     let app_name = app.map(|a| a.name);
 
     let target = sync::resolve_sync(env, no_sync);
-    println!("{}", sync::sync_status_line(target.as_ref().map_err(|e| *e), app_name.as_deref()));
-    let managed = target
-        .ok()
-        .and_then(|t| sync::CloudSync::start(t.endpoint, t.api_key, &bridge.session_token, config_dir));
+    println!(
+        "{}",
+        sync::sync_status_line(target.as_ref().map_err(|e| *e), app_name.as_deref())
+    );
+    let managed = target.ok().and_then(|t| {
+        sync::CloudSync::start(t.endpoint, t.api_key, &bridge.session_token, config_dir)
+    });
     // ExecutionStarted was already written locally; forward it too.
     if let (Some(sender), Ok(line)) = (&managed, serde_json::to_string(&started_event)) {
         sender.enqueue(line);
     }
 
     // ── Spawn child process ───────────────────────────────────────────────
-    let (program, args) = command.split_first()
+    let (program, args) = command
+        .split_first()
         .expect("command is non-empty — enforced by clap");
 
     let mut cmd = std::process::Command::new(program);
     cmd.args(args);
     match &bridge.address {
         #[cfg(unix)]
-        BridgeAddress::Unix(path) => { cmd.env("NANNY_BRIDGE_SOCKET", path); }
-        BridgeAddress::Tcp(port) => { cmd.env("NANNY_BRIDGE_PORT", port.to_string()); }
+        BridgeAddress::Unix(path) => {
+            cmd.env("NANNY_BRIDGE_SOCKET", path);
+        }
+        BridgeAddress::Tcp(port) => {
+            cmd.env("NANNY_BRIDGE_PORT", port.to_string());
+        }
     }
     cmd.env("NANNY_SESSION_TOKEN", &bridge.session_token);
 
-    let mut child = match cmd.spawn()
-    {
+    let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
             // ExecutionStarted was emitted — always pair it with ExecutionStopped.
             let elapsed_ms = started_at.elapsed().as_millis() as u64;
-            let _ = log.write(&run_id, bridge.next_seq(), &execution_stopped_event("SpawnFailed", 0, elapsed_ms));
+            let _ = log.write(
+                &run_id,
+                bridge.next_seq(),
+                &execution_stopped_event("SpawnFailed", 0, elapsed_ms),
+            );
             return Err(e).with_context(|| format!("failed to spawn '{}'", program));
         }
     };
@@ -736,7 +784,11 @@ fn cmd_run(
                 // RuleDenied or ToolFailed), in which case the bridge already
                 // has the specific reason. bridge.stop() is idempotent — it
                 // won't overwrite a reason the child already reported.
-                let fallback = if status.success() { "AgentCompleted" } else { "ProcessCrashed" };
+                let fallback = if status.success() {
+                    "AgentCompleted"
+                } else {
+                    "ProcessCrashed"
+                };
                 bridge.stop(fallback);
                 // Re-read: prefer the bridge's reason over the generic fallback.
                 let reason = match bridge.execution_state() {
@@ -751,7 +803,11 @@ fn cmd_run(
             Err(e) => {
                 // Polling failed — emit stopped before surfacing the error.
                 let elapsed_ms = started_at.elapsed().as_millis() as u64;
-                let _ = log.write(&run_id, bridge.next_seq(), &execution_stopped_event("InternalError", 0, elapsed_ms));
+                let _ = log.write(
+                    &run_id,
+                    bridge.next_seq(),
+                    &execution_stopped_event("InternalError", 0, elapsed_ms),
+                );
                 return Err(e).context("failed to poll child process");
             }
         }
@@ -786,11 +842,7 @@ fn cmd_run(
         );
     }
 
-    let stopped_event = execution_stopped_event(
-        &stop_reason,
-        metrics.tokens_spent,
-        elapsed_ms,
-    );
+    let stopped_event = execution_stopped_event(&stop_reason, metrics.tokens_spent, elapsed_ms);
     log.write(&run_id, bridge.next_seq(), &stopped_event)?;
     if let Some(sender) = &managed {
         if let Ok(line) = serde_json::to_string(&stopped_event) {

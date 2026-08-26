@@ -31,7 +31,9 @@ pub struct RuntimeComponents {
 /// config.tools.*       → allowlist + per-tool max_calls
 /// ```
 pub fn build_from_config(_config: &NannyConfig) -> RuntimeComponents {
-    RuntimeComponents { registry: nanny_runtime::default_registry() }
+    RuntimeComponents {
+        registry: nanny_runtime::default_registry(),
+    }
 }
 
 // ── build_bridge_components ───────────────────────────────────────────────────
@@ -137,7 +139,10 @@ mod tests {
         let mut config = test_config();
         config.tools.per_tool.insert(
             "http_get".to_string(),
-            nanny_config::ToolConfig { max_calls: Some(3), ..Default::default() },
+            nanny_config::ToolConfig {
+                max_calls: Some(3),
+                ..Default::default()
+            },
         );
 
         let components = build_bridge_components(&config);

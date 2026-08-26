@@ -39,12 +39,15 @@ pub struct RuleDecl {
 impl RuleDecl {
     /// A rule the developer wrote, carrying no pack provenance.
     pub fn local(name: impl Into<String>) -> Self {
-        Self { name: name.into(), version: None, pack: None }
+        Self {
+            name: name.into(),
+            version: None,
+            pack: None,
+        }
     }
 }
 
 // ── ExecutionEvent ────────────────────────────────────────────────────────────
-
 
 /// The canonical event type for every event the nanny ecosystem emits.
 ///
@@ -109,10 +112,7 @@ pub enum ExecutionEvent {
     /// The tool was not in the permitted set — execution stops immediately.
     /// Distinct from `RuleDenied`: this fires from `ToolPermissionPolicy`,
     /// before any rule evaluation.
-    ToolDenied {
-        ts: u64,
-        tool: String,
-    },
+    ToolDenied { ts: u64, tool: String },
 
     /// Emitted when a tool call is blocked by a rule or per-tool call limit.
     ///
@@ -238,27 +238,18 @@ pub enum ExecutionEvent {
     /// "no rules registered", which is worse than saying nothing.
     ///
     /// Deduped bridge-side, so a caller may safely redeclare.
-    RulesDeclared {
-        ts: u64,
-        rules: Vec<RuleDecl>,
-    },
+    RulesDeclared { ts: u64, rules: Vec<RuleDecl> },
 
     /// Emitted when the agent enters a named scope via `agent_enter`.
     ///
     /// Records which phase of the run the following events belong to, so the
     /// audit log can attribute every verdict to the scope that produced it.
-    AgentScopeEntered {
-        ts: u64,
-        name: String,
-    },
+    AgentScopeEntered { ts: u64, name: String },
 
     /// Emitted when the agent exits a named scope via `agent_exit`.
     ///
     /// Paired with `AgentScopeEntered` — together they bracket the governed scope.
-    AgentScopeExited {
-        ts: u64,
-        name: String,
-    },
+    AgentScopeExited { ts: u64, name: String },
 
     /// Emitted as the final event when execution stops for any reason.
     ///
@@ -316,7 +307,11 @@ pub struct LoggedEvent {
 
 impl LoggedEvent {
     pub fn new(run_id: impl Into<String>, seq: u64, event: ExecutionEvent) -> Self {
-        Self { run_id: run_id.into(), seq, event }
+        Self {
+            run_id: run_id.into(),
+            seq,
+            event,
+        }
     }
 }
 
@@ -325,7 +320,11 @@ mod tests {
     use super::*;
 
     fn tool_allowed() -> ExecutionEvent {
-        ExecutionEvent::ToolAllowed { ts: 1_756_100_000_000, tool: "web_search".into(), cleared_by: Vec::new() }
+        ExecutionEvent::ToolAllowed {
+            ts: 1_756_100_000_000,
+            tool: "web_search".into(),
+            cleared_by: Vec::new(),
+        }
     }
 
     #[test]
@@ -363,7 +362,10 @@ mod tests {
                 tool_labels: BTreeMap::new(),
                 config_hash: "deadbeef".into(),
             },
-            ExecutionEvent::RulesDeclared { ts: 2, rules: vec![RuleDecl::local("r")] },
+            ExecutionEvent::RulesDeclared {
+                ts: 2,
+                rules: vec![RuleDecl::local("r")],
+            },
             ExecutionEvent::ExecutionStopped {
                 ts: 3,
                 reason: "AgentCompleted".into(),
@@ -372,9 +374,10 @@ mod tests {
             },
         ];
         for (i, e) in events.into_iter().enumerate() {
-            let v: serde_json::Value =
-                serde_json::from_str(&serde_json::to_string(&LoggedEvent::new("r", i as u64, e)).unwrap())
-                    .unwrap();
+            let v: serde_json::Value = serde_json::from_str(
+                &serde_json::to_string(&LoggedEvent::new("r", i as u64, e)).unwrap(),
+            )
+            .unwrap();
             assert_eq!(v["run_id"], "r");
             assert_eq!(v["seq"], i as u64);
             assert!(v.get("event").is_some());

@@ -30,9 +30,7 @@ def test_an_installed_pack_registers_its_rules(tmp_path):
     install(tmp_path, "nanny:owasp", "2.1.0", RULE_BODY)
     loaded = load_installed_packs(tmp_path)
 
-    assert loaded == [
-        LoadedRule(name="no_send_after_read", version="2.1.0", pack="nanny:owasp")
-    ]
+    assert loaded == [LoadedRule(name="no_send_after_read", version="2.1.0", pack="nanny:owasp")]
     assert "no_send_after_read" in _decorators._RULES
 
 
@@ -45,7 +43,7 @@ def test_provenance_comes_from_the_manifest_not_the_decorator(tmp_path):
     install(tmp_path, "nanny:owasp", "2.1.0", RULE_BODY)
     (loaded,) = load_installed_packs(tmp_path)
 
-    assert 'version' not in RULE_BODY
+    assert "version" not in RULE_BODY
     assert loaded.version == "2.1.0"
     assert loaded.pack == "nanny:owasp"
 

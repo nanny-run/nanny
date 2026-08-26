@@ -78,7 +78,11 @@ impl std::fmt::Debug for SyncTarget {
 fn api_key_from_env() -> Option<String> {
     let key = std::env::var(API_KEY_ENV).ok()?;
     let key = key.trim();
-    if key.is_empty() { None } else { Some(key.to_string()) }
+    if key.is_empty() {
+        None
+    } else {
+        Some(key.to_string())
+    }
 }
 
 /// Whether `NANNY_NO_SYNC` is set to any non-empty value.
@@ -112,7 +116,10 @@ pub fn resolve_sync(env: CloudEnv, no_sync: bool) -> Result<SyncTarget, NoSyncRe
         return Err(NoSyncReason::EnvOverride);
     }
     let api_key = api_key_from_env().ok_or(NoSyncReason::NoApiKey)?;
-    Ok(SyncTarget { endpoint: env.ingest_url(), api_key })
+    Ok(SyncTarget {
+        endpoint: env.ingest_url(),
+        api_key,
+    })
 }
 
 /// The startup line describing sync state. Printed on every run, never
@@ -120,7 +127,10 @@ pub fn resolve_sync(env: CloudEnv, no_sync: bool) -> Result<SyncTarget, NoSyncRe
 /// which is how an app can stop reporting for weeks without anyone noticing.
 ///
 /// `mode` survives only as a derived display word, never read back as config.
-pub fn sync_status_line(target: Result<&SyncTarget, NoSyncReason>, app_name: Option<&str>) -> String {
+pub fn sync_status_line(
+    target: Result<&SyncTarget, NoSyncReason>,
+    app_name: Option<&str>,
+) -> String {
     match target {
         Ok(t) => {
             let host = t.endpoint.strip_suffix("/v1/ingest").unwrap_or(&t.endpoint);
@@ -135,9 +145,9 @@ pub fn sync_status_line(target: Result<&SyncTarget, NoSyncReason>, app_name: Opt
         Err(NoSyncReason::EnvOverride) => {
             format!("nanny: mode local, not syncing ({NO_SYNC_ENV} is set). Enforcing locally.")
         }
-        Err(NoSyncReason::NoApiKey) => format!(
-            "nanny: mode local, not syncing ({API_KEY_ENV} is not set). Enforcing locally."
-        ),
+        Err(NoSyncReason::NoApiKey) => {
+            format!("nanny: mode local, not syncing ({API_KEY_ENV} is not set). Enforcing locally.")
+        }
     }
 }
 
@@ -236,7 +246,9 @@ impl Spool {
     /// logs rather than in `~/.nanny`, so it travels with the checkout that
     /// produced it and is removed with it.
     pub fn new(base_dir: &Path) -> Self {
-        Self { dir: base_dir.join(".nanny").join("spool") }
+        Self {
+            dir: base_dir.join(".nanny").join("spool"),
+        }
     }
 
     /// Persist a batch for a later attempt. Best-effort: an outbox that cannot
@@ -328,7 +340,12 @@ impl Spool {
     /// that is still down is not hammered once per file.
     ///
     /// Returns how many batches were delivered.
-    pub fn drain(&self, client: &reqwest::blocking::Client, endpoint: &str, api_key: &str) -> usize {
+    pub fn drain(
+        &self,
+        client: &reqwest::blocking::Client,
+        endpoint: &str,
+        api_key: &str,
+    ) -> usize {
         let mut delivered = 0usize;
         for (path, _) in self.entries() {
             let Ok(contents) = std::fs::read_to_string(&path) else {
@@ -538,7 +555,9 @@ fn worker(
     loop {
         match rx.recv_timeout(FLUSH_INTERVAL) {
             Ok(line) => {
-                if !batch.is_empty() && (batch.len() >= MAX_LINES || bytes + line.len() + 1 > MAX_BODY_BYTES) {
+                if !batch.is_empty()
+                    && (batch.len() >= MAX_LINES || bytes + line.len() + 1 > MAX_BODY_BYTES)
+                {
                     flush(&mut batch, &mut bytes, &mut warned);
                 }
                 bytes += line.len() + 1;
@@ -605,14 +624,21 @@ mod tests {
     fn the_env_selects_the_host_not_the_key() {
         with_env(Some("nny_k"), None, || {
             let t = resolve_sync(CloudEnv::Dev, false).expect("key present → sync");
-            assert_eq!(t.endpoint, CloudEnv::Dev.ingest_url(), "--env picks the host");
+            assert_eq!(
+                t.endpoint,
+                CloudEnv::Dev.ingest_url(),
+                "--env picks the host"
+            );
         });
     }
 
     #[test]
     fn no_sync_without_an_api_key() {
         with_env(None, None, || {
-            assert_eq!(resolve_sync(CloudEnv::Prod, false), Err(NoSyncReason::NoApiKey));
+            assert_eq!(
+                resolve_sync(CloudEnv::Prod, false),
+                Err(NoSyncReason::NoApiKey)
+            );
         });
     }
 
@@ -621,7 +647,10 @@ mod tests {
         // An unset CI secret usually surfaces as "", and authenticating with it
         // would 401 invisibly, since the runtime never reads ingest status.
         with_env(Some("   "), None, || {
-            assert_eq!(resolve_sync(CloudEnv::Prod, false), Err(NoSyncReason::NoApiKey));
+            assert_eq!(
+                resolve_sync(CloudEnv::Prod, false),
+                Err(NoSyncReason::NoApiKey)
+            );
         });
     }
 
@@ -635,14 +664,20 @@ mod tests {
     #[test]
     fn the_no_sync_env_var_wins_over_a_present_key() {
         with_env(Some("nny_k"), Some("1"), || {
-            assert_eq!(resolve_sync(CloudEnv::Prod, false), Err(NoSyncReason::EnvOverride));
+            assert_eq!(
+                resolve_sync(CloudEnv::Prod, false),
+                Err(NoSyncReason::EnvOverride)
+            );
         });
     }
 
     #[test]
     fn a_blank_no_sync_env_var_does_not_disable_sync() {
         with_env(Some("nny_k"), Some(""), || {
-            assert!(resolve_sync(CloudEnv::Prod, false).is_ok(), "empty means unset, as with the key");
+            assert!(
+                resolve_sync(CloudEnv::Prod, false).is_ok(),
+                "empty means unset, as with the key"
+            );
         });
     }
 
@@ -650,18 +685,28 @@ mod tests {
 
     #[test]
     fn the_status_line_names_the_host_and_app_when_syncing() {
-        let t = SyncTarget { endpoint: CloudEnv::Prod.ingest_url(), api_key: "nny_k".into() };
+        let t = SyncTarget {
+            endpoint: CloudEnv::Prod.ingest_url(),
+            api_key: "nny_k".into(),
+        };
         let line = sync_status_line(Ok(&t), Some("gotm-nanny"));
         assert!(line.contains("managed"), "{line}");
         assert!(line.contains("https://api.nanny.run"), "{line}");
         assert!(line.contains("gotm-nanny"), "{line}");
-        assert!(!line.contains("/v1/ingest"), "show the host, not the route: {line}");
+        assert!(
+            !line.contains("/v1/ingest"),
+            "show the host, not the route: {line}"
+        );
         assert!(!line.contains("nny_k"), "never print the key: {line}");
     }
 
     #[test]
     fn every_not_syncing_reason_says_why_and_reassures() {
-        for reason in [NoSyncReason::Flag, NoSyncReason::EnvOverride, NoSyncReason::NoApiKey] {
+        for reason in [
+            NoSyncReason::Flag,
+            NoSyncReason::EnvOverride,
+            NoSyncReason::NoApiKey,
+        ] {
             let line = sync_status_line(Err(reason), None);
             assert!(line.contains("not syncing"), "{reason:?}: {line}");
             assert!(line.contains("Enforcing locally"), "{reason:?}: {line}");
@@ -694,7 +739,9 @@ mod tests {
                         if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
                             header_end = Some(pos + 4);
                             for line in String::from_utf8_lossy(&buf[..pos]).lines() {
-                                if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                                if let Some(v) =
+                                    line.to_ascii_lowercase().strip_prefix("content-length:")
+                                {
                                     content_length = v.trim().parse().unwrap_or(0);
                                 }
                             }
@@ -706,7 +753,9 @@ mod tests {
                         }
                     }
                 }
-                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                let _ = stream.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
                 let _ = tx.send(String::from_utf8_lossy(&buf).to_string());
             }
         });
@@ -724,8 +773,10 @@ mod tests {
                 let mut tmp = [0u8; 2048];
                 let _ = stream.read(&mut tmp);
                 let _ = stream.write_all(
-                    format!("HTTP/1.1 {status} X\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-                        .as_bytes(),
+                    format!(
+                        "HTTP/1.1 {status} X\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    )
+                    .as_bytes(),
                 );
                 let _ = stream.flush();
             }
@@ -743,7 +794,11 @@ mod tests {
     }
 
     fn spooled_files(dir: &Path) -> Vec<PathBuf> {
-        Spool::new(dir).entries().into_iter().map(|(p, _)| p).collect()
+        Spool::new(dir)
+            .entries()
+            .into_iter()
+            .map(|(p, _)| p)
+            .collect()
     }
 
     #[test]
@@ -751,16 +806,28 @@ mod tests {
         let (port, rx) = mock_ingest_server();
         let dir = temp_app_dir();
         let endpoint = format!("http://127.0.0.1:{port}/v1/ingest");
-        let sender = CloudSync::start(endpoint, "nny_test".to_string(), "session-abc", &dir).expect("sender starts");
+        let sender = CloudSync::start(endpoint, "nny_test".to_string(), "session-abc", &dir)
+            .expect("sender starts");
         sender.enqueue(r#"{"event":"ExecutionStarted"}"#.to_string());
         sender.enqueue(r#"{"event":"ExecutionStopped"}"#.to_string());
         sender.flush_and_join();
 
-        let req = rx.recv_timeout(Duration::from_secs(5)).expect("server received a request");
+        let req = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("server received a request");
         let lower = req.to_ascii_lowercase();
-        assert!(lower.contains("post /v1/ingest"), "wrong path/method:\n{req}");
-        assert!(lower.contains("x-nanny-key: nny_test"), "missing X-Nanny-Key:\n{req}");
-        assert!(lower.contains("x-nanny-session: session-abc"), "missing X-Nanny-Session:\n{req}");
+        assert!(
+            lower.contains("post /v1/ingest"),
+            "wrong path/method:\n{req}"
+        );
+        assert!(
+            lower.contains("x-nanny-key: nny_test"),
+            "missing X-Nanny-Key:\n{req}"
+        );
+        assert!(
+            lower.contains("x-nanny-session: session-abc"),
+            "missing X-Nanny-Session:\n{req}"
+        );
         assert!(req.contains(r#"{"event":"ExecutionStarted"}"#));
         assert!(req.contains(r#"{"event":"ExecutionStopped"}"#));
     }
@@ -768,9 +835,13 @@ mod tests {
     #[test]
     fn unreachable_endpoint_never_panics_or_hangs() {
         let dir = temp_app_dir();
-        let sender =
-            CloudSync::start("http://127.0.0.1:1/v1/ingest".to_string(), "k".to_string(), "s", &dir)
-                .expect("sender starts");
+        let sender = CloudSync::start(
+            "http://127.0.0.1:1/v1/ingest".to_string(),
+            "k".to_string(),
+            "s",
+            &dir,
+        )
+        .expect("sender starts");
         sender.enqueue(r#"{"event":"ToolAllowed"}"#.to_string());
         sender.flush_and_join(); // returns (bounded by connect timeout + backoff)
     }
@@ -783,23 +854,42 @@ mod tests {
         // clear()ed and the events were gone. A cloud blip cost real history
         // out of a log whose value is being complete.
         let dir = temp_app_dir();
-        let sender =
-            CloudSync::start("http://127.0.0.1:1/v1/ingest".to_string(), "k".to_string(), "run-1", &dir)
-                .expect("sender starts");
+        let sender = CloudSync::start(
+            "http://127.0.0.1:1/v1/ingest".to_string(),
+            "k".to_string(),
+            "run-1",
+            &dir,
+        )
+        .expect("sender starts");
         sender.enqueue(r#"{"event":"ExecutionStarted"}"#.to_string());
         sender.flush_and_join();
 
         let held = spooled_files(&dir);
-        assert_eq!(held.len(), 1, "the undeliverable batch must be held, not dropped");
+        assert_eq!(
+            held.len(),
+            1,
+            "the undeliverable batch must be held, not dropped"
+        );
 
         let contents = std::fs::read_to_string(&held[0]).unwrap();
-        let (session, body) = contents.split_once('\n').expect("session on the first line");
-        assert_eq!(session, "run-1", "the session must be stored with the batch");
-        assert!(body.contains("ExecutionStarted"), "the events must be intact: {body}");
+        let (session, body) = contents
+            .split_once('\n')
+            .expect("session on the first line");
+        assert_eq!(
+            session, "run-1",
+            "the session must be stored with the batch"
+        );
+        assert!(
+            body.contains("ExecutionStarted"),
+            "the events must be intact: {body}"
+        );
 
         // Held batches are event data: on disk, never in git.
         let gitignore = std::fs::read_to_string(dir.join(".gitignore")).unwrap_or_default();
-        assert!(gitignore.contains(".nanny/spool/"), "the outbox must be gitignored: {gitignore:?}");
+        assert!(
+            gitignore.contains(".nanny/spool/"),
+            "the outbox must be gitignored: {gitignore:?}"
+        );
     }
 
     #[test]
@@ -824,12 +914,18 @@ mod tests {
         );
 
         assert_eq!(delivered, 1);
-        let req = rx_srv.recv_timeout(Duration::from_secs(5)).expect("server received it");
+        let req = rx_srv
+            .recv_timeout(Duration::from_secs(5))
+            .expect("server received it");
         assert!(
-            req.to_ascii_lowercase().contains("x-nanny-session: original-session"),
+            req.to_ascii_lowercase()
+                .contains("x-nanny-session: original-session"),
             "a replayed batch must carry the session that produced it:\n{req}"
         );
-        assert!(spooled_files(&dir).is_empty(), "a delivered batch must be removed");
+        assert!(
+            spooled_files(&dir).is_empty(),
+            "a delivered batch must be removed"
+        );
     }
 
     #[test]
@@ -847,7 +943,11 @@ mod tests {
         let delivered = Spool::new(&dir).drain(&client, "http://127.0.0.1:1/v1/ingest", "k");
 
         assert_eq!(delivered, 0);
-        assert_eq!(spooled_files(&dir).len(), 1, "an undelivered batch must be kept");
+        assert_eq!(
+            spooled_files(&dir).len(),
+            1,
+            "an undelivered batch must be kept"
+        );
     }
 
     #[test]
@@ -863,7 +963,10 @@ mod tests {
         let files = spooled_files(&dir);
         assert_eq!(files.len(), 2);
         let first = std::fs::read_to_string(&files[0]).unwrap();
-        assert!(first.contains(r#"{"n":1}"#), "oldest batch must sort first: {first}");
+        assert!(
+            first.contains(r#"{"n":1}"#),
+            "oldest batch must sort first: {first}"
+        );
     }
 
     #[test]
@@ -881,7 +984,10 @@ mod tests {
             .unwrap();
         Spool::new(&dir).drain(&client, &format!("http://127.0.0.1:{port}/v1/ingest"), "k");
 
-        assert!(spooled_files(&dir).is_empty(), "a permanently refused batch must be discarded");
+        assert!(
+            spooled_files(&dir).is_empty(),
+            "a permanently refused batch must be discarded"
+        );
     }
 
     #[test]
@@ -898,7 +1004,11 @@ mod tests {
             "s",
             r#"{"event":"X"}"#,
         );
-        assert_eq!(outcome, Delivery::Retryable, "5xx must be retried, not discarded");
+        assert_eq!(
+            outcome,
+            Delivery::Retryable,
+            "5xx must be retried, not discarded"
+        );
     }
 
     #[test]
@@ -935,9 +1045,17 @@ mod tests {
         .expect("sender starts");
         sender.flush_and_join();
 
-        let req = rx_srv.recv_timeout(Duration::from_secs(5)).expect("backfill was sent");
-        assert!(req.contains("FromEarlierRun"), "the held batch must go first:\n{req}");
-        assert!(spooled_files(&dir).is_empty(), "the outbox must be empty afterwards");
+        let req = rx_srv
+            .recv_timeout(Duration::from_secs(5))
+            .expect("backfill was sent");
+        assert!(
+            req.contains("FromEarlierRun"),
+            "the held batch must go first:\n{req}"
+        );
+        assert!(
+            spooled_files(&dir).is_empty(),
+            "the outbox must be empty afterwards"
+        );
     }
 
     #[test]
@@ -952,13 +1070,19 @@ mod tests {
             "srvsecret".to_string(),
             &dir,
         );
-        tx.send(("run_abc".to_string(), vec![r#"{"e":"X"}"#.to_string()])).unwrap();
+        tx.send(("run_abc".to_string(), vec![r#"{"e":"X"}"#.to_string()]))
+            .unwrap();
         drop(tx);
 
-        let req = rx_srv.recv_timeout(Duration::from_secs(5)).expect("server received a request");
+        let req = rx_srv
+            .recv_timeout(Duration::from_secs(5))
+            .expect("server received a request");
         let lower = req.to_ascii_lowercase();
         assert!(lower.contains("post /v1/ingest"), "wrong path:\n{req}");
-        assert!(lower.contains("x-nanny-key: nny_k"), "missing X-Nanny-Key:\n{req}");
+        assert!(
+            lower.contains("x-nanny-key: nny_k"),
+            "missing X-Nanny-Key:\n{req}"
+        );
         assert!(
             lower.contains("x-nanny-session: srvsecret:run_abc"),
             "the per-run session must fold in the server secret:\n{req}"

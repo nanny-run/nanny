@@ -120,7 +120,6 @@ impl PolicyContext {
     }
 }
 
-
 // ── PolicyDecision ────────────────────────────────────────────────────────────
 
 /// What the policy engine decides.
@@ -163,7 +162,10 @@ mod tests {
             vec!["external_effect".to_string(), "moves_money".to_string()],
         );
         tool_labels.insert("save_findings".to_string(), Vec::new());
-        PolicyContext { tool_labels, ..Default::default() }
+        PolicyContext {
+            tool_labels,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -210,7 +212,10 @@ mod tests {
         ctx.tool_labels
             .insert("charge_card".to_string(), vec!["moves_money".to_string()]);
 
-        assert_eq!(ctx.tools_with("moves_money"), vec!["charge_card", "send_outreach"]);
+        assert_eq!(
+            ctx.tools_with("moves_money"),
+            vec!["charge_card", "send_outreach"]
+        );
     }
 
     /// Sorted, not HashMap order, so a rule built on it behaves identically
@@ -221,7 +226,10 @@ mod tests {
         for name in ["zeta", "alpha", "mid"] {
             tool_labels.insert(name.to_string(), vec!["destructive".to_string()]);
         }
-        let ctx = PolicyContext { tool_labels, ..Default::default() };
+        let ctx = PolicyContext {
+            tool_labels,
+            ..Default::default()
+        };
 
         assert_eq!(ctx.tools_with("destructive"), vec!["alpha", "mid", "zeta"]);
     }

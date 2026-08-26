@@ -76,7 +76,10 @@ fn config_arg(dir: &Path) -> String {
 /// to write nanny.toml, tests that need an app id but already have their own
 /// nanny.toml call this instead). Returns the id.
 fn write_app_identity(dir: &Path) -> String {
-    let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
     let id = format!("app_test_{ts}_{seq}");
     let dot_nanny = dir.join(".nanny");
@@ -132,7 +135,8 @@ fn wait_for_file(path: &Path, attempts: u32) -> bool {
 fn wait_for_port(port: u16, attempts: u32) -> bool {
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     for _ in 0..attempts {
-        if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(200)).is_ok()
+        if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(200))
+            .is_ok()
         {
             return true;
         }
@@ -165,9 +169,18 @@ fn fast_exit_completes_cleanly() {
 
     // stdout must contain ExecutionStarted and ExecutionStopped NDJSON lines.
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("ExecutionStarted"), "stdout must have ExecutionStarted event");
-    assert!(stdout.contains("ExecutionStopped"), "stdout must have ExecutionStopped event");
-    assert!(stdout.contains("AgentCompleted"), "stop reason must be AgentCompleted");
+    assert!(
+        stdout.contains("ExecutionStarted"),
+        "stdout must have ExecutionStarted event"
+    );
+    assert!(
+        stdout.contains("ExecutionStopped"),
+        "stdout must have ExecutionStopped event"
+    );
+    assert!(
+        stdout.contains("AgentCompleted"),
+        "stop reason must be AgentCompleted"
+    );
 }
 
 /// Bridge events (ToolAllowed, RuleDenied, ToolDenied, …) are flushed into the NDJSON
@@ -189,11 +202,15 @@ fn execution_stopped_is_always_last_line() {
     let _ = fs::remove_dir_all(&dir);
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let lines: Vec<&str> = stdout.lines()
+    let lines: Vec<&str> = stdout
+        .lines()
         .filter(|l| l.trim_start().starts_with('{'))
         .collect();
 
-    assert!(!lines.is_empty(), "stdout must contain at least one NDJSON line");
+    assert!(
+        !lines.is_empty(),
+        "stdout must contain at least one NDJSON line"
+    );
 
     // Every line must be valid JSON.
     for line in &lines {
@@ -321,8 +338,8 @@ log = "stdout"
 
 #[test]
 fn server_start_nonloopback_without_certs_exits_with_message() {
-    let dir   = temp_dir();
-    let home  = temp_dir(); // override HOME so no ~/.nanny/certs/ exists
+    let dir = temp_dir();
+    let home = temp_dir(); // override HOME so no ~/.nanny/certs/ exists
 
     // Write a minimal nanny.toml so the config load succeeds, plus an app
     // identity, `--serve` requires one to key its state.
@@ -355,7 +372,9 @@ log = "stdout"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("mTLS") || stderr.contains("certs generate") || stderr.contains("not found"),
+        stderr.contains("mTLS")
+            || stderr.contains("certs generate")
+            || stderr.contains("not found"),
         "stderr must mention cert requirement; got: {stderr}"
     );
 }
@@ -381,7 +400,7 @@ log = "stdout"
 
 #[test]
 fn server_start_loopback_does_not_require_cert_files() {
-    let dir  = temp_dir();
+    let dir = temp_dir();
     let home = temp_dir(); // fresh NANNY_HOME — no certs directory
 
     fs::write(
@@ -429,7 +448,7 @@ log = "stdout"
 
 #[test]
 fn nanny_run_joins_explicit_server_and_prints_message() {
-    let dir  = temp_dir();
+    let dir = temp_dir();
     let home = temp_dir();
 
     // Write nanny.toml for the joining client, deliberately different from
@@ -464,7 +483,12 @@ log = "stdout"
     let mut server = Command::new(nanny_bin())
         .current_dir(&server_toml_dir)
         .env("NANNY_HOME", &home)
-        .args(["run", "--serve", "--addr", &format!("127.0.0.1:{server_port}")])
+        .args([
+            "run",
+            "--serve",
+            "--addr",
+            &format!("127.0.0.1:{server_port}"),
+        ])
         .spawn()
         .expect("governance server must spawn");
 
@@ -476,7 +500,12 @@ log = "stdout"
     let output = Command::new(nanny_bin())
         .current_dir(&dir)
         .env("NANNY_HOME", &home)
-        .args(["--config", &config_arg(&dir), "run", &format!("--join={app_id}")])
+        .args([
+            "--config",
+            &config_arg(&dir),
+            "run",
+            &format!("--join={app_id}"),
+        ])
         .output()
         .expect("nanny run --join must complete");
 
@@ -538,13 +567,21 @@ cmd = "echo joined-work"
     )
     .unwrap();
     let joiner_id = write_app_identity(&client_dir);
-    assert_ne!(governor_id, joiner_id, "the two apps must be distinct for this test to mean anything");
+    assert_ne!(
+        governor_id, joiner_id,
+        "the two apps must be distinct for this test to mean anything"
+    );
 
     let server_port = free_port();
     let mut server = Command::new(nanny_bin())
         .current_dir(&server_dir)
         .env("NANNY_HOME", &home)
-        .args(["run", "--serve", "--addr", &format!("127.0.0.1:{server_port}")])
+        .args([
+            "run",
+            "--serve",
+            "--addr",
+            &format!("127.0.0.1:{server_port}"),
+        ])
         .spawn()
         .expect("governance server must spawn");
 
@@ -554,7 +591,12 @@ cmd = "echo joined-work"
     let output = Command::new(nanny_bin())
         .current_dir(&client_dir)
         .env("NANNY_HOME", &home)
-        .args(["--config", &config_arg(&client_dir), "run", &format!("--join={governor_id}")])
+        .args([
+            "--config",
+            &config_arg(&client_dir),
+            "run",
+            &format!("--join={governor_id}"),
+        ])
         .output()
         .expect("nanny run --join must complete");
 
@@ -603,7 +645,7 @@ cmd = "echo joined-work"
 
 #[test]
 fn join_to_unreachable_server_fails_loudly() {
-    let dir  = temp_dir();
+    let dir = temp_dir();
     let home = temp_dir();
 
     fs::write(
@@ -628,7 +670,12 @@ log = "stdout"
     let output = Command::new(nanny_bin())
         .current_dir(&dir)
         .env("NANNY_HOME", &home)
-        .args(["--config", &config_arg(&dir), "run", &format!("--join={app_id}")])
+        .args([
+            "--config",
+            &config_arg(&dir),
+            "run",
+            &format!("--join={app_id}"),
+        ])
         .output()
         .expect("nanny run --join must complete");
 
@@ -664,6 +711,13 @@ fn serve_runs_the_start_command_and_remains_joinable() {
     // The app touches a marker before sleeping, so the test can wait for the
     // app itself rather than for the governor's socket.
     let app_marker = server_dir.join("app-started");
+    // `sh -c "..."` is itself embedded in a TOML double-quoted string, so the
+    // marker path must survive both TOML and shell escaping. Windows paths
+    // contain backslashes, which TOML treats as escape characters (e.g. `\U`
+    // is a unicode escape) and would corrupt the file. Forward slashes are
+    // accepted as path separators on Windows too, so normalize to those
+    // instead of escaping backslashes twice over.
+    let app_marker_display = app_marker.display().to_string().replace('\\', "/");
     fs::write(
         server_dir.join("nanny.toml"),
         format!(
@@ -673,7 +727,7 @@ cmd = "sh -c \"echo SERVE-RAN-THE-APP; touch {}; sleep 5\""
 [observability]
 log = "file"
 "#,
-            app_marker.display()
+            app_marker_display
         ),
     )
     .unwrap();
@@ -683,7 +737,12 @@ log = "file"
     let mut server = Command::new(nanny_bin())
         .current_dir(&server_dir)
         .env("NANNY_HOME", &home)
-        .args(["run", "--serve", "--addr", &format!("127.0.0.1:{server_port}")])
+        .args([
+            "run",
+            "--serve",
+            "--addr",
+            &format!("127.0.0.1:{server_port}"),
+        ])
         .stdout(std::process::Stdio::piped())
         .spawn()
         .expect("governor must spawn");
@@ -716,7 +775,12 @@ cmd = "echo JOINED-WHILE-SERVING"
     let joined = Command::new(nanny_bin())
         .current_dir(&client_dir)
         .env("NANNY_HOME", &home)
-        .args(["--config", &config_arg(&client_dir), "run", &format!("--join={governor_id}")])
+        .args([
+            "--config",
+            &config_arg(&client_dir),
+            "run",
+            &format!("--join={governor_id}"),
+        ])
         .output()
         .expect("join must complete");
 
@@ -756,18 +820,19 @@ cmd = "echo JOINED-WHILE-SERVING"
 fn serve_without_a_start_section_stays_headless() {
     let home = temp_dir();
     let server_dir = temp_dir();
-    fs::write(
-        server_dir.join("nanny.toml"),
-        r#""#,
-    )
-    .unwrap();
+    fs::write(server_dir.join("nanny.toml"), r#""#).unwrap();
     write_app_identity(&server_dir);
 
     let server_port = free_port();
     let mut server = Command::new(nanny_bin())
         .current_dir(&server_dir)
         .env("NANNY_HOME", &home)
-        .args(["run", "--serve", "--addr", &format!("127.0.0.1:{server_port}")])
+        .args([
+            "run",
+            "--serve",
+            "--addr",
+            &format!("127.0.0.1:{server_port}"),
+        ])
         .stdout(std::process::Stdio::piped())
         .spawn()
         .expect("governor must spawn");
@@ -821,24 +886,37 @@ fn two_runs_sharing_one_log_stay_attributable() {
         .map(|l| serde_json::from_str(l).expect("every line is JSON"))
         .collect();
 
-    assert!(lines.len() >= 4, "two runs produce at least two bookends each");
+    assert!(
+        lines.len() >= 4,
+        "two runs produce at least two bookends each"
+    );
 
     let mut runs: std::collections::BTreeMap<String, Vec<u64>> = Default::default();
     for line in &lines {
-        let run_id = line["run_id"].as_str().expect("every line carries a run id");
+        let run_id = line["run_id"]
+            .as_str()
+            .expect("every line carries a run id");
         assert!(!run_id.is_empty(), "run id must not be blank");
         runs.entry(run_id.to_string())
             .or_default()
             .push(line["seq"].as_u64().expect("every line carries a seq"));
     }
 
-    assert_eq!(runs.len(), 2, "two invocations are two runs, not one stream");
+    assert_eq!(
+        runs.len(),
+        2,
+        "two invocations are two runs, not one stream"
+    );
 
     for (run_id, seqs) in runs {
         let mut sorted = seqs.clone();
         sorted.sort_unstable();
         sorted.dedup();
-        assert_eq!(sorted.len(), seqs.len(), "run {run_id} must not reuse a seq");
+        assert_eq!(
+            sorted.len(),
+            seqs.len(),
+            "run {run_id} must not reuse a seq"
+        );
         assert_eq!(sorted[0], 0, "run {run_id} must start at seq 0");
     }
 }
@@ -898,7 +976,12 @@ fn execution_started_carries_a_stable_config_hash() {
         .filter(|l| !l.trim().is_empty())
         .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
         .filter(|v| v["event"] == "ExecutionStarted")
-        .map(|v| v["config_hash"].as_str().expect("a hash is always present").to_string())
+        .map(|v| {
+            v["config_hash"]
+                .as_str()
+                .expect("a hash is always present")
+                .to_string()
+        })
         .collect();
 
     assert_eq!(hashes.len(), 2, "each run bookends with its own grant");
@@ -1016,9 +1099,16 @@ log = "stdout"
         .output()
         .expect("nanny run must execute");
 
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("nanny:recommended@1.0.0"), "the run must name its packs");
+    assert!(
+        stdout.contains("nanny:recommended@1.0.0"),
+        "the run must name its packs"
+    );
 }
 
 /// `nanny rules add` vendors the pack and declares it, and never touches source.
@@ -1038,14 +1128,28 @@ fn rules_add_vendors_the_pack_and_declares_it() {
         "name = \"nanny:owasp\"\nversion = \"2.1.0\"\nrules = [\"no_send_after_read\"]\n",
     )
     .unwrap();
-    fs::write(src.join("rules.py"), "def no_send_after_read(ctx): return True\n").unwrap();
+    fs::write(
+        src.join("rules.py"),
+        "def no_send_after_read(ctx): return True\n",
+    )
+    .unwrap();
 
     let out = Command::new(nanny_bin())
-        .args(["rules", "add", "nanny:owasp@2.1.0", "--from", &src.to_string_lossy()])
+        .args([
+            "rules",
+            "add",
+            "nanny:owasp@2.1.0",
+            "--from",
+            &src.to_string_lossy(),
+        ])
         .current_dir(&dir)
         .output()
         .expect("nanny rules add must execute");
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     // Vendored, so the same controls run on every machine.
     assert!(dir.join(".nanny/rules/nanny-owasp@2.1.0/rules.py").exists());
@@ -1053,10 +1157,16 @@ fn rules_add_vendors_the_pack_and_declares_it() {
     // Declared, pinned, and the operator's comment survives.
     let toml = fs::read_to_string(dir.join("nanny.toml")).unwrap();
     assert!(toml.contains("nanny:owasp@2.1.0"), "got: {toml}");
-    assert!(toml.contains("# governs the outreach agent"), "comments must survive");
+    assert!(
+        toml.contains("# governs the outreach agent"),
+        "comments must survive"
+    );
 
     // Source untouched: an installed rule is never pasted into user code.
-    assert_eq!(fs::read_to_string(dir.join("agent.py")).unwrap(), "# untouched\n");
+    assert_eq!(
+        fs::read_to_string(dir.join("agent.py")).unwrap(),
+        "# untouched\n"
+    );
 
     // The run now starts, because the declared pack is present.
     let run = Command::new(nanny_bin())
@@ -1064,7 +1174,11 @@ fn rules_add_vendors_the_pack_and_declares_it() {
         .current_dir(&dir)
         .output()
         .unwrap();
-    assert!(run.status.success(), "stderr: {}", String::from_utf8_lossy(&run.stderr));
+    assert!(
+        run.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
 
     // And removing it undeclares it again.
     let rm = Command::new(nanny_bin())
@@ -1073,14 +1187,20 @@ fn rules_add_vendors_the_pack_and_declares_it() {
         .output()
         .unwrap();
     assert!(rm.status.success());
-    assert!(!fs::read_to_string(dir.join("nanny.toml")).unwrap().contains("nanny:owasp@2.1.0"));
+    assert!(!fs::read_to_string(dir.join("nanny.toml"))
+        .unwrap()
+        .contains("nanny:owasp@2.1.0"));
 }
 
 /// A pack whose contents do not match its declared digest is refused.
 #[test]
 fn rules_add_refuses_a_tampered_pack() {
     let dir = temp_dir();
-    fs::write(dir.join("nanny.toml"), "[start]\ncmd = \"echo hi\"\n\n[tools]\nallowed = []\n").unwrap();
+    fs::write(
+        dir.join("nanny.toml"),
+        "[start]\ncmd = \"echo hi\"\n\n[tools]\nallowed = []\n",
+    )
+    .unwrap();
 
     let src = temp_dir();
     fs::write(src.join("rules.py"), "def r(ctx): return True\n").unwrap();
@@ -1091,7 +1211,13 @@ fn rules_add_refuses_a_tampered_pack() {
     .unwrap();
 
     let out = Command::new(nanny_bin())
-        .args(["rules", "add", "acme:pack@1.0.0", "--from", &src.to_string_lossy()])
+        .args([
+            "rules",
+            "add",
+            "acme:pack@1.0.0",
+            "--from",
+            &src.to_string_lossy(),
+        ])
         .current_dir(&dir)
         .output()
         .unwrap();
@@ -1099,5 +1225,8 @@ fn rules_add_refuses_a_tampered_pack() {
     assert!(!out.status.success(), "a tampered pack must not install");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("failed integrity check"), "got: {stderr}");
-    assert!(!dir.join(".nanny/rules").exists(), "nothing may be written on failure");
+    assert!(
+        !dir.join(".nanny/rules").exists(),
+        "nothing may be written on failure"
+    );
 }

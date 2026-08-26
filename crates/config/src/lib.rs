@@ -40,7 +40,11 @@ pub enum ConfigError {
         "rule pack '{name}@{version}' is declared in [rules] extends but is not \
          installed at '{path}' — run `nanny rules add {name}@{version}`"
     )]
-    RulePackMissing { name: String, version: String, path: String },
+    RulePackMissing {
+        name: String,
+        version: String,
+        path: String,
+    },
 }
 
 // ── Top-level config ──────────────────────────────────────────────────────────
@@ -208,11 +212,14 @@ impl ToolConfig {
         let set = [
             (self.reads_untrusted, "reads_untrusted"),
             (self.external_effect, "external_effect"),
-            (self.destructive,     "destructive"),
-            (self.moves_money,     "moves_money"),
+            (self.destructive, "destructive"),
+            (self.moves_money, "moves_money"),
             (self.reads_sensitive, "reads_sensitive"),
         ];
-        set.iter().filter(|(on, _)| *on).map(|(_, name)| *name).collect()
+        set.iter()
+            .filter(|(on, _)| *on)
+            .map(|(_, name)| *name)
+            .collect()
     }
 }
 
@@ -487,7 +494,6 @@ log = "stdout"
 "#
     }
 
-
     #[test]
     fn default_toml_is_valid() {
         let config: NannyConfig =
@@ -500,16 +506,23 @@ log = "stdout"
     /// rather than failing to load.
     #[test]
     fn a_config_with_only_start_is_valid() {
-        let config: NannyConfig = toml::from_str(r#"
+        let config: NannyConfig = toml::from_str(
+            r#"
 [start]
 cmd = "true"
-"#).expect("a [start]-only config must parse");
-        assert!(config.tools.allowed.is_empty(), "an undeclared allowlist denies everything");
+"#,
+        )
+        .expect("a [start]-only config must parse");
+        assert!(
+            config.tools.allowed.is_empty(),
+            "an undeclared allowlist denies everything"
+        );
     }
 
     #[test]
     fn tool_labels_are_parsed() {
-        let config: NannyConfig = toml::from_str(r#"
+        let config: NannyConfig = toml::from_str(
+            r#"
 [tools]
 allowed = ["web_search", "send_outreach"]
 
@@ -519,7 +532,9 @@ reads_untrusted = true
 [tools.send_outreach]
 external_effect = true
 moves_money     = true
-"#).expect("labelled tools must parse");
+"#,
+        )
+        .expect("labelled tools must parse");
 
         let search = &config.tools.per_tool["web_search"];
         assert_eq!(search.labels(), vec!["reads_untrusted"]);
@@ -532,13 +547,16 @@ moves_money     = true
     /// failing to parse. Silence means "not declared", never "unknown".
     #[test]
     fn unlabelled_tool_has_no_labels() {
-        let config: NannyConfig = toml::from_str(r#"
+        let config: NannyConfig = toml::from_str(
+            r#"
 [tools]
 allowed = ["http_get"]
 
 [tools.http_get]
 max_calls = 3
-"#).expect("must parse");
+"#,
+        )
+        .expect("must parse");
 
         assert!(config.tools.per_tool["http_get"].labels().is_empty());
     }
@@ -547,7 +565,8 @@ max_calls = 3
     /// log and /status stay byte-comparable across runs.
     #[test]
     fn label_order_is_fixed_not_declaration_order() {
-        let config: NannyConfig = toml::from_str(r#"
+        let config: NannyConfig = toml::from_str(
+            r#"
 [tools]
 allowed = ["t"]
 
@@ -555,7 +574,9 @@ allowed = ["t"]
 reads_sensitive = true
 moves_money     = true
 reads_untrusted = true
-"#).expect("must parse");
+"#,
+        )
+        .expect("must parse");
 
         assert_eq!(
             config.tools.per_tool["t"].labels(),
@@ -568,30 +589,29 @@ reads_untrusted = true
     /// they declared and does not have.
     #[test]
     fn a_misspelled_label_is_rejected() {
-        let result: Result<NannyConfig, _> = toml::from_str(r#"
+        let result: Result<NannyConfig, _> = toml::from_str(
+            r#"
 [tools]
 allowed = ["t"]
 
 [tools.t]
 reads_untrused = true
-"#);
-        assert!(result.is_err(), "a misspelled label must not parse silently");
+"#,
+        );
+        assert!(
+            result.is_err(),
+            "a misspelled label must not parse silently"
+        );
     }
 
     #[test]
     fn per_tool_max_calls_is_parsed() {
-        let config: NannyConfig =
-            toml::from_str(full_config_toml()).expect("fixture must parse");
+        let config: NannyConfig = toml::from_str(full_config_toml()).expect("fixture must parse");
 
         assert_eq!(config.tools.per_tool.len(), 2);
         assert_eq!(config.tools.per_tool["http_get"].max_calls, Some(10));
         assert_eq!(config.tools.per_tool["send_email"].max_calls, Some(2));
     }
-
-
-
-
-
 
     #[test]
     fn observability_defaults_to_stdout() {
@@ -610,10 +630,16 @@ reads_untrused = true
         let dir = std::env::temp_dir().join("nanny_test_resolve_default");
         let _ = std::fs::remove_dir_all(&dir);
 
-        let config = ObservabilityConfig { log: LogTarget::File, file: None };
+        let config = ObservabilityConfig {
+            log: LogTarget::File,
+            file: None,
+        };
         let path = config.resolve_log_path(&dir).unwrap().unwrap();
         assert_eq!(path, dir.join(".nanny").join("logs").join("log.ndjson"));
-        assert!(dir.join(".nanny").join("logs").is_dir(), "directory must be auto-created");
+        assert!(
+            dir.join(".nanny").join("logs").is_dir(),
+            "directory must be auto-created"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -623,7 +649,10 @@ reads_untrused = true
         let dir = std::env::temp_dir().join("nanny_test_resolve_override");
         let _ = std::fs::remove_dir_all(&dir);
 
-        let config = ObservabilityConfig { log: LogTarget::File, file: Some("events".to_string()) };
+        let config = ObservabilityConfig {
+            log: LogTarget::File,
+            file: Some("events".to_string()),
+        };
         let path = config.resolve_log_path(&dir).unwrap().unwrap();
         assert_eq!(path, dir.join(".nanny").join("logs").join("events.ndjson"));
 
@@ -633,14 +662,23 @@ reads_untrused = true
     #[test]
     fn resolve_log_path_rejects_path_separators_in_name() {
         let dir = std::env::temp_dir().join("nanny_test_resolve_reject_sep");
-        let config = ObservabilityConfig { log: LogTarget::File, file: Some("sub/dir".to_string()) };
-        assert!(config.resolve_log_path(&dir).is_err(), "a name with a separator must be rejected");
+        let config = ObservabilityConfig {
+            log: LogTarget::File,
+            file: Some("sub/dir".to_string()),
+        };
+        assert!(
+            config.resolve_log_path(&dir).is_err(),
+            "a name with a separator must be rejected"
+        );
     }
 
     #[test]
     fn resolve_log_path_rejects_an_extension_in_name() {
         let dir = std::env::temp_dir().join("nanny_test_resolve_reject_ext");
-        let config = ObservabilityConfig { log: LogTarget::File, file: Some("events.ndjson".to_string()) };
+        let config = ObservabilityConfig {
+            log: LogTarget::File,
+            file: Some("events.ndjson".to_string()),
+        };
         assert!(
             config.resolve_log_path(&dir).is_err(),
             "a name with an extension must be rejected — nanny always appends .ndjson itself"
@@ -650,7 +688,10 @@ reads_untrused = true
     #[test]
     fn resolve_log_path_is_none_for_stdout() {
         let dir = std::env::temp_dir().join("nanny_test_resolve_stdout");
-        let config = ObservabilityConfig { log: LogTarget::Stdout, file: None };
+        let config = ObservabilityConfig {
+            log: LogTarget::Stdout,
+            file: None,
+        };
         assert_eq!(config.resolve_log_path(&dir).unwrap(), None);
     }
 
@@ -689,10 +730,6 @@ cmd = "cargo run --release"
         assert_eq!(start.cmd, "python agent.py");
     }
 
-
-
-
-
     #[test]
     fn legacy_managed_section_is_ignored_but_detectable() {
         // A stale [managed] block no longer breaks parsing (serde ignores
@@ -710,7 +747,10 @@ endpoint = "https://api.nanny.run/v1"
 "#;
         let _config: NannyConfig =
             toml::from_str(contents).expect("unknown tables must not break parsing");
-        assert!(has_managed_section(contents), "the stale [managed] section must be detectable");
+        assert!(
+            has_managed_section(contents),
+            "the stale [managed] section must be detectable"
+        );
     }
 
     #[test]
@@ -718,7 +758,10 @@ endpoint = "https://api.nanny.run/v1"
         assert!(has_managed_section("[managed]\nendpoint = \"x\""));
         assert!(has_managed_section("  [managed.sub]\n"));
         assert!(!has_managed_section("[tools]\nallowed = []"));
-        assert!(!has_managed_section("# [managed] just a comment"), "a comment is not a section");
+        assert!(
+            !has_managed_section("# [managed] just a comment"),
+            "a comment is not a section"
+        );
     }
 }
 
@@ -751,10 +794,9 @@ impl NannyConfig {
     /// possible failure for a field whose entire job is saying "same policy".
     pub fn fingerprint(&self) -> String {
         use sha2::{Digest, Sha256};
-        let canonical = serde_json::to_value(self)
-            .expect("NannyConfig is plain data and always serialises");
-        let canonical = serde_json::to_string(&canonical)
-            .expect("a Value always serialises");
+        let canonical =
+            serde_json::to_value(self).expect("NannyConfig is plain data and always serialises");
+        let canonical = serde_json::to_string(&canonical).expect("a Value always serialises");
         format!("{:x}", Sha256::digest(canonical.as_bytes()))
     }
 }
@@ -828,7 +870,7 @@ max_calls       = 30
         assert_ne!(parse(BASE).fingerprint(), parse(&changed).fingerprint());
     }
 
-#[test]
+    #[test]
     fn the_fingerprint_is_stable_across_independent_parses() {
         // `per_tool` is a HashMap and std varies iteration order between
         // instances, so a naive serialisation is intermittently unstable. Many
@@ -878,10 +920,8 @@ mod rules_config_tests {
 
     #[test]
     fn a_pinned_pack_parses_into_name_and_version() {
-        let cfg: NannyConfig = toml::from_str(
-            "[rules]\nextends = [\"nanny:owasp@2.1.0\"]\n",
-        )
-        .unwrap();
+        let cfg: NannyConfig =
+            toml::from_str("[rules]\nextends = [\"nanny:owasp@2.1.0\"]\n").unwrap();
         assert_eq!(
             cfg.rules.pinned().unwrap(),
             vec![("nanny:owasp".to_string(), "2.1.0".to_string())]
@@ -892,8 +932,7 @@ mod rules_config_tests {
     fn an_unpinned_pack_is_rejected_rather_than_guessed() {
         // Resolving this to "whatever is installed" is the floating reference
         // the pinned format exists to prevent.
-        let cfg: NannyConfig =
-            toml::from_str("[rules]\nextends = [\"nanny:owasp\"]\n").unwrap();
+        let cfg: NannyConfig = toml::from_str("[rules]\nextends = [\"nanny:owasp\"]\n").unwrap();
         assert!(matches!(
             cfg.rules.pinned(),
             Err(ConfigError::UnpinnedRulePack(_))

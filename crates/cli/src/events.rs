@@ -30,7 +30,9 @@ impl EventWriter {
     ///          it doesn't exist. See `ObservabilityConfig::resolve_log_path`.
     pub fn from_config(config: &ObservabilityConfig, base_dir: &Path) -> Result<Self> {
         match config.resolve_log_path(base_dir)? {
-            None => Ok(Self { out: Box::new(io::stdout()) }),
+            None => Ok(Self {
+                out: Box::new(io::stdout()),
+            }),
             Some(path) => Self::file(&path),
         }
     }
@@ -41,7 +43,9 @@ impl EventWriter {
             .append(true)
             .open(path)
             .with_context(|| format!("failed to open log file '{}'", path.display()))?;
-        Ok(Self { out: Box::new(BufWriter::new(file)) })
+        Ok(Self {
+            out: Box::new(BufWriter::new(file)),
+        })
     }
 
     /// Write one event as a single line of JSON, flushed immediately.
@@ -121,16 +125,16 @@ mod tests {
 
     #[test]
     fn both_event_types_serialize_with_event_field() {
-        let events = [
-            started_event(),
-            stopped_event("AgentCompleted", 0, 0),
-        ];
+        let events = [started_event(), stopped_event("AgentCompleted", 0, 0)];
         let names = ["ExecutionStarted", "ExecutionStopped"];
 
         for (event, expected_name) in events.iter().zip(names.iter()) {
             let json = serde_json::to_string(event).unwrap();
             let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-            assert_eq!(v["event"], *expected_name, "wrong event name for {expected_name}");
+            assert_eq!(
+                v["event"], *expected_name,
+                "wrong event name for {expected_name}"
+            );
         }
     }
 
@@ -143,9 +147,13 @@ mod tests {
                 fn write(&mut self, data: &[u8]) -> io::Result<usize> {
                     self.0.lock().unwrap().write(data)
                 }
-                fn flush(&mut self) -> io::Result<()> { Ok(()) }
+                fn flush(&mut self) -> io::Result<()> {
+                    Ok(())
+                }
             }
-            let mut writer = EventWriter { out: Box::new(ArcWriter(buf_clone)) };
+            let mut writer = EventWriter {
+                out: Box::new(ArcWriter(buf_clone)),
+            };
             for (seq, event) in events.into_iter().enumerate() {
                 writer.write("test-run", seq as u64, &event).unwrap();
             }
@@ -156,10 +164,7 @@ mod tests {
 
     #[test]
     fn event_writer_produces_ndjson_lines() {
-        let output = write_to_buf([
-            started_event(),
-            stopped_event("AgentCompleted", 0, 100),
-        ]);
+        let output = write_to_buf([started_event(), stopped_event("AgentCompleted", 0, 100)]);
 
         let lines: Vec<&str> = output.lines().collect();
         for line in &lines {
@@ -171,10 +176,7 @@ mod tests {
 
     #[test]
     fn execution_started_is_first_line() {
-        let output = write_to_buf([
-            started_event(),
-            stopped_event("AgentCompleted", 0, 0),
-        ]);
+        let output = write_to_buf([started_event(), stopped_event("AgentCompleted", 0, 0)]);
         let first: serde_json::Value =
             serde_json::from_str(output.lines().next().unwrap()).unwrap();
         assert_eq!(first["event"], "ExecutionStarted");
@@ -182,12 +184,8 @@ mod tests {
 
     #[test]
     fn execution_stopped_is_last_line() {
-        let output = write_to_buf([
-            started_event(),
-            stopped_event("RuleDenied", 0, 200),
-        ]);
-        let last: serde_json::Value =
-            serde_json::from_str(output.lines().last().unwrap()).unwrap();
+        let output = write_to_buf([started_event(), stopped_event("RuleDenied", 0, 200)]);
+        let last: serde_json::Value = serde_json::from_str(output.lines().last().unwrap()).unwrap();
         assert_eq!(last["event"], "ExecutionStopped");
     }
 
@@ -200,7 +198,9 @@ mod tests {
         {
             let mut writer = EventWriter::file(&path).unwrap();
             writer.write("test-run", 0, &started_event()).unwrap();
-            writer.write("test-run", 1, &stopped_event("AgentCompleted", 0, 50)).unwrap();
+            writer
+                .write("test-run", 1, &stopped_event("AgentCompleted", 0, 50))
+                .unwrap();
         }
 
         let content = std::fs::read_to_string(&path).unwrap();

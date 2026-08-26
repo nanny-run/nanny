@@ -49,9 +49,11 @@ fn nanny_home_dir() -> Result<PathBuf> {
 /// Path to ~/.nanny/servers/<app_id>, created on demand. Public so `main.rs`
 /// can resolve the same path for `nanny run --join=<appId>`.
 pub fn nanny_server_state_dir(app_id: &str) -> Result<PathBuf> {
-    let dir = nanny_home_dir()?.join(".nanny").join("servers").join(app_id);
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("failed to create {}", dir.display()))?;
+    let dir = nanny_home_dir()?
+        .join(".nanny")
+        .join("servers")
+        .join(app_id);
+    std::fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
     Ok(dir)
 }
 
@@ -105,13 +107,17 @@ pub fn cmd_server_start(
     // Resolve cert paths: use CLI args, else fall back to ~/.nanny/certs/.
     let certs_dir = default_certs_dir();
     let cert_path = cert.unwrap_or_else(|| certs_dir.join("server.crt"));
-    let key_path  = key.unwrap_or_else(|| certs_dir.join("server.key"));
-    let ca_path   = ca.unwrap_or_else(|| certs_dir.join("ca.crt"));
+    let key_path = key.unwrap_or_else(|| certs_dir.join("server.key"));
+    let ca_path = ca.unwrap_or_else(|| certs_dir.join("ca.crt"));
 
     // Cert files are required only for non-loopback addresses (mTLS mandatory).
     // Loopback binds use plain HTTP — OS-enforced, no TLS overhead.
     if !addr.ip().is_loopback() {
-        for (label, path) in [("server cert", &cert_path), ("server key", &key_path), ("CA cert", &ca_path)] {
+        for (label, path) in [
+            ("server cert", &cert_path),
+            ("server key", &key_path),
+            ("CA cert", &ca_path),
+        ] {
             if !path.exists() {
                 anyhow::bail!(
                     "{label} not found: {}\n\
@@ -143,7 +149,10 @@ pub fn cmd_server_start(
     // is the worst version of the failure v0.5.0 shipped.
     let session_token = uuid::Uuid::new_v4().to_string();
     let target = crate::sync::resolve_sync(env, no_sync);
-    println!("{}", crate::sync::sync_status_line(target.as_ref().map_err(|e| *e), Some(&app.name)));
+    println!(
+        "{}",
+        crate::sync::sync_status_line(target.as_ref().map_err(|e| *e), Some(&app.name))
+    );
 
     // Record where this governor forwards (or that it doesn't), so `nanny
     // status` can answer "is my fleet actually reporting?" without guessing.
@@ -152,11 +161,19 @@ pub fn cmd_server_start(
     // question later needs an answer that outlives that line. Never the key,
     // only the host.
     let sync_state = match &target {
-        Ok(t) => t.endpoint.strip_suffix("/v1/ingest").unwrap_or(&t.endpoint).to_string(),
+        Ok(t) => t
+            .endpoint
+            .strip_suffix("/v1/ingest")
+            .unwrap_or(&t.endpoint)
+            .to_string(),
         Err(_) => "off".to_string(),
     };
-    std::fs::write(state_dir.join("server.sync"), &sync_state)
-        .with_context(|| format!("failed to write {}", state_dir.join("server.sync").display()))?;
+    std::fs::write(state_dir.join("server.sync"), &sync_state).with_context(|| {
+        format!(
+            "failed to write {}",
+            state_dir.join("server.sync").display()
+        )
+    })?;
 
     let event_sink = target.ok().map(|target| {
         let (tx, rx) = std::sync::mpsc::channel();
@@ -278,7 +295,10 @@ pub fn cmd_server_stop(app: Option<String>) -> Result<()> {
     })?;
 
     let pid: u32 = raw.trim().parse().with_context(|| {
-        format!("corrupted PID file at {} — expected an integer", pid_file.display())
+        format!(
+            "corrupted PID file at {} — expected an integer",
+            pid_file.display()
+        )
     })?;
 
     #[cfg(unix)]
@@ -424,7 +444,11 @@ fn run_governor_with_app(setup: GovernorSetup, command: Vec<String>, app_id: &st
 
     // If the governor died during startup, surface its error rather than a
     // confusing "can't reach the server" from the child.
-    if let Some(e) = governor_result.lock().unwrap_or_else(|e| e.into_inner()).take() {
+    if let Some(e) = governor_result
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+    {
         return Err(e);
     }
 
@@ -434,9 +458,9 @@ fn run_governor_with_app(setup: GovernorSetup, command: Vec<String>, app_id: &st
     println!("nanny: running [start] under this governor");
     println!();
 
-    let mut child = cmd.spawn().with_context(|| {
-        format!("failed to spawn '{}'", cmd.get_program().to_string_lossy())
-    })?;
+    let mut child = cmd
+        .spawn()
+        .with_context(|| format!("failed to spawn '{}'", cmd.get_program().to_string_lossy()))?;
 
     // From here on, a Ctrl-C/SIGTERM lands the signal handler installed above
     // on an actual PID to kill, not a no-op.
@@ -501,12 +525,7 @@ fn force_kill_pid(pid: u32) {
 /// from any of the six is exactly what makes the next `nanny run --serve`
 /// report "has server state but isn't reachable".
 fn remove_discovery_files(state_dir: &Path) {
-    for name in [
-        "server.pid",
-        "server.addr",
-        "server.token",
-        "server.sync",
-    ] {
+    for name in ["server.pid", "server.addr", "server.token", "server.sync"] {
         let _ = std::fs::remove_file(state_dir.join(name));
     }
 }
@@ -603,14 +622,20 @@ mod tests {
     fn different_app_ids_get_different_state_dirs() {
         let a = nanny_server_state_dir("app_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
         let b = nanny_server_state_dir("app_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap();
-        assert_ne!(a, b, "two different app ids must never resolve to the same state dir");
+        assert_ne!(
+            a, b,
+            "two different app ids must never resolve to the same state dir"
+        );
     }
 
     #[test]
     fn same_app_id_is_stable_across_calls() {
         let a1 = nanny_server_state_dir("app_cccccccccccccccccccccccccccccc").unwrap();
         let a2 = nanny_server_state_dir("app_cccccccccccccccccccccccccccccc").unwrap();
-        assert_eq!(a1, a2, "the same app id must always resolve to the same state dir");
+        assert_eq!(
+            a1, a2,
+            "the same app id must always resolve to the same state dir"
+        );
     }
 
     #[test]

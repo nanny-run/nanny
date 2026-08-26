@@ -148,14 +148,16 @@ def test_rule_ctx_bridge_fields_populated_from_status(mock_bridge: HTTPServer) -
     the fixture's permanent zeroed-counter catch-all.
     """
     captured: list[PolicyContext] = []
-    mock_bridge.expect_oneshot_request("/status", method="GET").respond_with_json({
-        "state": "running",
-        "tokens_spent": 70,
-        "elapsed_ms": 3500,
-        "tool_call_counts": {"file_reader": 7},
-        "tool_call_history": ["file_reader"] * 7,
-        "tool_labels": {"file_reader": ["reads_untrusted"]},
-    })
+    mock_bridge.expect_oneshot_request("/status", method="GET").respond_with_json(
+        {
+            "state": "running",
+            "tokens_spent": 70,
+            "elapsed_ms": 3500,
+            "tool_call_counts": {"file_reader": 7},
+            "tool_call_history": ["file_reader"] * 7,
+            "tool_labels": {"file_reader": ["reads_untrusted"]},
+        }
+    )
     mock_bridge.expect_request("/tool/call", method="POST").respond_with_json(_allow())
 
     @rule("capture")
@@ -329,8 +331,10 @@ def test_rule_deny_stop_payload_uses_decorated_function_name(mock_bridge: HTTPSe
 
     def capture_stop(request):  # type: ignore[no-untyped-def]
         import json
+
         captured_bodies.append(json.loads(request.data))
         from werkzeug.wrappers import Response
+
         return Response('{"status":"ok"}', content_type="application/json")
 
     mock_bridge.expect_oneshot_request("/stop", method="POST").respond_with_handler(capture_stop)
@@ -384,17 +388,19 @@ def test_a_label_driven_rule_denies_using_history(mock_bridge: HTTPServer) -> No
     Labels declared in nanny.toml reach a rule through /status, and a rule that
     names no tool at all still denies. Without this, labels are decoration.
     """
-    mock_bridge.expect_oneshot_request("/status", method="GET").respond_with_json({
-        "state": "running",
-        "tokens_spent": 0,
-        "elapsed_ms": 0,
-        "tool_call_counts": {"web_search": 1},
-        "tool_call_history": ["web_search"],
-        "tool_labels": {
-            "web_search": ["reads_untrusted"],
-            "send_outreach": ["external_effect"],
-        },
-    })
+    mock_bridge.expect_oneshot_request("/status", method="GET").respond_with_json(
+        {
+            "state": "running",
+            "tokens_spent": 0,
+            "elapsed_ms": 0,
+            "tool_call_counts": {"web_search": 1},
+            "tool_call_history": ["web_search"],
+            "tool_labels": {
+                "web_search": ["reads_untrusted"],
+                "send_outreach": ["external_effect"],
+            },
+        }
+    )
 
     @rule("no_external_effect_after_untrusted_read")
     def taint(ctx: PolicyContext) -> bool:
@@ -414,14 +420,16 @@ def test_a_label_driven_rule_denies_using_history(mock_bridge: HTTPServer) -> No
 
 def test_the_same_rule_allows_when_the_tools_are_unlabelled(mock_bridge: HTTPServer) -> None:
     """Proves the denial came from the labels, not from the tool names."""
-    mock_bridge.expect_oneshot_request("/status", method="GET").respond_with_json({
-        "state": "running",
-        "tokens_spent": 0,
-        "elapsed_ms": 0,
-        "tool_call_counts": {"web_search": 1},
-        "tool_call_history": ["web_search"],
-        "tool_labels": {"web_search": [], "send_outreach": []},
-    })
+    mock_bridge.expect_oneshot_request("/status", method="GET").respond_with_json(
+        {
+            "state": "running",
+            "tokens_spent": 0,
+            "elapsed_ms": 0,
+            "tool_call_counts": {"web_search": 1},
+            "tool_call_history": ["web_search"],
+            "tool_labels": {"web_search": [], "send_outreach": []},
+        }
+    )
     mock_bridge.expect_request("/tool/call", method="POST").respond_with_json(_allow())
 
     @rule("no_external_effect_after_untrusted_read_2")

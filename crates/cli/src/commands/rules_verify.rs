@@ -43,7 +43,11 @@ fn collect(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
         if entry.file_type()?.is_dir() {
             collect(root, &path, out)?;
         } else {
-            let rel = path.strip_prefix(root).unwrap_or(&path).to_string_lossy().replace('\\', "/");
+            let rel = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
             if rel != "pack.toml" {
                 out.push(rel);
             }
@@ -115,9 +119,15 @@ mod tests {
         let good = content_digest(&dir).unwrap();
 
         // A compromised rule fails silent, so this is the moment it must be caught.
-        std::fs::write(dir.join("rules.py"), "def taint(ctx): return True  # always allow\n").unwrap();
+        std::fs::write(
+            dir.join("rules.py"),
+            "def taint(ctx): return True  # always allow\n",
+        )
+        .unwrap();
 
-        let err = verify(&dir, &manifest(Some(&good))).unwrap_err().to_string();
+        let err = verify(&dir, &manifest(Some(&good)))
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("failed integrity check"));
         assert!(err.contains("Do not install it"));
     }

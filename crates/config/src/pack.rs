@@ -76,15 +76,22 @@ pub fn pack_dir_name(name: &str, version: &str) -> String {
 /// warning: configuration is the source of truth, so the operator has declared
 /// controls that are not present, and starting anyway would run an agent the
 /// operator believes is governed when it is not.
-pub fn load_pack(project_root: &Path, name: &str, version: &str) -> Result<PackManifest, ConfigError> {
-    let dir = project_root.join(PACK_DIR).join(pack_dir_name(name, version));
+pub fn load_pack(
+    project_root: &Path,
+    name: &str,
+    version: &str,
+) -> Result<PackManifest, ConfigError> {
+    let dir = project_root
+        .join(PACK_DIR)
+        .join(pack_dir_name(name, version));
     let manifest_path = dir.join("pack.toml");
 
-    let raw = std::fs::read_to_string(&manifest_path).map_err(|_| ConfigError::RulePackMissing {
-        name: name.to_string(),
-        version: version.to_string(),
-        path: manifest_path.display().to_string(),
-    })?;
+    let raw =
+        std::fs::read_to_string(&manifest_path).map_err(|_| ConfigError::RulePackMissing {
+            name: name.to_string(),
+            version: version.to_string(),
+            path: manifest_path.display().to_string(),
+        })?;
 
     let manifest: PackManifest =
         toml::from_str(&raw).map_err(|e| ConfigError::Parse(format!("{manifest_path:?}: {e}")))?;
@@ -115,7 +122,9 @@ pub fn load_declared_packs(
 
 /// Absolute path to an installed pack's directory.
 pub fn pack_path(project_root: &Path, name: &str, version: &str) -> PathBuf {
-    project_root.join(PACK_DIR).join(pack_dir_name(name, version))
+    project_root
+        .join(PACK_DIR)
+        .join(pack_dir_name(name, version))
 }
 
 #[cfg(test)]
@@ -168,7 +177,9 @@ python = "python/rules.py"
         let root = temp_root("missing");
         let err = load_pack(&root, "nanny:owasp", "2.1.0").unwrap_err();
         assert!(matches!(err, ConfigError::RulePackMissing { .. }));
-        assert!(err.to_string().contains("nanny rules add nanny:owasp@2.1.0"));
+        assert!(err
+            .to_string()
+            .contains("nanny rules add nanny:owasp@2.1.0"));
     }
 
     #[test]
@@ -189,7 +200,10 @@ python = "python/rules.py"
     #[test]
     fn a_colon_in_a_name_never_reaches_the_filesystem() {
         assert_eq!(pack_dir_name("nanny:owasp", "2.1.0"), "nanny-owasp@2.1.0");
-        assert_eq!(pack_dir_name("acme:internal:fraud", "0.3.1"), "acme-internal-fraud@0.3.1");
+        assert_eq!(
+            pack_dir_name("acme:internal:fraud", "0.3.1"),
+            "acme-internal-fraud@0.3.1"
+        );
     }
 
     #[test]
@@ -220,7 +234,15 @@ mod manifesto_guard {
     #[test]
     fn pack_resolution_cannot_reach_the_network() {
         let manifest = include_str!("../Cargo.toml");
-        for forbidden in ["reqwest", "hyper", "ureq", "curl", "tokio", "rustls", "async-std"] {
+        for forbidden in [
+            "reqwest",
+            "hyper",
+            "ureq",
+            "curl",
+            "tokio",
+            "rustls",
+            "async-std",
+        ] {
             assert!(
                 !manifest.contains(forbidden),
                 "nanny-config gained a dependency on `{forbidden}`. Pack resolution \

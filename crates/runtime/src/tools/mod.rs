@@ -84,10 +84,12 @@ impl ToolExecutor for ToolRegistry {
             None => Err(ToolCallError::NotFound {
                 tool_name: name.to_string(),
             }),
-            Some(tool) => tool.execute(args).map_err(|source| ToolCallError::Execution {
-                tool_name: name.to_string(),
-                source,
-            }),
+            Some(tool) => tool
+                .execute(args)
+                .map_err(|source| ToolCallError::Execution {
+                    tool_name: name.to_string(),
+                    source,
+                }),
         }
     }
 
@@ -108,8 +110,12 @@ mod tests {
     // A minimal tool for testing — always succeeds, costs 5 units.
     struct EchoTool;
     impl Tool for EchoTool {
-        fn name(&self) -> &str { "echo" }
-        fn declared_cost(&self) -> u64 { 5 }
+        fn name(&self) -> &str {
+            "echo"
+        }
+        fn declared_cost(&self) -> u64 {
+            5
+        }
         fn execute(&self, args: &ToolArgs) -> Result<ToolOutput, ToolError> {
             let message = args.get("message").cloned().unwrap_or_default();
             Ok(ToolOutput { content: message })
@@ -119,8 +125,12 @@ mod tests {
     // A tool that always fails.
     struct FailingTool;
     impl Tool for FailingTool {
-        fn name(&self) -> &str { "failing" }
-        fn declared_cost(&self) -> u64 { 1 }
+        fn name(&self) -> &str {
+            "failing"
+        }
+        fn declared_cost(&self) -> u64 {
+            1
+        }
         fn execute(&self, _: &ToolArgs) -> Result<ToolOutput, ToolError> {
             Err(ToolError::ExecutionFailed("always fails".to_string()))
         }

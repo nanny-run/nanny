@@ -18,7 +18,7 @@ use std::sync::Mutex;
 use nanny::__private::{
     agent_enter, agent_exit, call_tool, evaluate_local_rules, is_active, ToolVerdict,
 };
-use nanny_bridge::{BridgeAddress, BridgeComponents, Bridge};
+use nanny_bridge::{Bridge, BridgeAddress, BridgeComponents};
 
 // ── Serialise env-var tests ───────────────────────────────────────────────────
 //
@@ -32,8 +32,8 @@ static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn start_bridge(allowed: &[&str]) -> Bridge {
     let components = BridgeComponents {
-        registry:          nanny_runtime::default_registry(),
-        allowed_tools:     allowed.iter().map(|s| s.to_string()).collect(),
+        registry: nanny_runtime::default_registry(),
+        allowed_tools: allowed.iter().map(|s| s.to_string()).collect(),
         per_tool_max_calls: HashMap::new(),
         tool_labels: Default::default(),
     };
@@ -73,7 +73,10 @@ fn clear_env() {
 fn passthrough_inactive_without_env_vars() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     clear_env();
-    assert!(!is_active(), "is_active must be false when no transport vars are set");
+    assert!(
+        !is_active(),
+        "is_active must be false when no transport vars are set"
+    );
 }
 
 /// Once transport env vars are injected, `is_active()` returns true.

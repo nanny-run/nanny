@@ -276,8 +276,8 @@ def _make_client(**kwargs: Any) -> httpx.Client:
         # Both file paths and inline PEM (NANNY_BRIDGE_CERT="-----BEGIN …") work.
         certs_dir = _default_certs_dir()
         cert_val = _resolve_pem_value("NANNY_BRIDGE_CERT", certs_dir / "client.crt")
-        key_val  = _resolve_pem_value("NANNY_BRIDGE_KEY",  certs_dir / "client.key")
-        ca_val   = _resolve_pem_value("NANNY_BRIDGE_CA",   certs_dir / "ca.crt")
+        key_val = _resolve_pem_value("NANNY_BRIDGE_KEY", certs_dir / "client.key")
+        ca_val = _resolve_pem_value("NANNY_BRIDGE_CA", certs_dir / "ca.crt")
         if cert_val and ca_val:
             ssl_ctx = _build_ssl_context(cert_val, key_val, ca_val)
             return httpx.Client(base_url=f"https://{addr}", verify=ssl_ctx, **kwargs)
@@ -530,9 +530,7 @@ def declare_rules(rules: list[dict[str, str]]) -> None:
         pass
 
 
-def report_stop_rule(
-    tool_name: str, rule_name: str, cleared_by: list[str] | None = None
-) -> None:
+def report_stop_rule(tool_name: str, rule_name: str, cleared_by: list[str] | None = None) -> None:
     """POST /stop with RuleDenied metadata so the bridge can emit the NDJSON event.
 
     Client-side rule denials never reach ``/tool/call``, so the bridge has no

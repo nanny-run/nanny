@@ -109,7 +109,4 @@ def declare_all(project_root: Path | str = ".") -> list[dict[str, str]]:
     from nanny_sdk._decorators import _RULES
 
     pack_rules = {r.name: r for r in load_installed_packs(project_root)}
-    return [
-        pack_rules.get(name, LoadedRule(name=name)).to_declaration()
-        for name in _RULES
-    ]
+    return [pack_rules.get(name, LoadedRule(name=name)).to_declaration() for name in _RULES]

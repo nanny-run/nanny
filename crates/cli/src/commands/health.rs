@@ -149,10 +149,10 @@ fn check_network_server() -> ServerStatus {
     // Prefer a full mTLS health check (actual HTTPS request with client cert)
     // over a raw TCP probe — it validates the TLS handshake, CA trust, and the
     // /health response in one shot.
-    let cert_dir    = default_certs_dir();
+    let cert_dir = default_certs_dir();
     let client_cert = cert_dir.join("client.crt");
-    let client_key  = cert_dir.join("client.key");
-    let ca_cert     = cert_dir.join("ca.crt");
+    let client_key = cert_dir.join("client.key");
+    let ca_cert = cert_dir.join("ca.crt");
 
     if client_cert.exists() && client_key.exists() && ca_cert.exists() {
         match mtls_health_check(&addr, &client_cert, &client_key, &ca_cert) {
@@ -162,10 +162,9 @@ fn check_network_server() -> ServerStatus {
                 addr,
                 format!("cert mismatch — run `nanny certs show`: {detail}"),
             ),
-            MtlsResult::ConnectError(detail) => ServerStatus::Unreachable(
-                addr,
-                format!("connection failed: {detail}"),
-            ),
+            MtlsResult::ConnectError(detail) => {
+                ServerStatus::Unreachable(addr, format!("connection failed: {detail}"))
+            }
         }
     } else {
         // No local certs — fall back to TCP ping (e.g. loopback dev server).
@@ -182,18 +181,16 @@ enum MtlsResult {
     ConnectError(String),
 }
 
-fn mtls_health_check(
-    addr: &str,
-    client_cert: &Path,
-    client_key: &Path,
-    ca: &Path,
-) -> MtlsResult {
+fn mtls_health_check(addr: &str, client_cert: &Path, client_key: &Path, ca: &Path) -> MtlsResult {
     match do_mtls_get(addr, client_cert, client_key, ca) {
         Err(e) => {
             let msg = e.to_string();
             // reqwest surfaces TLS/cert errors with these substrings.
-            if msg.contains("certificate") || msg.contains("tls") || msg.contains("TLS")
-                || msg.contains("handshake") || msg.contains("invalid peer")
+            if msg.contains("certificate")
+                || msg.contains("tls")
+                || msg.contains("TLS")
+                || msg.contains("handshake")
+                || msg.contains("invalid peer")
             {
                 MtlsResult::CertError(msg)
             } else {
@@ -224,10 +221,9 @@ fn do_mtls_get(
     let identity = reqwest::Identity::from_pem(&combined)
         .context("failed to build client identity from cert + key")?;
 
-    let ca_pem = std::fs::read(ca)
-        .with_context(|| format!("failed to read {}", ca.display()))?;
-    let ca_cert = reqwest::Certificate::from_pem(&ca_pem)
-        .context("failed to load CA certificate")?;
+    let ca_pem = std::fs::read(ca).with_context(|| format!("failed to read {}", ca.display()))?;
+    let ca_cert =
+        reqwest::Certificate::from_pem(&ca_pem).context("failed to load CA certificate")?;
 
     let client = reqwest::blocking::Client::builder()
         .identity(identity)
@@ -236,7 +232,7 @@ fn do_mtls_get(
         .build()
         .context("failed to build HTTP client")?;
 
-    let url   = format!("https://{addr}/health");
+    let url = format!("https://{addr}/health");
     let bytes = client
         .get(&url)
         .send()
@@ -246,7 +242,10 @@ fn do_mtls_get(
     let body: serde_json::Value =
         serde_json::from_slice(&bytes).context("invalid JSON from /health")?;
 
-    Ok(body.get("state").and_then(|v| v.as_str()).map(|s| s.to_string()))
+    Ok(body
+        .get("state")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string()))
 }
 
 // ── TCP-only probe (fallback when no local certs) ─────────────────────────────

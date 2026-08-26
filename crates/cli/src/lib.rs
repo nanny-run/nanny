@@ -374,7 +374,9 @@ mod runtime {
 
     impl ClientState {
         fn new() -> Self {
-            Self { start: Instant::now() }
+            Self {
+                start: Instant::now(),
+            }
         }
     }
 
@@ -398,7 +400,9 @@ mod runtime {
 
     #[cfg(unix)]
     fn bridge_socket_path() -> Option<std::path::PathBuf> {
-        std::env::var("NANNY_BRIDGE_SOCKET").ok().map(std::path::PathBuf::from)
+        std::env::var("NANNY_BRIDGE_SOCKET")
+            .ok()
+            .map(std::path::PathBuf::from)
     }
 
     #[cfg(not(unix))]
@@ -413,7 +417,9 @@ mod runtime {
     /// `NANNY_BRIDGE_ADDR` — host:port of the network governance server.
     /// Set automatically by `nanny run` when a server is running.
     fn bridge_addr() -> Option<String> {
-        std::env::var("NANNY_BRIDGE_ADDR").ok().filter(|s| !s.is_empty())
+        std::env::var("NANNY_BRIDGE_ADDR")
+            .ok()
+            .filter(|s| !s.is_empty())
     }
 
     /// True if `addr` (host:port) is a loopback address. The server serves plain
@@ -423,7 +429,9 @@ mod runtime {
         if let Ok(sa) = addr.parse::<std::net::SocketAddr>() {
             return sa.ip().is_loopback();
         }
-        addr.rsplit_once(':').map(|(h, _)| h == "localhost").unwrap_or(false)
+        addr.rsplit_once(':')
+            .map(|(h, _)| h == "localhost")
+            .unwrap_or(false)
     }
 
     fn session_token() -> String {
@@ -522,8 +530,8 @@ mod runtime {
     fn resolve_pem(env_var: &str, fallback: std::path::PathBuf) -> Option<Vec<u8>> {
         match std::env::var(env_var) {
             Ok(val) if val.starts_with("-----BEGIN") => Some(val.into_bytes()),
-            Ok(val) if !val.is_empty()               => std::fs::read(&val).ok(),
-            _                                        => std::fs::read(&fallback).ok(),
+            Ok(val) if !val.is_empty() => std::fs::read(&val).ok(),
+            _ => std::fs::read(&fallback).ok(),
         }
     }
 
@@ -531,7 +539,7 @@ mod runtime {
 
     struct BridgeResponse {
         status: u16,
-        body:   String,
+        body: String,
     }
 
     fn http_get(path: &str) -> Option<BridgeResponse> {
@@ -653,20 +661,20 @@ mod runtime {
         // NANNY_BRIDGE_CERT may be a combined cert+key PEM bundle, in which case
         // NANNY_BRIDGE_KEY can be omitted (empty bytes are harmless when appended).
         let cert_pem = resolve_pem("NANNY_BRIDGE_CERT", certs_dir.join("client.crt"))?;
-        let key_pem  = resolve_pem("NANNY_BRIDGE_KEY",  certs_dir.join("client.key"))
-            .unwrap_or_default();
-        let ca_pem   = resolve_pem("NANNY_BRIDGE_CA",   certs_dir.join("ca.crt"))?;
+        let key_pem =
+            resolve_pem("NANNY_BRIDGE_KEY", certs_dir.join("client.key")).unwrap_or_default();
+        let ca_pem = resolve_pem("NANNY_BRIDGE_CA", certs_dir.join("ca.crt"))?;
 
         // reqwest::Identity requires PEM cert + key concatenated.
         let mut identity_pem = cert_pem;
         identity_pem.extend_from_slice(&key_pem);
         let identity = reqwest::Identity::from_pem(&identity_pem).ok()?;
-        let ca_cert  = reqwest::Certificate::from_pem(&ca_pem).ok()?;
+        let ca_cert = reqwest::Certificate::from_pem(&ca_pem).ok()?;
 
         reqwest::blocking::Client::builder()
             .add_root_certificate(ca_cert)
             .identity(identity)
-            .use_rustls_tls()   // force rustls — Identity::from_pem produces a rustls identity
+            .use_rustls_tls() // force rustls — Identity::from_pem produces a rustls identity
             .build()
             .ok()
     }
@@ -700,14 +708,20 @@ mod runtime {
         let resp = builder.send().ok()?;
         let status = resp.status().as_u16();
         let resp_body = resp.text().ok()?;
-        Some(BridgeResponse { status, body: resp_body })
+        Some(BridgeResponse {
+            status,
+            body: resp_body,
+        })
     }
 
     fn parse_http_response(raw: &str) -> Option<BridgeResponse> {
         let (headers, body) = raw.split_once("\r\n\r\n")?;
         let status_line = headers.lines().next()?;
         let status: u16 = status_line.split_whitespace().nth(1)?.parse().ok()?;
-        Some(BridgeResponse { status, body: body.to_string() })
+        Some(BridgeResponse {
+            status,
+            body: body.to_string(),
+        })
     }
 
     // ── Rule evaluation ───────────────────────────────────────────────────────
@@ -746,22 +760,22 @@ mod runtime {
             // Passthrough mode (no bridge env vars) — zeros are correct; rules
             // still run but counters will be empty, which is expected offline.
             None => BridgeStatus {
-                tokens_spent:      0,
-                tool_call_counts:  HashMap::new(),
+                tokens_spent: 0,
+                tool_call_counts: HashMap::new(),
                 tool_call_history: Vec::new(),
-                tool_labels:       HashMap::new(),
+                tool_labels: HashMap::new(),
             },
         };
 
         let ctx = PolicyContext {
-            requested_tool:    Some(tool_name.to_string()),
-            tool_call_counts:  status.tool_call_counts,
+            requested_tool: Some(tool_name.to_string()),
+            tool_call_counts: status.tool_call_counts,
             tool_call_history: status.tool_call_history,
-            tool_labels:       status.tool_labels,
-            last_tool_args:    args,
+            tool_labels: status.tool_labels,
+            last_tool_args: args,
             elapsed_ms,
-            now_ms:        nanny_core::events::event::now_ms(),
-            tokens_spent:  status.tokens_spent,
+            now_ms: nanny_core::events::event::now_ms(),
+            tokens_spent: status.tokens_spent,
         };
 
         for rule in inventory::iter::<Rule> {
@@ -774,10 +788,10 @@ mod runtime {
 
     /// Counters fetched from the bridge `/status` endpoint.
     struct BridgeStatus {
-        tokens_spent:      u64,
-        tool_call_counts:  HashMap<String, u32>,
+        tokens_spent: u64,
+        tool_call_counts: HashMap<String, u32>,
         tool_call_history: Vec<String>,
-        tool_labels:       HashMap<String, Vec<String>>,
+        tool_labels: HashMap<String, Vec<String>>,
     }
 
     /// Fetch all live counters from the bridge /status endpoint.
@@ -793,19 +807,25 @@ mod runtime {
             Ok(v) => v,
             Err(_) => return None,
         };
-        let tokens_spent = v.get("tokens_spent")
-            .and_then(|c| c.as_u64())
-            .unwrap_or(0);
-        let tool_call_counts = v.get("tool_call_counts")
+        let tokens_spent = v.get("tokens_spent").and_then(|c| c.as_u64()).unwrap_or(0);
+        let tool_call_counts = v
+            .get("tool_call_counts")
             .and_then(|c| serde_json::from_value(c.clone()).ok())
             .unwrap_or_default();
-        let tool_call_history = v.get("tool_call_history")
+        let tool_call_history = v
+            .get("tool_call_history")
             .and_then(|h| serde_json::from_value(h.clone()).ok())
             .unwrap_or_default();
-        let tool_labels = v.get("tool_labels")
+        let tool_labels = v
+            .get("tool_labels")
             .and_then(|l| serde_json::from_value(l.clone()).ok())
             .unwrap_or_default();
-        Some(BridgeStatus { tokens_spent, tool_call_counts, tool_call_history, tool_labels })
+        Some(BridgeStatus {
+            tokens_spent,
+            tool_call_counts,
+            tool_call_history,
+            tool_labels,
+        })
     }
 
     // ── Tool call ─────────────────────────────────────────────────────────────
@@ -829,7 +849,9 @@ mod runtime {
             Some(resp) if resp.status == 200 => {
                 let reason = extract_str(&resp.body, "rule_name")
                     .map(|r| format!("RuleDenied: {r}"))
-                    .or_else(|| extract_str(&resp.body, "tool_name").map(|t| format!("ToolDenied: {t}")))
+                    .or_else(|| {
+                        extract_str(&resp.body, "tool_name").map(|t| format!("ToolDenied: {t}"))
+                    })
                     .or_else(|| extract_str(&resp.body, "reason"))
                     .unwrap_or_else(|| "ToolDenied".to_string());
                 ToolVerdict::Stop(reason)
@@ -869,12 +891,13 @@ mod runtime {
             Some(resp) if resp.status == 200 => {
                 // Use serde_json so the result field is safely decoded even
                 // when it contains HTML with escaped quotes or special chars.
-                let v: serde_json::Value = serde_json::from_str(&resp.body)
-                    .map_err(|e| e.to_string())?;
+                let v: serde_json::Value =
+                    serde_json::from_str(&resp.body).map_err(|e| e.to_string())?;
                 if v["status"] == "allowed" {
                     Ok(v["result"].as_str().unwrap_or("").to_string())
                 } else {
-                    let reason = v["rule_name"].as_str()
+                    let reason = v["rule_name"]
+                        .as_str()
                         .map(|r| format!("RuleDenied: {r}"))
                         .or_else(|| v["tool_name"].as_str().map(|t| format!("ToolDenied: {t}")))
                         .or_else(|| v["reason"].as_str().map(str::to_string))
@@ -921,7 +944,8 @@ mod runtime {
             "reason":    "RuleDenied",
             "tool":      tool,
             "rule_name": rule_name,
-        }).to_string();
+        })
+        .to_string();
         let _ = http_post("/stop", &body);
     }
 
@@ -1019,7 +1043,10 @@ mod runtime {
         if !is_active() {
             return;
         }
-        let names: Vec<&str> = inventory::iter::<Rule>.into_iter().map(|r| r.name).collect();
+        let names: Vec<&str> = inventory::iter::<Rule>
+            .into_iter()
+            .map(|r| r.name)
+            .collect();
         if names.is_empty() {
             return;
         }
@@ -1048,7 +1075,9 @@ mod runtime {
 
     fn extract_str(json: &str, key: &str) -> Option<String> {
         let needle = format!("\"{key}\":");
-        let after = json.find(&needle).map(|i| json[i + needle.len()..].trim_start())?;
+        let after = json
+            .find(&needle)
+            .map(|i| json[i + needle.len()..].trim_start())?;
         let inner = after.strip_prefix('"')?;
         let end = inner.find('"')?;
         Some(inner[..end].to_string())
@@ -1094,7 +1123,11 @@ mod tests {
             std::env::remove_var("NANNY_BRIDGE_ADDR");
         }
         // No bridge active → no-op. Must not panic or attempt any connection.
-        crate::report_usage(crate::Usage { input: 100, output: 50, ..Default::default() });
+        crate::report_usage(crate::Usage {
+            input: 100,
+            output: 50,
+            ..Default::default()
+        });
         crate::report_usage(crate::Usage {
             input: 8,
             output: 3,
@@ -1113,7 +1146,10 @@ mod tests {
             std::env::remove_var("NANNY_BRIDGE_ADDR");
         }
         // No bridge active → no-op. Must not panic or attempt any connection.
-        crate::set_harness(crate::Harness { name: "opencode".into(), ..Default::default() });
+        crate::set_harness(crate::Harness {
+            name: "opencode".into(),
+            ..Default::default()
+        });
         crate::set_harness(crate::Harness {
             name: "langgraph".into(),
             version: Some("0.3.2".into()),
@@ -1132,7 +1168,10 @@ mod tests {
 
     #[test]
     fn run_scope_mints_an_id_and_restores_on_drop() {
-        assert!(crate::runtime::scoped_run_id().is_none(), "no scope to start");
+        assert!(
+            crate::runtime::scoped_run_id().is_none(),
+            "no scope to start"
+        );
 
         {
             let scope = crate::run_scope(None);
@@ -1140,14 +1179,20 @@ mod tests {
             assert_eq!(crate::runtime::scoped_run_id().as_deref(), Some(scope.id()));
         }
 
-        assert!(crate::runtime::scoped_run_id().is_none(), "drop must restore");
+        assert!(
+            crate::runtime::scoped_run_id().is_none(),
+            "drop must restore"
+        );
     }
 
     #[test]
     fn run_scope_accepts_an_explicit_id() {
         let scope = crate::run_scope(Some("resumed-run".to_string()));
         assert_eq!(scope.id(), "resumed-run");
-        assert_eq!(crate::runtime::scoped_run_id().as_deref(), Some("resumed-run"));
+        assert_eq!(
+            crate::runtime::scoped_run_id().as_deref(),
+            Some("resumed-run")
+        );
     }
 
     /// An inner scope ending must restore its caller, not clear the scope
@@ -1186,8 +1231,10 @@ mod tests {
             })
             .collect();
 
-        let seen: Vec<Option<String>> =
-            handles.into_iter().map(|h| h.join().expect("thread must not panic")).collect();
+        let seen: Vec<Option<String>> = handles
+            .into_iter()
+            .map(|h| h.join().expect("thread must not panic"))
+            .collect();
 
         assert_eq!(seen[0].as_deref(), Some("run-a"));
         assert_eq!(seen[1].as_deref(), Some("run-b"));
@@ -1225,7 +1272,10 @@ mod tests {
         });
 
         for (want, got) in seen {
-            assert_eq!(got, want, "each task must keep its own run id across a yield");
+            assert_eq!(
+                got, want,
+                "each task must keep its own run id across a yield"
+            );
         }
     }
 
@@ -1254,6 +1304,9 @@ mod tests {
         let other = std::thread::spawn(crate::runtime::scoped_run_id)
             .join()
             .expect("thread must not panic");
-        assert!(other.is_none(), "another thread must not see this scope; got {other:?}");
+        assert!(
+            other.is_none(),
+            "another thread must not see this scope; got {other:?}"
+        );
     }
 }

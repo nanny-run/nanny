@@ -32,7 +32,9 @@ impl Policy for ToolPermissionPolicy {
         if let Some(tool) = &ctx.requested_tool {
             if !self.allowed_tools.contains(tool) {
                 return PolicyDecision::Deny {
-                    reason: StopReason::ToolDenied { tool_name: tool.clone() },
+                    reason: StopReason::ToolDenied {
+                        tool_name: tool.clone(),
+                    },
                 };
             }
         }
@@ -64,7 +66,9 @@ impl RuleEvaluator {
     /// Otherwise the engine's own control is the one control that leaves no
     /// evidence of having operated.
     pub fn rule_name_for(&self, tool: &str) -> Option<String> {
-        self.max_calls.contains_key(tool).then(|| format!("{tool}.max_calls"))
+        self.max_calls
+            .contains_key(tool)
+            .then(|| format!("{tool}.max_calls"))
     }
 }
 
@@ -133,7 +137,9 @@ mod tests {
         };
         assert!(matches!(
             tool_policy().evaluate(&ctx),
-            PolicyDecision::Deny { reason: StopReason::ToolDenied { .. } }
+            PolicyDecision::Deny {
+                reason: StopReason::ToolDenied { .. }
+            }
         ));
     }
 
@@ -143,7 +149,10 @@ mod tests {
             requested_tool: Some("http_get".to_string()),
             ..base_context()
         };
-        assert!(matches!(tool_policy().evaluate(&ctx), PolicyDecision::Allow));
+        assert!(matches!(
+            tool_policy().evaluate(&ctx),
+            PolicyDecision::Allow
+        ));
     }
 
     fn rule_evaluator_with_http_get_limit(max: u32) -> RuleEvaluator {
@@ -196,7 +205,10 @@ mod tests {
     #[test]
     fn rule_evaluator_allows_when_no_tool_requested() {
         let re = rule_evaluator_with_http_get_limit(1);
-        assert!(matches!(re.evaluate(&base_context()), PolicyDecision::Allow));
+        assert!(matches!(
+            re.evaluate(&base_context()),
+            PolicyDecision::Allow
+        ));
     }
 
     #[test]
@@ -205,7 +217,10 @@ mod tests {
             RuleEvaluator::new(HashMap::new()),
             RuleEvaluator::new(HashMap::new()),
         );
-        assert!(matches!(chain.evaluate(&base_context()), PolicyDecision::Allow));
+        assert!(matches!(
+            chain.evaluate(&base_context()),
+            PolicyDecision::Allow
+        ));
     }
 
     #[test]
@@ -219,7 +234,9 @@ mod tests {
         };
         assert!(matches!(
             chain.evaluate(&ctx),
-            PolicyDecision::Deny { reason: StopReason::ToolDenied { .. } }
+            PolicyDecision::Deny {
+                reason: StopReason::ToolDenied { .. }
+            }
         ));
     }
 
@@ -237,7 +254,9 @@ mod tests {
         };
         assert!(matches!(
             chain.evaluate(&ctx),
-            PolicyDecision::Deny { reason: StopReason::RuleDenied { .. } }
+            PolicyDecision::Deny {
+                reason: StopReason::RuleDenied { .. }
+            }
         ));
     }
 
@@ -256,7 +275,9 @@ mod tests {
         };
         assert!(matches!(
             chain.evaluate(&ctx),
-            PolicyDecision::Deny { reason: StopReason::ToolDenied { .. } }
+            PolicyDecision::Deny {
+                reason: StopReason::ToolDenied { .. }
+            }
         ));
     }
 }

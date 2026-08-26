@@ -95,9 +95,7 @@ class FakeGemini:
 
     class _Models:
         def generate_content(self, **kwargs: Any) -> Any:
-            return _Resp(
-                usage_metadata=_Usage(prompt_token_count=6, candidates_token_count=4)
-            )
+            return _Resp(usage_metadata=_Usage(prompt_token_count=6, candidates_token_count=4))
 
     def __init__(self) -> None:
         self.models = FakeGemini._Models()
@@ -193,14 +191,26 @@ class FakeAsyncStreamingOpenAI:
 def test_extract_usage_patterns() -> None:
     # Returns (input, output, model, cache_read, cache_write); these fakes
     # carry no model and no cache usage → None, None, None.
-    assert _extract_usage(
-        _Resp(usage=_Usage(prompt_tokens=10, completion_tokens=5))
-    ) == (10, 5, None, None, None)
+    assert _extract_usage(_Resp(usage=_Usage(prompt_tokens=10, completion_tokens=5))) == (
+        10,
+        5,
+        None,
+        None,
+        None,
+    )
     assert _extract_usage(_Resp(usage=_Usage(input_tokens=8, output_tokens=3))) == (
-        8, 3, None, None, None,
+        8,
+        3,
+        None,
+        None,
+        None,
     )
     assert _extract_usage(_Resp(usage=_Usage(prompt_tokens=9, response_tokens=1))) == (
-        9, 1, None, None, None,
+        9,
+        1,
+        None,
+        None,
+        None,
     )
     assert _extract_usage(
         _Resp(usage_metadata=_Usage(prompt_token_count=6, candidates_token_count=4))
@@ -211,10 +221,13 @@ def test_extract_usage_patterns() -> None:
 def test_extract_usage_cache_patterns() -> None:
     # OpenAI: nested prompt_tokens_details.cached_tokens, read-only.
     assert _extract_usage(
-        _Resp(usage=_Usage(
-            prompt_tokens=10, completion_tokens=5,
-            prompt_tokens_details=_Usage(cached_tokens=4),
-        ))
+        _Resp(
+            usage=_Usage(
+                prompt_tokens=10,
+                completion_tokens=5,
+                prompt_tokens_details=_Usage(cached_tokens=4),
+            )
+        )
     ) == (10, 5, None, 4, None)
 
     # Anthropic: top-level, both read and write are real, and its own
@@ -224,25 +237,36 @@ def test_extract_usage_cache_patterns() -> None:
     # provider's semantics (Anthropic's own wire format is the one that's
     # the odd one out, not Nanny's).
     assert _extract_usage(
-        _Resp(usage=_Usage(
-            input_tokens=8, output_tokens=3,
-            cache_read_input_tokens=2, cache_creation_input_tokens=6,
-        ))
+        _Resp(
+            usage=_Usage(
+                input_tokens=8,
+                output_tokens=3,
+                cache_read_input_tokens=2,
+                cache_creation_input_tokens=6,
+            )
+        )
     ) == (16, 3, None, 2, 6)
 
     # DeepSeek: OpenAI-compatible shape, own top-level hit field, no write concept.
     assert _extract_usage(
-        _Resp(usage=_Usage(
-            prompt_tokens=10, completion_tokens=5, prompt_cache_hit_tokens=7,
-        ))
+        _Resp(
+            usage=_Usage(
+                prompt_tokens=10,
+                completion_tokens=5,
+                prompt_cache_hit_tokens=7,
+            )
+        )
     ) == (10, 5, None, 7, None)
 
     # Gemini: usage_metadata, own cached-content field.
     assert _extract_usage(
-        _Resp(usage_metadata=_Usage(
-            prompt_token_count=6, candidates_token_count=4,
-            cached_content_token_count=3,
-        ))
+        _Resp(
+            usage_metadata=_Usage(
+                prompt_token_count=6,
+                candidates_token_count=4,
+                cached_content_token_count=3,
+            )
+        )
     ) == (6, 4, None, 3, None)
 
 
@@ -277,9 +301,13 @@ def test_deepseek_reports_cache_usage(mock_bridge: HTTPServer) -> None:
 
     class _DeepSeekCompletions:
         def create(self, **kwargs: Any) -> Any:
-            return _Resp(usage=_Usage(
-                prompt_tokens=10, completion_tokens=5, prompt_cache_hit_tokens=7,
-            ))
+            return _Resp(
+                usage=_Usage(
+                    prompt_tokens=10,
+                    completion_tokens=5,
+                    prompt_cache_hit_tokens=7,
+                )
+            )
 
     class _DeepSeekChat:
         def __init__(self) -> None:

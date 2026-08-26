@@ -194,12 +194,12 @@ def _patch_client(client: Any) -> None:
             pass
 
     # Detection order matters, see module docstring for rationale.
-    _try_patch_openai(client)            # client.chat.completions.create
+    _try_patch_openai(client)  # client.chat.completions.create
     _try_patch_openai_responses(client)  # client.responses.create
-    _try_patch_anthropic(client)         # client.messages.create
-    _try_patch_mistral(client)     # client.chat.complete (no .completions)
-    _try_patch_gemini(client)      # client.models.generate_content
-    _try_patch_cohere(client)      # callable(client.chat), fallback, runs last
+    _try_patch_anthropic(client)  # client.messages.create
+    _try_patch_mistral(client)  # client.chat.complete (no .completions)
+    _try_patch_gemini(client)  # client.models.generate_content
+    _try_patch_cohere(client)  # callable(client.chat), fallback, runs last
 
 
 # ---------------------------------------------------------------------------

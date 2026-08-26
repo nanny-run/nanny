@@ -20,9 +20,7 @@ import pytest
 from nanny_sdk._context import PolicyContext
 
 # tests/ -> python/ -> sdks/ -> nanny/
-_RUST_POLICY = (
-    Path(__file__).resolve().parents[3] / "crates" / "core" / "src" / "policy" / "mod.rs"
-)
+_RUST_POLICY = Path(__file__).resolve().parents[3] / "crates" / "core" / "src" / "policy" / "mod.rs"
 
 
 def _rust_policy_context_fields() -> set[str]:
@@ -129,8 +127,7 @@ def test_rule_declarations_match_the_rust_shape():
     python = set(LoadedRule(name="x", version="1", pack="p").to_declaration())
 
     assert python == rust, (
-        f"RuleDecl fields diverged: only in Rust {rust - python}, "
-        f"only in Python {python - rust}"
+        f"RuleDecl fields diverged: only in Rust {rust - python}, only in Python {python - rust}"
     )
 
 

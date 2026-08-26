@@ -56,6 +56,9 @@ impl ExecutionState {
     /// A terminal state must never transition to any other state.
     /// If the execution loop checks this and finds true, it must stop immediately.
     pub fn is_terminal(&self) -> bool {
-        matches!(self, ExecutionState::Stopped { .. } | ExecutionState::Failed { .. })
+        matches!(
+            self,
+            ExecutionState::Stopped { .. } | ExecutionState::Failed { .. }
+        )
     }
 }

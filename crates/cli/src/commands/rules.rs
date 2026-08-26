@@ -89,10 +89,19 @@ fn add(pack: &str, from: &Path, project_root: &Path) -> Result<()> {
 
     declare_in_config(project_root, &format!("{name}@{version}"))?;
 
-    println!("nanny: installed {}@{} to {}", name, version, dest.display());
+    println!(
+        "nanny: installed {}@{} to {}",
+        name,
+        version,
+        dest.display()
+    );
     println!("nanny: declared in [rules] extends");
     if !manifest.rules.is_empty() {
-        println!("nanny: {} rule(s): {:?}", manifest.rules.len(), manifest.rules);
+        println!(
+            "nanny: {} rule(s): {:?}",
+            manifest.rules.len(),
+            manifest.rules
+        );
     }
     println!(
         "nanny: commit {}/ so every run of this project enforces the same controls",
@@ -111,10 +120,24 @@ fn list(project_root: &Path) -> Result<()> {
     let mut found = 0;
     for entry in entries.flatten() {
         let manifest_path = entry.path().join("pack.toml");
-        let Ok(raw) = std::fs::read_to_string(&manifest_path) else { continue };
-        let Ok(m) = toml::from_str::<PackManifest>(&raw) else { continue };
-        let signed = if m.signature.is_some() { "signed" } else { "unsigned" };
-        println!("{:<28} {:<9} {} rule(s)  {}", m.slug(), signed, m.rules.len(), m.description);
+        let Ok(raw) = std::fs::read_to_string(&manifest_path) else {
+            continue;
+        };
+        let Ok(m) = toml::from_str::<PackManifest>(&raw) else {
+            continue;
+        };
+        let signed = if m.signature.is_some() {
+            "signed"
+        } else {
+            "unsigned"
+        };
+        println!(
+            "{:<28} {:<9} {} rule(s)  {}",
+            m.slug(),
+            signed,
+            m.rules.len(),
+            m.description
+        );
         found += 1;
     }
     if found == 0 {
@@ -158,19 +181,24 @@ fn declare_in_config(project_root: &Path, pin: &str) -> Result<()> {
     let extends = table
         .entry("extends")
         .or_insert(toml_edit::value(toml_edit::Array::new()));
-    let array = extends.as_array_mut().context("[rules] extends is not an array")?;
+    let array = extends
+        .as_array_mut()
+        .context("[rules] extends is not an array")?;
 
     if array.iter().any(|v| v.as_str() == Some(pin)) {
         return Ok(());
     }
     array.push(pin);
 
-    std::fs::write(&path, doc.to_string()).with_context(|| format!("could not write '{}'", path.display()))
+    std::fs::write(&path, doc.to_string())
+        .with_context(|| format!("could not write '{}'", path.display()))
 }
 
 fn undeclare_in_config(project_root: &Path, pin: &str) -> Result<()> {
     let path = config_path(project_root);
-    let Ok(raw) = std::fs::read_to_string(&path) else { return Ok(()) };
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return Ok(());
+    };
     let mut doc: toml_edit::DocumentMut = raw.parse().context("nanny.toml is not valid TOML")?;
 
     if let Some(array) = doc
@@ -181,7 +209,8 @@ fn undeclare_in_config(project_root: &Path, pin: &str) -> Result<()> {
     {
         array.retain(|v| v.as_str() != Some(pin));
     }
-    std::fs::write(&path, doc.to_string()).with_context(|| format!("could not write '{}'", path.display()))
+    std::fs::write(&path, doc.to_string())
+        .with_context(|| format!("could not write '{}'", path.display()))
 }
 
 fn copy_dir(src: &Path, dest: &Path) -> Result<()> {
