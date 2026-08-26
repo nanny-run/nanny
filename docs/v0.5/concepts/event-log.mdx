@@ -30,7 +30,7 @@ file = "events"   # writes .nanny/logs/events.ndjson
 ```
 
 `.nanny/logs/` is meant to stay out of git (Nanny adds it to `.gitignore` automatically
-the first time it's created): it's a local audit trail, not source. If you later log this
+the first time it's created): it's a local audit trail, not source. If you later set
 `NANNY_API_KEY`, Cloud sync can back-fill from whatever accumulated in
 that folder before sync was ever turned on, not just events going forward.
 

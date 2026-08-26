@@ -30,7 +30,7 @@ nanny run --limits=researcher
 | `--limits=<name>` | string | —              | Activate a named limit set from `nanny.toml`. Inherits from `[limits]`.                                                 |
 | `--join=<appId>`  | string | —              | Join an existing governance server by app id (from that server's `.nanny/app.json`), instead of enforcing locally. Explicit and app-id-only: never a name, never auto-detected. Not compatible with `--serve`. |
 | `--serve`         | flag   | —              | Start the governance server, and launch `[start].cmd` underneath it when `nanny.toml` declares one. Omit `[start]` for a headless governor. See [Governance server](#governance-server) below. |
-| `--no-sync`       | flag   | —              | Do not forward events to Nanny Cloud for this run, even if the machine is logged in. Enforcement is unaffected. See [Connect to Nanny Cloud](/v0.5/guides/managed-mode). |
+| `--no-sync`       | flag   | —              | Do not forward events to Nanny Cloud for this run, even if `NANNY_API_KEY` is set. Enforcement is unaffected. See [Connect to Nanny Cloud](/v0.5/guides/managed-mode). |
 | `--config=<path>` | path   | `./nanny.toml` | Path to config file.                                                                                                   |
 
 ---
