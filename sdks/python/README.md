@@ -22,7 +22,7 @@ Full docs: [docs.nanny.run](https://docs.nanny.run)
 
 ## How it works
 
-Nanny runs as a parent process via `nanny run`. The SDK decorators communicate with it at each tool call to check limits before the function body executes. Outside `nanny run`, every decorator is a no-op, zero overhead in development and CI.
+Nanny runs as a parent process via `nanny run`. The SDK decorators communicate with it at each tool call, so the call is authorized before the function body executes. Outside `nanny run`, every decorator is a no-op, zero overhead in development and CI.
 
 ```bash
 # Governed, enforcement active
@@ -88,13 +88,13 @@ def block_sensitive(ctx) -> bool:
     return ".env" not in path and "secret" not in path
 ```
 
-Rules run before every `@tool` call. Return `False` to stop execution with `RuleDenied`. The `ctx` object exposes `requested_tool`, `last_tool_args`, and counters.
+Rules run before every `@tool` call. Return `False` to stop execution with `RuleDenied`. The `ctx` object exposes `requested_tool`, `last_tool_args`, `tool_labels`, `tool_call_history`, and `now_ms`.
 
 ---
 
-## `@agent`: activate named limits for a scope
+## `@agent`: name a phase of the run
 
-In a multi-agent system, each agent has a different role and a different risk profile. `@agent` activates the right named limit set when each role runs, then reverts automatically when it's done:
+In a multi-agent system a denial is worth attributing to the phase that caused it:
 
 ```python
 from nanny_sdk import agent
@@ -105,8 +105,6 @@ def run_research_loop(query: str) -> str:
 ```
 
 Names a phase of the run for the duration of the function, so the audit log can attribute each verdict to the phase that produced it. The scope exits on return and on exception. Any name works: a scope labels, it does not look anything up. Want a phase to be a genuinely separate run, with its own stop state and history? See `run_scope` below.
-
-![metrics_crew: ingestion, analysis, visualization, and reporter agent scopes entering and exiting](https://raw.githubusercontent.com/nanny-run/nanny/main/assets/demo/metrics-crew-agent-scopes.gif)
 
 ---
 
