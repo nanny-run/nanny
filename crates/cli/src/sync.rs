@@ -90,6 +90,34 @@ fn no_sync_from_env() -> bool {
     std::env::var(NO_SYNC_ENV).is_ok_and(|v| !v.trim().is_empty())
 }
 
+/// Which side of the cloud's `nny_live_`/`nny_sdbx_` split a key belongs to,
+/// derived from its prefix and nothing else — never configured, never asked
+/// for (`--env` stays absent from `--help`; there is one host). An
+/// unrecognized prefix (a key minted before the split existed, or anything
+/// malformed) defaults to Live, matching the cloud's own default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Environment {
+    Live,
+    Sandbox,
+}
+
+impl Environment {
+    fn from_api_key(api_key: &str) -> Self {
+        if api_key.starts_with("nny_sdbx_") {
+            Environment::Sandbox
+        } else {
+            Environment::Live
+        }
+    }
+
+    fn dir_name(self) -> &'static str {
+        match self {
+            Environment::Live => "live",
+            Environment::Sandbox => "sandbox",
+        }
+    }
+}
+
 /// Why a run is not syncing. Drives the startup line, so the reason is always
 /// visible rather than inferred from an absence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -237,17 +265,33 @@ fn send_batch(
 /// to, so a replay lands under the run that actually produced it. Cloud dedups
 /// on (execution, content hash), so re-sending an overlapping batch is a no-op
 /// and delivery only has to be at-least-once.
+///
+/// Partitioned by environment (`.nanny/spool/live/`, `.nanny/spool/sandbox/`),
+/// derived from the key a `Spool` is constructed with. Before this split, the
+/// spool stored `{session}\n{body}` with no endpoint or key recorded, and
+/// `drain` posted with whatever key the *next* process happened to hold — a
+/// batch held under a sandbox key would flush into live under a live key, and
+/// report success. Partitioning makes that unreachable rather than guarded: a
+/// `Spool` constructed with a live key only ever sees the live subdirectory.
 pub struct Spool {
     dir: PathBuf,
+    base_dir: PathBuf,
 }
 
 impl Spool {
     /// The outbox for an app, under its own `.nanny/` directory. Alongside the
     /// logs rather than in `~/.nanny`, so it travels with the checkout that
-    /// produced it and is removed with it.
-    pub fn new(base_dir: &Path) -> Self {
+    /// produced it and is removed with it. `api_key` decides which
+    /// environment's subdirectory this instance reads and writes — see the
+    /// struct docs.
+    pub fn new(base_dir: &Path, api_key: &str) -> Self {
+        let environment = Environment::from_api_key(api_key);
         Self {
-            dir: base_dir.join(".nanny").join("spool"),
+            dir: base_dir
+                .join(".nanny")
+                .join("spool")
+                .join(environment.dir_name()),
+            base_dir: base_dir.to_path_buf(),
         }
     }
 
@@ -284,10 +328,7 @@ impl Spool {
     /// failure, but committed event data would be a real leak.
     fn ensure_gitignored(&self) {
         const LINE: &str = ".nanny/spool/";
-        let Some(base) = self.dir.parent().and_then(|p| p.parent()) else {
-            return;
-        };
-        let path = base.join(".gitignore");
+        let path = self.base_dir.join(".gitignore");
         let existing = std::fs::read_to_string(&path).unwrap_or_default();
         let covered = existing.lines().any(|l| {
             let t = l.trim();
@@ -409,7 +450,7 @@ impl CloudSync {
             .build()
             .ok()?;
 
-        let spool = Spool::new(base_dir);
+        let spool = Spool::new(base_dir, &api_key);
         let (tx, rx) = std::sync::mpsc::channel::<String>();
         let handle = std::thread::spawn(move || {
             // Backfill first: on the forwarder thread, so a cloud that is still
@@ -453,7 +494,7 @@ impl ServerForwarder {
         server_secret: String,
         base_dir: &Path,
     ) {
-        let spool = Spool::new(base_dir);
+        let spool = Spool::new(base_dir, &api_key);
         std::thread::spawn(move || {
             let Ok(client) = reqwest::blocking::Client::builder()
                 .connect_timeout(Duration::from_secs(3))
@@ -793,8 +834,8 @@ mod tests {
         dir
     }
 
-    fn spooled_files(dir: &Path) -> Vec<PathBuf> {
-        Spool::new(dir)
+    fn spooled_files(dir: &Path, api_key: &str) -> Vec<PathBuf> {
+        Spool::new(dir, api_key)
             .entries()
             .into_iter()
             .map(|(p, _)| p)
@@ -864,7 +905,7 @@ mod tests {
         sender.enqueue(r#"{"event":"ExecutionStarted"}"#.to_string());
         sender.flush_and_join();
 
-        let held = spooled_files(&dir);
+        let held = spooled_files(&dir, "k");
         assert_eq!(
             held.len(),
             1,
@@ -900,14 +941,14 @@ mod tests {
         // a whole history into a single bogus run. Attribution has to survive
         // the outage, not just the bytes.
         let dir = temp_app_dir();
-        Spool::new(&dir).store("original-session", r#"{"event":"ToolAllowed"}"#);
+        Spool::new(&dir, "nny_k").store("original-session", r#"{"event":"ToolAllowed"}"#);
 
         let (port, rx_srv) = mock_ingest_server();
         let client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(5))
             .build()
             .unwrap();
-        let delivered = Spool::new(&dir).drain(
+        let delivered = Spool::new(&dir, "nny_k").drain(
             &client,
             &format!("http://127.0.0.1:{port}/v1/ingest"),
             "nny_k",
@@ -923,7 +964,7 @@ mod tests {
             "a replayed batch must carry the session that produced it:\n{req}"
         );
         assert!(
-            spooled_files(&dir).is_empty(),
+            spooled_files(&dir, "nny_k").is_empty(),
             "a delivered batch must be removed"
         );
     }
@@ -933,18 +974,18 @@ mod tests {
         // Drain against a cloud that is still down must keep the batch, not
         // consume it, otherwise the outbox loses exactly what it exists to keep.
         let dir = temp_app_dir();
-        Spool::new(&dir).store("s", r#"{"event":"X"}"#);
+        Spool::new(&dir, "k").store("s", r#"{"event":"X"}"#);
 
         let client = reqwest::blocking::Client::builder()
             .connect_timeout(Duration::from_millis(200))
             .timeout(Duration::from_millis(500))
             .build()
             .unwrap();
-        let delivered = Spool::new(&dir).drain(&client, "http://127.0.0.1:1/v1/ingest", "k");
+        let delivered = Spool::new(&dir, "k").drain(&client, "http://127.0.0.1:1/v1/ingest", "k");
 
         assert_eq!(delivered, 0);
         assert_eq!(
-            spooled_files(&dir).len(),
+            spooled_files(&dir, "k").len(),
             1,
             "an undelivered batch must be kept"
         );
@@ -955,12 +996,12 @@ mod tests {
         // Ordering is part of an audit trail's meaning, so recovery must not
         // reorder it.
         let dir = temp_app_dir();
-        let spool = Spool::new(&dir);
+        let spool = Spool::new(&dir, "k");
         spool.store("s1", r#"{"n":1}"#);
         std::thread::sleep(Duration::from_millis(5));
         spool.store("s2", r#"{"n":2}"#);
 
-        let files = spooled_files(&dir);
+        let files = spooled_files(&dir, "k");
         assert_eq!(files.len(), 2);
         let first = std::fs::read_to_string(&files[0]).unwrap();
         assert!(
@@ -975,19 +1016,76 @@ mod tests {
         // oversized batch stays oversized. Holding those would fill the outbox
         // with batches that can never drain, pushing out ones that could.
         let dir = temp_app_dir();
-        Spool::new(&dir).store("s", r#"{"event":"X"}"#);
+        Spool::new(&dir, "k").store("s", r#"{"event":"X"}"#);
 
         let (port, _rx) = mock_status_server(401);
         let client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(5))
             .build()
             .unwrap();
-        Spool::new(&dir).drain(&client, &format!("http://127.0.0.1:{port}/v1/ingest"), "k");
+        Spool::new(&dir, "k").drain(&client, &format!("http://127.0.0.1:{port}/v1/ingest"), "k");
 
         assert!(
-            spooled_files(&dir).is_empty(),
+            spooled_files(&dir, "k").is_empty(),
             "a permanently refused batch must be discarded"
         );
+    }
+
+    // ── Partitioned by environment (Stage 37, C1) ──────────────────────────────
+
+    #[test]
+    fn a_sandbox_batch_is_invisible_to_a_live_drain_and_vice_versa() {
+        // The bug this exists to close: before partitioning, `drain` posted
+        // with whatever key the next process happened to hold, so a batch held
+        // under a sandbox key could flush into live under a live key and
+        // report success. A `Spool` constructed with a live key must never
+        // even see a sandbox-held batch, not just refuse to send it.
+        let dir = temp_app_dir();
+        Spool::new(&dir, "nny_live_x").store("live-run", r#"{"event":"Live"}"#);
+        Spool::new(&dir, "nny_sdbx_x").store("sandbox-run", r#"{"event":"Sandbox"}"#);
+
+        assert_eq!(spooled_files(&dir, "nny_live_x").len(), 1);
+        assert_eq!(spooled_files(&dir, "nny_sdbx_x").len(), 1);
+
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+
+        // Draining with the live key must not touch the sandbox batch.
+        let (port, rx_srv) = mock_ingest_server();
+        let delivered = Spool::new(&dir, "nny_live_x").drain(
+            &client,
+            &format!("http://127.0.0.1:{port}/v1/ingest"),
+            "nny_live_x",
+        );
+        assert_eq!(delivered, 1);
+        let req = rx_srv
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the live batch was sent");
+        assert!(req.contains("live-run"), "wrong batch sent:\n{req}");
+
+        assert!(
+            spooled_files(&dir, "nny_live_x").is_empty(),
+            "the live batch was delivered"
+        );
+        assert_eq!(
+            spooled_files(&dir, "nny_sdbx_x").len(),
+            1,
+            "the sandbox batch must survive a live drain untouched"
+        );
+    }
+
+    #[test]
+    fn an_unrecognized_key_prefix_defaults_to_live() {
+        // A key minted before the split existed (or anything malformed) is
+        // still a real key, and getting silently routed into a "sandbox" no
+        // one is watching would be a worse failure than defaulting live —
+        // matching the cloud's own default.
+        let dir = temp_app_dir();
+        Spool::new(&dir, "nny_oldformat").store("s", r#"{"event":"X"}"#);
+
+        assert_eq!(spooled_files(&dir, "nny_live_anything").len(), 1);
     }
 
     #[test]
@@ -1033,7 +1131,7 @@ mod tests {
         // End to end: a previous run left a batch behind, this run's forwarder
         // clears it before sending its own events.
         let dir = temp_app_dir();
-        Spool::new(&dir).store("previous-run", r#"{"event":"FromEarlierRun"}"#);
+        Spool::new(&dir, "nny_k").store("previous-run", r#"{"event":"FromEarlierRun"}"#);
 
         let (port, rx_srv) = mock_ingest_server();
         let sender = CloudSync::start(
@@ -1053,7 +1151,7 @@ mod tests {
             "the held batch must go first:\n{req}"
         );
         assert!(
-            spooled_files(&dir).is_empty(),
+            spooled_files(&dir, "nny_k").is_empty(),
             "the outbox must be empty afterwards"
         );
     }
