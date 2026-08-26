@@ -142,6 +142,10 @@ pub(crate) struct BridgeState {
     // the same way, so a caller may safely (re)declare its identity on every
     // request. Under `--serve` this changes as different apps join.
     last_app: Option<(String, String)>,
+
+    // Last-recorded governor identity `(name, address, version)`. Dedups
+    // `GovernorIdentified` the same way as the other Identified events.
+    last_governor: Option<(String, String, String)>,
 }
 
 // ── Bridge ────────────────────────────────────────────────────────────────────
@@ -195,6 +199,7 @@ impl Bridge {
             last_harness: None,
             last_rules: None,
             last_app: None,
+            last_governor: None,
         }));
 
         let registry = Arc::new(components.registry);
@@ -327,6 +332,19 @@ impl Bridge {
     pub fn declare_app(&self, app_id: impl Into<String>, name: impl Into<String>) {
         let mut guard = self.shared.lock().unwrap();
         record_app(&mut guard, app_id.into(), name.into());
+    }
+
+    /// Declare this governance server's identity, emitting `GovernorIdentified`
+    /// (Gap G6). Called once, by `--serve`'s startup path — a plain (non-serve)
+    /// `nanny run` has no governor to identify and never calls this.
+    pub fn declare_governor(
+        &self,
+        name: impl Into<String>,
+        address: impl Into<String>,
+        version: impl Into<String>,
+    ) {
+        let mut guard = self.shared.lock().unwrap();
+        record_governor(&mut guard, name.into(), address.into(), version.into());
     }
 
     /// Drain all accumulated event lines from the bridge.
@@ -1304,6 +1322,32 @@ pub(crate) fn record_app(state: &mut BridgeState, app_id: String, name: String) 
     );
 }
 
+/// Append a `GovernorIdentified` event only when the identity actually
+/// changes (Gap G6). Mirrors `record_app`. Unlike an app id, no field here is
+/// required to be non-blank — `name` is best-effort (a hostname lookup can
+/// fail) and this is attribution, not a credential.
+pub(crate) fn record_governor(
+    state: &mut BridgeState,
+    name: String,
+    address: String,
+    version: String,
+) {
+    let candidate = (name, address, version);
+    if state.last_governor.as_ref() == Some(&candidate) {
+        return;
+    }
+    state.last_governor = Some(candidate.clone());
+    append_event(
+        state,
+        ExecutionEvent::GovernorIdentified {
+            ts: now_ms(),
+            name: candidate.0,
+            address: candidate.1,
+            version: candidate.2,
+        },
+    );
+}
+
 pub(crate) fn now_ms() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -1379,6 +1423,7 @@ impl RunTemplate {
             last_harness: None,
             last_rules: None,
             last_app: None,
+            last_governor: None,
         }))
     }
 }
@@ -2277,6 +2322,59 @@ mod tests {
         let b = started(1000);
         let before = b.metrics();
         post(&b, "/app", r#"{"app_id":"app_abc","name":"gotm-nanny"}"#);
+        let after = b.metrics();
+        assert_eq!(
+            before.tokens_spent, after.tokens_spent,
+            "must not charge tokens"
+        );
+        assert_eq!(
+            before.tool_call_count, after.tool_call_count,
+            "must not count a tool call"
+        );
+    }
+
+    // ── Governor identity (Stage 37, C4, Gap G6) ────────────────────────────────
+
+    #[test]
+    fn governor_records_identity_and_dedups() {
+        let b = started(1000);
+        b.declare_governor("box-1", "0.0.0.0:9999", "0.6.0");
+        // Re-declaring the same identity must not append a second event, the
+        // same rule `record_app`/`record_harness` already follow.
+        b.declare_governor("box-1", "0.0.0.0:9999", "0.6.0");
+
+        let (_, events) = get(&b, "/events");
+        let identified: Vec<_> = events
+            .lines()
+            .map(json_val)
+            .filter(|e| e["event"] == "GovernorIdentified")
+            .collect();
+        assert_eq!(identified.len(), 1, "identical identity must be deduped");
+        assert_eq!(identified[0]["name"], "box-1");
+        assert_eq!(identified[0]["address"], "0.0.0.0:9999");
+        assert_eq!(identified[0]["version"], "0.6.0");
+    }
+
+    #[test]
+    fn governor_emits_again_when_the_identity_changes() {
+        let b = started(1000);
+        b.declare_governor("box-1", "0.0.0.0:9999", "0.6.0");
+        b.declare_governor("box-1", "0.0.0.0:9999", "0.6.1"); // e.g. upgraded mid-session
+        let (_, events) = get(&b, "/events");
+        let versions: Vec<String> = events
+            .lines()
+            .map(json_val)
+            .filter(|e| e["event"] == "GovernorIdentified")
+            .map(|e| e["version"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(versions, vec!["0.6.0", "0.6.1"]);
+    }
+
+    #[test]
+    fn governor_identity_never_touches_enforcement() {
+        let b = started(1000);
+        let before = b.metrics();
+        b.declare_governor("box-1", "0.0.0.0:9999", "0.6.0");
         let after = b.metrics();
         assert_eq!(
             before.tokens_spent, after.tokens_spent,

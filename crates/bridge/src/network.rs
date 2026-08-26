@@ -48,8 +48,8 @@ use nanny_runtime::ToolRegistry;
 use super::{
     handle_agent_enter, handle_agent_exit, handle_app, handle_events, handle_harness,
     handle_health, handle_llm_usage, handle_rule_evaluate, handle_status, handle_stop,
-    handle_tool_call, init_run_template, stopped_reason, take_run_events, BridgeComponents,
-    BridgeResp, BridgeState, ContentType, RunTemplate,
+    handle_tool_call, init_run_template, record_governor, stopped_reason, take_run_events,
+    BridgeComponents, BridgeResp, BridgeState, ContentType, RunTemplate,
 };
 use std::sync::mpsc::Sender;
 
@@ -692,10 +692,29 @@ impl NetworkServer {
         // action endpoint is hit. Distinct run ids are minted lazily on demand.
         let runs: Arc<Mutex<HashMap<String, Arc<Mutex<BridgeState>>>>> =
             Arc::new(Mutex::new(HashMap::new()));
-        runs.lock().unwrap().insert(
-            DEFAULT_RUN_ID.to_string(),
-            template.build_state(DEFAULT_RUN_ID),
-        );
+        let default_state = template.build_state(DEFAULT_RUN_ID);
+        runs.lock()
+            .unwrap()
+            .insert(DEFAULT_RUN_ID.to_string(), default_state.clone());
+
+        // GovernorIdentified (Gap G6): declared once, into the default run's
+        // own event stream, so it drains and forwards the same way every other
+        // bridge event does — no separate server-level channel needed. Best
+        // effort: a hostname lookup can fail (sandboxed/minimal containers),
+        // and this is attribution, never a credential the run depends on.
+        {
+            let name = hostname::get()
+                .ok()
+                .and_then(|h| h.into_string().ok())
+                .unwrap_or_else(|| "unknown".to_string());
+            let mut guard = default_state.lock().unwrap();
+            record_governor(
+                &mut guard,
+                name,
+                addr.to_string(),
+                env!("CARGO_PKG_VERSION").to_string(),
+            );
+        }
 
         // Draining hook: when either a cloud sink or a local log path is
         // attached, a background thread drains each run's events. Draining is
@@ -1348,6 +1367,90 @@ mod tests {
         assert_eq!(resp.status(), 200);
         let body: serde_json::Value = resp.json().unwrap();
         assert_eq!(body["state"], "running");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// C4, Gap G6, end to end: a real `NetworkServer::start_blocking` run
+    /// declares its own identity before anything else happens, so the cloud
+    /// has a stable name/address/version even for a governor nobody ever
+    /// POSTs an app or a tool call to.
+    #[test]
+    fn server_declares_its_own_identity_on_start() {
+        let dir = test_certs_dir();
+        gen_certs_for_test(&dir);
+
+        let port = next_port();
+        // Non-loopback: loopback serves plain HTTP, and this test needs mTLS
+        // to exercise the real `start_blocking` path.
+        let addr: SocketAddr = format!("0.0.0.0:{port}").parse().unwrap();
+        let cert = dir.join("server.crt");
+        let key = dir.join("server.key");
+        let ca = dir.join("ca.crt");
+        let client_cert = dir.join("client.crt");
+        let client_key = dir.join("client.key");
+        let token = "test-server-token-governor".to_string();
+
+        let cert2 = cert.clone();
+        let key2 = key.clone();
+        let ca2 = ca.clone();
+        let token2 = token.clone();
+        std::thread::spawn(move || {
+            NetworkServer::start_blocking(
+                addr,
+                cert2,
+                key2,
+                ca2,
+                test_components(),
+                Some(token2),
+                100,
+                test_state_dir(),
+            )
+            .ok();
+        });
+        wait_for_port(port);
+
+        let ca_pem = std::fs::read(&ca).unwrap();
+        let ca_cert = reqwest::Certificate::from_pem(&ca_pem).unwrap();
+        let cert_pem = std::fs::read(&client_cert).unwrap();
+        let key_pem = std::fs::read(&client_key).unwrap();
+        let identity = reqwest::Identity::from_pem(&[cert_pem, key_pem].concat()).unwrap();
+        let client = reqwest::blocking::Client::builder()
+            .add_root_certificate(ca_cert)
+            .identity(identity)
+            .use_rustls_tls()
+            .danger_accept_invalid_hostnames(true)
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+
+        let events_text = client
+            .get(format!("https://127.0.0.1:{port}/events"))
+            .header("X-Nanny-Session-Token", &token)
+            .send()
+            .expect("events endpoint must respond")
+            .text()
+            .unwrap();
+
+        let identified: Vec<serde_json::Value> = events_text
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| serde_json::from_str(l).unwrap())
+            .filter(|v: &serde_json::Value| v["event"] == "GovernorIdentified")
+            .collect();
+        assert_eq!(identified.len(), 1, "declared exactly once, at startup");
+        assert_eq!(
+            identified[0]["address"],
+            format!("{addr}"),
+            "must be the address it actually bound, not the one requested"
+        );
+        assert_eq!(identified[0]["version"], env!("CARGO_PKG_VERSION"));
+        assert!(
+            identified[0]["name"]
+                .as_str()
+                .is_some_and(|n| !n.is_empty()),
+            "name must be present (falls back to \"unknown\", never blank)"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

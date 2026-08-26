@@ -234,6 +234,28 @@ pub enum ExecutionEvent {
         name: String,
     },
 
+    /// Emitted once when a `--serve` governance server starts.
+    ///
+    /// Gap G6: the cloud currently derives a governor handle by HMAC of the
+    /// server secret. That groups a governor's runs correctly, but gives no
+    /// name, address or version, and rotates whenever the secret does — every
+    /// process restart, since the secret is a fresh value each time. This is
+    /// the stable identity to show instead, parallel to `AppIdentified`:
+    /// attribution only, never affects enforcement or a stop.
+    ///
+    /// Not emitted by a plain (non-`--serve`) `nanny run` — there is no
+    /// governor to identify; that run's `governorId` stays absent, as today.
+    GovernorIdentified {
+        ts: u64,
+        /// The host it's running on. Best-effort; falls back to `"unknown"`
+        /// rather than failing the run over a label.
+        name: String,
+        /// Where other processes and machines reach it (`--addr`).
+        address: String,
+        /// This runtime's own version (`CARGO_PKG_VERSION`).
+        version: String,
+    },
+
     /// Emitted once when a process declares the rules it has registered.
     ///
     /// The second half of declared authority. `ExecutionStarted` records the
