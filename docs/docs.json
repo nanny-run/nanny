@@ -22,7 +22,11 @@
     "library": "lucide"
   },
   "contextual": {
-    "options": ["copy", "view", "claude"]
+    "options": [
+      "copy",
+      "view",
+      "claude"
+    ]
   },
   "footer": {
     "socials": {
@@ -44,26 +48,132 @@
     ]
   },
   "redirects": [
-    { "source": "/v0.5/reference/cli-server", "destination": "/v0.5/run" },
-    { "source": "/quickstart", "destination": "/v0.5/quickstart" },
-    { "source": "/guides/:slug*", "destination": "/v0.5/guides/:slug*" },
-    { "source": "/concepts/:slug*", "destination": "/v0.5/concepts/:slug*" },
-    { "source": "/reference/:slug*", "destination": "/v0.5/reference/:slug*" },
-    { "source": "/v0.1/:slug*", "destination": "/v0.5/:slug*" },
-    { "source": "/v0.2/:slug*", "destination": "/v0.5/:slug*" },
-    { "source": "/v0.3/:slug*", "destination": "/v0.5/:slug*" },
-    { "source": "/v0.4/:slug*", "destination": "/v0.5/:slug*" },
-    { "source": "/v0.1.3/:slug*", "destination": "/v0.5/:slug*" },
-    { "source": "/v0.1.4/:slug*", "destination": "/v0.5/:slug*" },
-    { "source": "/v0.1.5/:slug*", "destination": "/v0.5/:slug*" },
-    { "source": "/v0.1.7/:slug*", "destination": "/v0.5/:slug*" },
-    { "source": "/v0.1.8/:slug*", "destination": "/v0.5/:slug*" }
+    {
+      "source": "/v0.5/reference/cli-server",
+      "destination": "/v0.5/run"
+    },
+    {
+      "source": "/quickstart",
+      "destination": "/v0.5/quickstart"
+    },
+    {
+      "source": "/guides/:slug*",
+      "destination": "/v0.5/guides/:slug*"
+    },
+    {
+      "source": "/concepts/:slug*",
+      "destination": "/v0.5/concepts/:slug*"
+    },
+    {
+      "source": "/reference/:slug*",
+      "destination": "/v0.5/reference/:slug*"
+    },
+    {
+      "source": "/v0.1/:slug*",
+      "destination": "/v0.5/:slug*"
+    },
+    {
+      "source": "/v0.2/:slug*",
+      "destination": "/v0.5/:slug*"
+    },
+    {
+      "source": "/v0.3/:slug*",
+      "destination": "/v0.5/:slug*"
+    },
+    {
+      "source": "/v0.4/:slug*",
+      "destination": "/v0.5/:slug*"
+    },
+    {
+      "source": "/v0.1.3/:slug*",
+      "destination": "/v0.5/:slug*"
+    },
+    {
+      "source": "/v0.1.4/:slug*",
+      "destination": "/v0.5/:slug*"
+    },
+    {
+      "source": "/v0.1.5/:slug*",
+      "destination": "/v0.5/:slug*"
+    },
+    {
+      "source": "/v0.1.7/:slug*",
+      "destination": "/v0.5/:slug*"
+    },
+    {
+      "source": "/v0.1.8/:slug*",
+      "destination": "/v0.5/:slug*"
+    },
+    {
+      "source": "/v0.5/concepts/limits",
+      "destination": "/v0.6/concepts/tool-labels"
+    },
+    {
+      "source": "/v0.5/guides/http-proxy-mode",
+      "destination": "/v0.6/concepts/tool-labels"
+    }
   ],
   "navigation": {
     "versions": [
       {
-        "version": "v0.5.x",
+        "version": "v0.6.x",
         "tag": "Latest",
+        "tabs": [
+          {
+            "tab": "Getting Started",
+            "pages": [
+              "v0.6/index",
+              "v0.6/quickstart",
+              "v0.6/install",
+              {
+                "group": "Concepts",
+                "pages": [
+                  "v0.6/concepts/how-it-works",
+                  "v0.6/concepts/event-log",
+                  "v0.6/concepts/tool-labels",
+                  "v0.6/concepts/declared-authority"
+                ]
+              },
+              {
+                "group": "SDKs",
+                "pages": [
+                  "v0.6/guides/rust-sdk",
+                  "v0.6/guides/python-sdk"
+                ]
+              },
+              {
+                "group": "Guides",
+                "pages": [
+                  "v0.6/guides/managed-mode",
+                  "v0.6/guides/deploying",
+                  "v0.6/guides/governance-server",
+                  "v0.6/guides/rule-packs"
+                ]
+              },
+              {
+                "group": "CLI",
+                "pages": [
+                  "v0.6/init",
+                  "v0.6/run",
+                  "v0.6/reference/cli-certs",
+                  "v0.6/reference/cli-health",
+                  "v0.6/uninstall",
+                  "v0.6/reference/cli-rules"
+                ]
+              },
+              {
+                "group": "Reference",
+                "pages": [
+                  "v0.6/reference/nanny-toml",
+                  "v0.6/reference/events"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "version": "v0.5.x",
         "tabs": [
           {
             "tab": "Getting Started",
@@ -81,7 +191,10 @@
               },
               {
                 "group": "SDKs",
-                "pages": ["v0.5/guides/rust-sdk", "v0.5/guides/python-sdk"]
+                "pages": [
+                  "v0.5/guides/rust-sdk",
+                  "v0.5/guides/python-sdk"
+                ]
               },
               {
                 "group": "Guides",
@@ -104,7 +217,10 @@
               },
               {
                 "group": "Reference",
-                "pages": ["v0.5/reference/nanny-toml", "v0.5/reference/events"]
+                "pages": [
+                  "v0.5/reference/nanny-toml",
+                  "v0.5/reference/events"
+                ]
               }
             ]
           }
