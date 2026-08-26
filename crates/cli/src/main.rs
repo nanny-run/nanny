@@ -78,7 +78,7 @@ enum Command {
         join: Option<String>,
 
         /// Run as a headless governance server that other processes and machines
-        /// join, sharing one budget. Same enforcement as `nanny run`, exposed
+        /// join, sharing one rule set. Same enforcement as `nanny run`, exposed
         /// over the network.
         #[arg(long)]
         serve: bool,
@@ -121,7 +121,7 @@ enum Command {
 
     /// Show the live status of a running governance server.
     ///
-    /// Prints its listen address, connected agents, and current budget.
+    /// Prints its listen address and connected agents.
     Status {
         /// Which app's governor to check, by appId. Defaults to the app identified
         /// by .nanny/app.json in the current directory.
