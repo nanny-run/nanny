@@ -9,7 +9,7 @@ This is happening right now at hundreds of companies.
 
 **Nanny is the enforcement primitive that prevents it.**
 
-Nanny is an open-source enforcement primitive for autonomous agents and multi-agent systems. You tell it how far each agent is allowed to go — in steps, tokens, wall-clock time, and which tools it can touch — and the moment any limit is crossed, Nanny kills the process immediately and emits a structured log saying exactly what happened and why.
+Nanny is an open-source authorization and audit layer for AI agents that take real-world actions. You declare what each agent is allowed to do, which tools it may call and under what rules, and the moment it tries something outside that, Nanny stops the run and records exactly what happened.
 
 No grace period. No soft warnings. No recovery logic. No negotiation.
 
@@ -21,17 +21,23 @@ That boundary is deterministic, auditable, and structurally impossible for any a
 
 When you run an agent under nanny, these three things are true:
 
-- It **will not** take more steps than you allow.
-- It **will not** spend more than your token budget.
-- It **will not** run longer than your timeout.
+- It **will not** call a tool you did not allow.
+- It **will not** take an action a rule refuses.
+- Every verdict, allow and refuse alike, is **written down**.
 
-If any limit is breached, Nanny kills the process immediately — the agent cannot catch, delay, or prevent the stop. An `ExecutionStopped` event is emitted with the exact reason, and Nanny exits with a non-zero status code.
+A denial stops the run immediately. The agent cannot catch, delay, or prevent
+it. An `ExecutionStopped` event is emitted with the exact reason, and Nanny
+exits non-zero.
+
+Liability attaches to what an agent was allowed to do, not to how much it used.
+Nobody is accountable for a token count; people are accountable when an agent
+emails the wrong customer or moves money it should not have.
 
 ---
 
 ## What nanny is not
 
-Nanny sets limits and enforces them. It adds no intelligence — it doesn't interpret your agent's behavior, suggest better limits, or make any decisions. If you set a limit, it holds.
+Nanny enforces what you declared. It adds no intelligence: it never reads your prompts, interprets your agent's reasoning, or decides anything for you. It evaluates the identity, arguments, labels, and ordering of actions, and nothing else.
 
 ---
 
@@ -41,9 +47,9 @@ Nanny is for developers and teams running agents in production — or preparing 
 
 It is a good fit if you:
 
-- Are building **multi-agent systems** where different agents have different roles, tool access, and budget ceilings — and you need enforcement that fires per-role, not just globally
+- Are building **multi-agent systems** where different agents have different roles and tool access
 - Are running **autonomous agents** that call external tools, browse the web, or write to APIs
-- Need hard guarantees that an agent **cannot exceed a token budget or run indefinitely**
+- Need to prove an agent **could not** have done something, not just that it did not
 - Want a **structured audit trail** of every tool call and stop reason for every execution
 - Are building with **CrewAI, LangChain, or any Python or Rust agent framework**
 - Want enforcement that is **not tied to any agent framework** — use CrewAI, LangGraph, or any Python or Rust framework without lock-in
@@ -52,25 +58,32 @@ It is a good fit if you:
 
 ## The multi-agent scenario
 
-A fintech team builds a system where a manager agent spawns 12 specialists: one checks regulations, one pulls market data, one drafts reports. They deploy on Friday. One agent gets stuck looping on a market data API call over the weekend. The team has no per-role kill switch and no audit trail of which agent made which call.
+An outreach agent searches the web for context, then emails a prospect. Both
+actions are legitimate. Doing the second *after* the first is how an instruction
+hidden in a web page becomes an email you did not write.
 
-With Nanny, each specialist has its own named limit set in `nanny.toml`:
+Nanny governs the ordering, not the content:
 
 ```toml
-[limits.analysis]
-steps   = 60
-tokens  = 200     # tight — this agent makes expensive calls
-timeout = 60000
+[tools]
+allowed = ["web_search", "send_outreach"]
 
-[limits.reporter]
-steps   = 20
-tokens  = 50      # loose — this agent just writes a file
-timeout = 30000
+[tools.web_search]
+reads_untrusted = true    # ingests content you do not control
+
+[tools.send_outreach]
+external_effect = true    # acts on the outside world
+
+[rules]
+extends = ["nanny:recommended@1.0.0"]
 ```
 
-The analysis agent activates `[limits.analysis]` when it runs. The reporter activates `[limits.reporter]`. Each has its own tool allowlist — the analysis agent cannot call `write_report`, the reporter cannot call `compute_stats`. The moment any agent exceeds its ceiling or reaches for the wrong tool, Nanny stops it. The event log shows exactly which agent, which tool, which limit, and when.
+`no_send_after_read` ships in that pack. It denies any `external_effect` call
+once a `reads_untrusted` call has happened in the same run. Nanny never reads
+the page, so it cannot be fooled by what the page says.
 
-**Scope today:** This works for any multi-agent framework that runs agents within a single process — CrewAI, LangGraph, AutoGen, plain Python. See [`examples/python/metrics_crew`](https://github.com/nanny-run/nanny/tree/main/examples/python/metrics_crew) for the complete working example. Cross-process and cross-machine enforcement is supported via the governance server.
+The rule names labels, not tools, which is why it works in your application
+without being written for it. See [Tool labels](/v0.6/concepts/tool-labels).
 
 ---
 
@@ -81,15 +94,17 @@ Nanny is designed to meet you where you are and grow with you.
 **Nanny CLI** — The enforcement entry point. Governs any agent process in any language as its parent process supervisor. Install it once as a system tool and use `nanny run` from any project that has a `nanny.toml` with a `[start]` command configured.
 
 ```bash
-nanny run                        # reads [start].cmd from nanny.toml
-nanny run --limits=researcher    # activates a named limit set
+nanny run           # reads [start].cmd from nanny.toml
+nanny run --serve   # run a governance server for many processes
 ```
 
-**Rust SDK**, For Rust agents, go deeper. Annotate individual functions with `#[nanny::tool]`, `#[nanny::rule]`, and `#[nanny::agent]` to get per-function token accounting, allowlist enforcement, and custom rules. See the [Rust SDK guide](/v0.6/guides/rust-sdk).
+**Rust SDK**, for Rust agents. Annotate functions with `#[nanny::tool]`, `#[nanny::rule]`, and `#[nanny::agent]` for per-call enforcement and custom rules. See the [Rust SDK guide](/v0.6/guides/rust-sdk).
 
-**Python SDK**, The same model as the Rust SDK, as Python decorators. `@tool`, `@rule`, `@agent`. Each agent in your fleet gets its own budget ceiling, tool allowlist, and custom rules. Works with LangChain, CrewAI, or any Python agent framework. See [Python SDK](/v0.6/guides/python-sdk).
+**Python SDK**, the same model as decorators: `@tool`, `@rule`, `@agent`. Works with LangChain, CrewAI, or any Python agent framework. See [Python SDK](/v0.6/guides/python-sdk).
 
-**Nanny Cloud** _(coming soon)_ — Durable audit logs, team dashboards, org-level budget aggregation, and managed enforcement across all your agents. The OSS runtime stays unchanged — Cloud is the observability and coordination layer above it.
+**Rule packs**, curated sets of rules installed with one command and pinned to a version. See [Rule packs](/v0.6/guides/rule-packs).
+
+**Nanny Cloud**, durable signed audit trails, cost attribution across your fleet, and team access control. The runtime stays unchanged and works without it. See [Connect to Nanny Cloud](/v0.6/guides/managed-mode).
 
 ---
 
@@ -114,7 +129,7 @@ Source code, issues, and contributions live at [github.com/nanny-run/nanny](http
     Understand the enforcement model and passthrough mode.
   </Card>
   <Card title="Limits" icon="shield" href="/v0.6/concepts/limits">
-    Learn how timeout, steps, and token limits work.
+    Learn how tool permission and rules are enforced.
   </Card>
   <Card
     title="nanny.toml reference"
@@ -137,6 +152,6 @@ Source code, issues, and contributions live at [github.com/nanny-run/nanny](http
     with LangChain, CrewAI, and any Python agent framework.
   </Card>
   <Card title="Governance server" icon="server" href="/v0.6/guides/governance-server">
-    Cross-process and cross-machine enforcement with shared budget and mTLS.
+    Cross-process and cross-machine enforcement with one shared rule set and mTLS.
   </Card>
 </CardGroup>

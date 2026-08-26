@@ -55,13 +55,12 @@ This writes a `nanny.toml` with safe defaults:
 # How to launch your agent. nanny run reads this command.
 cmd = "python agent.py"
 
-[limits]
-steps   = 100
-tokens  = 1000
-timeout = 30000
+[tools]
+# Every tool your agent may call. An empty list denies all of them.
+allowed = []
 ```
 
-Set `[start].cmd` to your agent's entry point and edit the limit values to match your requirements.
+Set `[start].cmd` to your agent's entry point, then list the tools it is allowed to call.
 
 `nanny init` also writes `.nanny/app.json`, a permanent, one-time identity for this app (an `app_id` plus a name you'll be prompted for). It's meant to be committed alongside `nanny.toml`.
 
@@ -71,39 +70,52 @@ Set `[start].cmd` to your agent's entry point and edit the limit values to match
 nanny run
 ```
 
-Nanny reads `[start].cmd` from `nanny.toml`, spawns the process, and kills it the moment any limit is crossed.
+Nanny reads `[start].cmd` from `nanny.toml`, spawns the process, and stops it the moment it tries something outside what you declared.
 
-## Use named limits
+## Label your tools
 
-Define limit sets for different workloads in the same `nanny.toml`:
+Labels say what a tool *is*, so a rule can govern it without knowing its name:
 
 ```toml
-[limits]
-steps   = 50
-tokens  = 500
-timeout = 15000
+[tools]
+allowed = ["web_search", "send_outreach"]
 
-[limits.researcher]
-steps   = 200
-tokens  = 5000
-timeout = 120000
+[tools.web_search]
+max_calls       = 30
+reads_untrusted = true
+
+[tools.send_outreach]
+external_effect = true
 ```
 
-Then activate a named set at runtime:
+See [Tool labels](/v0.6/concepts/tool-labels) for all five.
+
+## Add rules
+
+Install a pack and pin it:
 
 ```bash
-nanny run --limits=researcher
+nanny rules add nanny:recommended@1.0.0 --from ./packs/nanny-recommended
 ```
 
-Named sets inherit from `[limits]` and override only the fields you declare.
+That writes one line into `nanny.toml` and vendors the pack into
+`.nanny/rules/`, both committed:
+
+```toml
+[rules]
+extends = ["nanny:recommended@1.0.0"]
+```
+
+Your own source is untouched. See [Rule packs](/v0.6/guides/rule-packs).
 
 ## Read the event log
 
 Every run emits structured NDJSON to stdout:
 
 ```json
-{"event":"ExecutionStarted","ts":1711234567000,"limits":{"steps":100,"tokens":1000,"timeout":30000},"limits_set":"[limits]","command":"python agent.py"}
-{"event":"ExecutionStopped","ts":1711234572000,"reason":"AgentCompleted","steps":7,"tokens_spent":70,"elapsed_ms":4823}
+{"event":"ExecutionStarted","ts":1711234567000,"run_id":"a1b2c3d4","seq":0,"command":"python agent.py","allowed_tools":["web_search"],"tool_labels":{"web_search":["reads_untrusted"]},"config_hash":"9f2a41c8"}
+{"event":"ToolAllowed","ts":1711234567120,"run_id":"a1b2c3d4","seq":1,"tool":"web_search"}
+{"event":"ExecutionStopped","ts":1711234572000,"run_id":"a1b2c3d4","seq":2,"reason":"AgentCompleted","tokens_spent":70,"elapsed_ms":4823}
 ```
 
 Pipe it to a file or your log aggregator:
