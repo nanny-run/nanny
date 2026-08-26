@@ -64,18 +64,12 @@ cd sdks/python && uv run ruff check .
 cd sdks/python && uv run mypy nanny_sdk
 ```
 
-### Run examples
+### Run rule pack tests
 
-All examples require API keys. Copy `.env.example` → `.env` and fill in.
+Rule packs live in `packs/`. Their tests run from `sdks/python`:
 
 ```bash
-# Rust examples (Groq free tier)
-cd examples/rust/webdingo && cargo build --release && nanny run -- "best Rust HTTP clients"
-cd examples/rust/qabud && cargo build --release && nanny run -- ./src
-
-# Python examples
-cd examples/python/dev_assist && uv sync && nanny run
-cd examples/python/metrics_crew && uv sync && nanny run
+uv run pytest ../../packs/nanny-recommended/tests
 ```
 
 ## Important constraints

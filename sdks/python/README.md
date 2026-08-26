@@ -142,7 +142,7 @@ reads_untrusted = true
 
 The five labels (`reads_untrusted`, `external_effect`, `destructive`, `moves_money`, `reads_sensitive`) describe what a tool *is*. Rules read labels rather than tool names, which is what lets a rule written for one app govern another.
 
-Cloud sync isn't a config field. Run `nanny auth login` once on a machine and every `nanny run` there forwards its event log automatically. No login, no sync.
+Cloud sync isn't a config field. Set `NANNY_API_KEY` and every `nanny run` on that machine forwards its event log automatically. No key, no sync.
 
 ---
 

@@ -273,26 +273,23 @@ When Nanny stops execution, it raises a `NannyStop` exception. All stop reasons 
 ```python
 from nanny_sdk import (
     NannyStop,
-    MaxStepsReached,
-    BudgetExhausted,
-    TimeoutExpired,
     ToolDenied,
     RuleDenied,
     AgentCompleted,
-    AgentNotFound,
     BridgeUnavailable,
+    ExecutionStopped,
 )
 ```
 
 Catch them by category or individually:
 
 ```python
-from nanny_sdk import NannyStop, BudgetExhausted, ToolDenied
+from nanny_sdk import NannyStop, RuleDenied, ToolDenied
 
 try:
     run_research("Alan Turing")
-except BudgetExhausted:
-    print("Hit the token ceiling")
+except RuleDenied as e:
+    print(f"Rule refused: {e.rule_name}")
 except ToolDenied as e:
     print(f"Blocked tool: {e.tool_name}")
 except NannyStop as e:
