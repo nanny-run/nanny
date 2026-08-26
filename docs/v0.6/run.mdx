@@ -14,11 +14,11 @@ nanny run [OPTIONS] [-- ARGS...]
 ## Examples
 
 ```bash
-# Run with base [limits] (reads [start].cmd from nanny.toml)
+# Reads [start].cmd from nanny.toml and governs it
 nanny run
 
-# Run with a named limit set
-nanny run --limits=researcher
+# Run a governance server, with the app underneath it
+nanny run --serve
 ```
 
 ---
@@ -27,10 +27,9 @@ nanny run --limits=researcher
 
 | Flag              | Type   | Default        | Description                                                                                                              |
 | ----------------- | ------ | -------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `--limits=<name>` | string | —              | Activate a named limit set from `nanny.toml`. Inherits from `[limits]`.                                                 |
 | `--join=<appId>`  | string | —              | Join an existing governance server by app id (from that server's `.nanny/app.json`), instead of enforcing locally. Explicit and app-id-only: never a name, never auto-detected. Not compatible with `--serve`. |
 | `--serve`         | flag   | —              | Start the governance server, and launch `[start].cmd` underneath it when `nanny.toml` declares one. Omit `[start]` for a headless governor. See [Governance server](#governance-server) below. |
-| `--no-sync`       | flag   | —              | Do not forward events to Nanny Cloud for this run, even if the machine is logged in. Enforcement is unaffected. See [Connect to Nanny Cloud](/v0.6/guides/managed-mode). |
+| `--no-sync`       | flag   | —              | Do not forward events to Nanny Cloud for this run, even if `NANNY_API_KEY` is set. Enforcement is unaffected. See [Connect to Nanny Cloud](/v0.6/guides/managed-mode). |
 | `--config=<path>` | path   | `./nanny.toml` | Path to config file.                                                                                                   |
 
 ---
@@ -49,9 +48,6 @@ nanny run --limits=researcher
 When Nanny stops a process it prints the reason to stderr:
 
 ```
-nanny: stopped — TimeoutExpired
-nanny: stopped — BudgetExhausted
-nanny: stopped — MaxStepsReached
 nanny: stopped — ToolDenied
 nanny: stopped — RuleDenied
 ```
@@ -65,10 +61,11 @@ This message is separate from the structured event log, which goes to stdout (or
 Every run emits [NDJSON events](/v0.6/concepts/event-log) to stdout. `ExecutionStarted` is always first; `ExecutionStopped` is always last:
 
 ```json
-{"event":"ExecutionStarted","ts":1711234567000,"limits":{"steps":100,"tokens":1000,"timeout":30000},"limits_set":"[limits]","command":"python agent.py"}
-{"event":"ToolAllowed","ts":1711234567120,"tool":"http_get"}
-{"event":"StepCompleted","ts":1711234567800,"step":1}
-{"event":"ExecutionStopped","ts":1711234572000,"reason":"BudgetExhausted","steps":12,"tokens_spent":1000,"elapsed_ms":5000}
+{"event":"ExecutionStarted","ts":1711234567000,"run_id":"a1b2c3d4","seq":0,"command":"python agent.py","allowed_tools":["web_search","send_outreach"],"tool_labels":{"web_search":["reads_untrusted"],"send_outreach":["external_effect"]},"config_hash":"9f2a41c8"}
+{"event":"RulesDeclared","ts":1711234567100,"run_id":"a1b2c3d4","seq":1,"rules":[{"name":"no_send_after_read","version":"1.0.0","pack":"nanny:recommended"}]}
+{"event":"ToolAllowed","ts":1711234567120,"run_id":"a1b2c3d4","seq":2,"tool":"web_search","cleared_by":["no_send_after_read"]}
+{"event":"RuleDenied","ts":1711234572000,"run_id":"a1b2c3d4","seq":3,"tool":"send_outreach","rule_name":"no_send_after_read","cleared_by":[]}
+{"event":"ExecutionStopped","ts":1711234572000,"run_id":"a1b2c3d4","seq":4,"reason":"RuleDenied","tokens_spent":380,"elapsed_ms":5000}
 ```
 
 Pipe to a file to keep your agent's own output separate:
@@ -81,16 +78,16 @@ nanny run > nanny.log
 
 ## Governance server
 
-`nanny run --serve` starts a long-lived **governance server**. Other processes and machines connect to it with `nanny run --join=<appId>`, and every tool call from every connected agent counts against one shared budget and step limit.
+`nanny run --serve` starts a long-lived **governance server**. Other processes and machines connect to it with `nanny run --join=<appId>`, and every tool call from every connected agent is evaluated against one shared set of rules.
 
 Whether it also runs an app of its own is decided by `nanny.toml`:
 
 - **`[start]` present.** The governor launches that command underneath itself, in one process. One container, one command, no launcher script. Trailing arguments append to it, as with plain `nanny run`.
 - **`[start]` absent.** A headless governor, for the case where the apps live elsewhere and arrive via `--join`.
 
-Launching an app does not make the governor exclusive: it is still a server, and other processes can still join it, each with its own run id and budget.
+Launching an app does not make the governor exclusive: it is still a server, and other processes can still join it, each with its own run id. Every run writes to the same log, and each event carries the `run_id` that tells them apart.
 
-For a single-process agent with no `[proxy]` allowlist you don't need any of this; plain `nanny run` is enough. You *do* need it if `nanny.toml` declares `[proxy] allowed_hosts`, because the egress allowlist is enforced by the governance server and not by the in-process bridge.
+Use it when one set of rules has to cover several processes or machines. A single-process agent is fully governed by plain `nanny run`.
 
 Starting a server requires `nanny init` to have already run in that directory: the server's state is keyed by the app's permanent `app_id`, not a global path, so two unrelated apps' servers on one machine never collide.
 
@@ -104,7 +101,7 @@ It reads `nanny.toml` from the current directory and blocks until stopped (`nann
 
 | Flag     | Type           | Default                     | Description                                                                                                    |
 | -------- | -------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `--addr` | socket address | `127.0.0.1:62669`           | Listen address. The governance API and HTTP proxy share this port. Loopback = plain HTTP; non-loopback = mTLS. |
+| `--addr` | socket address | `127.0.0.1:62669`           | Listen address. Loopback is plain HTTP; non-loopback requires mTLS. |
 | `--cert` | path           | `~/.nanny/certs/server.crt` | Server TLS certificate PEM. Required only for non-loopback addresses.                                          |
 | `--key`  | path           | `~/.nanny/certs/server.key` | Server TLS private key PEM. Required only for non-loopback addresses.                                          |
 | `--ca`   | path           | `~/.nanny/certs/ca.crt`     | CA certificate PEM used to validate agent client certs. Required only for non-loopback addresses.             |
