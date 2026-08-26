@@ -1,0 +1,59 @@
+---
+title: Live and sandbox
+description: Two environments, one host, chosen entirely by which API key you use — never a flag, never a config field.
+---
+
+## There is one host
+
+Nanny Cloud has exactly one endpoint. There is no `--env` flag, no `[cloud]
+environment` config field, and nothing to select on the command line. A stale
+CI flag or a copy-pasted config value can never point a run at the wrong
+place, because there is nothing to point.
+
+What decides whether a run is **live** or **sandbox** is the API key itself:
+
+```bash
+nny_live_...   # live: real usage, real evidence
+nny_sdbx_...   # sandbox: same enforcement, nothing counted
+```
+
+Create either kind from the dashboard under **Settings → API Keys**. Enforcement
+is identical either way — the same rules, the same limits, the same stop
+behavior. Only what happens to the data differs.
+
+## What sandbox is for
+
+Point a real deployment at a sandbox key while you're building or testing a
+new rule set, without any chance of a test run polluting your live dashboard,
+your live compliance evidence, or your live retention window. Confirming your
+own events actually arrive is the whole point — sandbox is the real ingest
+path, not a mock, so what you see there is what production will see too.
+
+## What sandbox does not have
+
+<Warning>
+  A sandbox run produces **no compliance evidence**. It is never signed, never
+  sealed into a receipt, and never appears in a compliance export. If you need
+  to demonstrate enforcement to an auditor, that has to be a live run.
+</Warning>
+
+Sandbox data is also held for a flat **7 days**, regardless of your plan's
+retention tier. An Enterprise plan's multi-year retention window applies to
+live data; sandbox is short-lived on every plan, because it is meant to be
+disposable.
+
+## Switching keys is safe
+
+Enforcement never depends on the network, so a batch the cloud could not take
+yet is held locally under `.nanny/spool/` until it can be delivered — see
+[Connect to Nanny Cloud](/v0.6/guides/managed-mode#when-the-cloud-is-unreachable).
+That outbox is partitioned by environment (`.nanny/spool/live/`,
+`.nanny/spool/sandbox/`), so switching from a sandbox key back to a live one
+(or the reverse) never sends one environment's held batches under the other's
+credential. If the other side is holding anything, the next run says so:
+
+```
+nanny: sync: 12 batch(es) held for sandbox, not sent: this run is live
+```
+
+Nothing is sent, and nothing is lost — switch back and it delivers.

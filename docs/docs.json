@@ -149,6 +149,7 @@
                 "group": "Guides",
                 "pages": [
                   "v0.6/guides/managed-mode",
+                  "v0.6/guides/environments",
                   "v0.6/guides/deploying",
                   "v0.6/guides/governance-server",
                   "v0.6/guides/rule-packs"

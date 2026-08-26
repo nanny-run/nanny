@@ -23,6 +23,8 @@ NANNY_API_KEY=nny_...
 
 Create it in the dashboard under **Settings → API Keys**, then set it however your platform sets secrets: a Fly secret, a Kubernetes `Secret`, a Coolify environment variable. That single variable decides whether runs sync; see [Connect to Nanny Cloud](/v0.6/guides/managed-mode).
 
+The key's prefix (`nny_live_` or `nny_sdbx_`) also decides whether this deployment writes real evidence or throwaway sandbox data — see [Live and sandbox](/v0.6/guides/environments) before deploying against a live key for the first time.
+
 Leave it unset and everything still works. Enforcement is local and never depends on the cloud.
 
 <Warning>
@@ -71,4 +73,4 @@ nanny: running [start] under this governor
 
 Then `nanny status` from the same directory, or the dashboard, which lists the app by the name in `.nanny/app.json`.
 
-If the cloud is unreachable, events are held in `.nanny/spool/` and delivered on the next run. See [Connect to Nanny Cloud](/v0.6/guides/managed-mode). If your platform gives the container a writable filesystem this is automatic; if it does not, a cloud outage costs those events, and everything else still works.
+If the cloud is unreachable, events are held under `.nanny/spool/` (partitioned by environment) and delivered on the next run. See [Connect to Nanny Cloud](/v0.6/guides/managed-mode). If your platform gives the container a writable filesystem this is automatic; if it does not, a cloud outage costs those events, and everything else still works.
