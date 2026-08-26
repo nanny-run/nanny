@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from nanny_sdk import _decorators
 from nanny_sdk.packs import LoadedRule, declare_all, load_installed_packs
 
