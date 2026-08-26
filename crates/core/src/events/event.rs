@@ -88,6 +88,14 @@ pub enum ExecutionEvent {
         /// compared without reproducing their configs. Hashed over the parsed
         /// config, so reformatting does not mint a new policy.
         config_hash: String,
+        /// This runtime's own version (`CARGO_PKG_VERSION`), e.g. `"0.6.0"`.
+        ///
+        /// Gap G5: before this, nothing in the event log carried the runtime's
+        /// own version — only the rule pack and the harness had one. Without
+        /// it, "which of my machines are still on an old runtime" is
+        /// unanswerable the day after publishing a fix, since every run looks
+        /// the same regardless of which binary produced it.
+        runtime_version: String,
     },
 
     /// Emitted when a tool call is evaluated and allowed by policy.
@@ -361,6 +369,7 @@ mod tests {
                 allowed_tools: vec!["a".into()],
                 tool_labels: BTreeMap::new(),
                 config_hash: "deadbeef".into(),
+                runtime_version: "0.6.0".into(),
             },
             ExecutionEvent::RulesDeclared {
                 ts: 2,

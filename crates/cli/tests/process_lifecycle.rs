@@ -989,6 +989,36 @@ fn execution_started_carries_a_stable_config_hash() {
     assert_eq!(hashes[0].len(), 64, "sha256 hex");
 }
 
+/// Gap G5: `ExecutionStarted` carries the runtime's own version, so a fleet
+/// operator can answer "which of my machines are on an old runtime" from the
+/// log alone, without cross-referencing which binary happened to be deployed
+/// where.
+#[test]
+fn execution_started_carries_the_runtime_version() {
+    let dir = temp_dir();
+    write_config_logging_to_file(&dir, "echo hello");
+
+    Command::new(nanny_bin())
+        .args(["run", "--config", &config_arg(&dir)])
+        .current_dir(&dir)
+        .status()
+        .expect("nanny run must execute");
+
+    let log = fs::read_to_string(dir.join(".nanny/logs/log.ndjson")).unwrap();
+    let started = log
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .find(|v| v["event"] == "ExecutionStarted")
+        .expect("ExecutionStarted is always the first event");
+
+    assert_eq!(
+        started["runtime_version"],
+        env!("CARGO_PKG_VERSION"),
+        "must match the binary that actually produced this run"
+    );
+}
+
 // ── Rule packs ────────────────────────────────────────────────────────────────
 
 /// A pack declared in config but absent from disk stops the run before it

@@ -86,6 +86,7 @@ mod tests {
                 .into_iter()
                 .collect(),
             config_hash: "deadbeef".to_string(),
+            runtime_version: "0.6.0".to_string(),
         }
     }
 
@@ -109,6 +110,7 @@ mod tests {
         assert!(v["ts"].is_number());
         assert_eq!(v["allowed_tools"][0], "http_get");
         assert_eq!(v["tool_labels"]["http_get"][0], "reads_untrusted");
+        assert_eq!(v["runtime_version"], "0.6.0");
     }
 
     #[test]

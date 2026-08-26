@@ -897,6 +897,7 @@ fn execution_started_event(
         allowed_tools: tools.allowed.clone(),
         tool_labels,
         config_hash,
+        runtime_version: env!("CARGO_PKG_VERSION").to_string(),
     }
 }
 
