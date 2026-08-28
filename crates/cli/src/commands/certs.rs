@@ -49,6 +49,18 @@ pub enum CertsCommand {
         /// Certificate validity in days.
         #[arg(long, default_value_t = 365)]
         days: u32,
+
+        /// Additional hostname or IP the server certificate is valid for.
+        /// Repeatable.
+        ///
+        /// Required whenever anything joins over a name other than localhost:
+        /// a client verifies the hostname it dialled against this list, so a
+        /// governor reached at `gotm-server:62669` needs `--san gotm-server`
+        /// or the handshake fails before any request is made.
+        ///
+        ///     nanny certs generate --san gotm-server --san 10.0.1.4
+        #[arg(long = "san", value_name = "HOST")]
+        sans: Vec<String>,
     },
 
     /// Import externally-issued certificates (BYOC — bring your own certs).
@@ -76,7 +88,16 @@ pub enum CertsCommand {
     /// without restarting.
     ///
     /// To replace the CA as well, use `nanny certs generate --force`.
-    Rotate,
+    Rotate {
+        /// Additional hostname or IP the new server certificate is valid for.
+        /// Repeatable.
+        ///
+        /// Omitted, the names from the previous certificate are kept, so a
+        /// routine rotation never silently narrows what the governor can be
+        /// reached by. Passing any value replaces that list.
+        #[arg(long = "san", value_name = "HOST")]
+        sans: Vec<String>,
+    },
 
     /// Delete all certificates from the certs directory.
     Remove,
@@ -93,9 +114,10 @@ pub fn cmd_certs(action: CertsCommand) -> Result<()> {
             out_dir,
             force,
             days,
-        } => cmd_certs_generate(out_dir, force, days),
+            sans,
+        } => cmd_certs_generate(out_dir, force, days, &sans),
         CertsCommand::Import { pairs } => cmd_certs_import(pairs),
-        CertsCommand::Rotate => cmd_certs_rotate(None),
+        CertsCommand::Rotate { sans } => cmd_certs_rotate(None, &sans),
         CertsCommand::Remove => cmd_certs_remove(),
         CertsCommand::Show => cmd_certs_show(),
     }
@@ -112,6 +134,27 @@ pub fn default_certs_dir() -> PathBuf {
 }
 
 // ── Meta ──────────────────────────────────────────────────────────────────────
+
+/// Names always present on a server certificate, whatever else is asked for.
+///
+/// Kept unconditionally so adding a deployment hostname never breaks the local
+/// path: `nanny run --serve` on loopback, `nanny status`, and every test dial
+/// 127.0.0.1, and a certificate that stopped covering it would turn a working
+/// machine into a handshake error.
+const ALWAYS_SANS: [&str; 2] = ["localhost", "127.0.0.1"];
+
+/// The server certificate's names: the two that are always there, plus what
+/// the operator asked for, de-duplicated and order-stable.
+fn server_sans(extra: &[String]) -> Vec<String> {
+    let mut sans: Vec<String> = ALWAYS_SANS.iter().map(|s| s.to_string()).collect();
+    for name in extra {
+        let name = name.trim();
+        if !name.is_empty() && !sans.iter().any(|s| s == name) {
+            sans.push(name.to_string());
+        }
+    }
+    sans
+}
 
 /// Metadata stored alongside the certs for quick display without re-parsing PEM.
 #[derive(Debug, Serialize, Deserialize)]
@@ -144,7 +187,12 @@ pub fn read_meta(dir: &Path) -> Result<CertsMeta> {
 
 // ── nanny certs generate ──────────────────────────────────────────────────────
 
-fn cmd_certs_generate(out_dir: Option<PathBuf>, force: bool, days: u32) -> Result<()> {
+fn cmd_certs_generate(
+    out_dir: Option<PathBuf>,
+    force: bool,
+    days: u32,
+    sans: &[String],
+) -> Result<()> {
     let dir = out_dir.unwrap_or_else(default_certs_dir);
 
     // Warn if the certs dir happens to be inside a git-tracked tree — certs
@@ -198,7 +246,7 @@ fn cmd_certs_generate(out_dir: Option<PathBuf>, force: bool, days: u32) -> Resul
         .context("failed to self-sign CA cert")?;
 
     // ── Server cert ───────────────────────────────────────────────────────────
-    let server_sans = vec!["localhost".to_string(), "127.0.0.1".to_string()];
+    let server_sans = server_sans(sans);
     let mut server_dn = DistinguishedName::new();
     server_dn.push(DnType::CommonName, "Nanny Server");
     let mut server_params = CertificateParams::new(server_sans.clone())
@@ -406,7 +454,7 @@ fn cmd_certs_import(pairs: Vec<String>) -> Result<()> {
 
 // ── nanny certs rotate ────────────────────────────────────────────────────────
 
-fn cmd_certs_rotate(out_dir: Option<PathBuf>) -> Result<()> {
+fn cmd_certs_rotate(out_dir: Option<PathBuf>, sans: &[String]) -> Result<()> {
     let dir = out_dir.unwrap_or_else(default_certs_dir);
 
     let ca_crt_path = dir.join("ca.crt");
@@ -481,7 +529,15 @@ fn cmd_certs_rotate(out_dir: Option<PathBuf>) -> Result<()> {
     let not_after = not_before + time::Duration::days(365);
 
     // ── New server cert (signed by existing CA) ───────────────────────────────
-    let server_sans = vec!["localhost".to_string(), "127.0.0.1".to_string()];
+    // Keep the names the previous certificate carried unless new ones are
+    // given. A rotation that quietly dropped a deployment hostname would take
+    // a working fleet down at the handshake, hours after the command ran.
+    let carried: Vec<String> = if sans.is_empty() {
+        read_meta(&dir).map(|m| m.san).unwrap_or_default()
+    } else {
+        sans.to_vec()
+    };
+    let server_sans = server_sans(&carried);
     let mut server_dn = DistinguishedName::new();
     server_dn.push(DnType::CommonName, "Nanny Server");
     let mut server_params = CertificateParams::new(server_sans.clone())
@@ -831,7 +887,7 @@ mod tests {
     #[test]
     fn generate_creates_all_files() {
         let dir = tmp_dir();
-        cmd_certs_generate(Some(dir.clone()), false, 365).expect("generate must succeed");
+        cmd_certs_generate(Some(dir.clone()), false, 365, &[]).expect("generate must succeed");
 
         for name in &[
             "ca.crt",
@@ -851,9 +907,9 @@ mod tests {
     #[test]
     fn generate_refuses_overwrite_without_force() {
         let dir = tmp_dir();
-        cmd_certs_generate(Some(dir.clone()), false, 365).unwrap();
+        cmd_certs_generate(Some(dir.clone()), false, 365, &[]).unwrap();
 
-        let result = cmd_certs_generate(Some(dir.clone()), false, 365);
+        let result = cmd_certs_generate(Some(dir.clone()), false, 365, &[]);
         assert!(result.is_err(), "second generate without --force must fail");
         assert!(
             result.unwrap_err().to_string().contains("already exist"),
@@ -866,15 +922,15 @@ mod tests {
     #[test]
     fn generate_force_overwrites() {
         let dir = tmp_dir();
-        cmd_certs_generate(Some(dir.clone()), false, 365).unwrap();
-        cmd_certs_generate(Some(dir.clone()), true, 365).expect("--force must overwrite");
+        cmd_certs_generate(Some(dir.clone()), false, 365, &[]).unwrap();
+        cmd_certs_generate(Some(dir.clone()), true, 365, &[]).expect("--force must overwrite");
         fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn generated_certs_have_valid_chain() {
         let dir = tmp_dir();
-        cmd_certs_generate(Some(dir.clone()), false, 365).unwrap();
+        cmd_certs_generate(Some(dir.clone()), false, 365, &[]).unwrap();
 
         let ca = fs::read(dir.join("ca.crt")).unwrap();
         let server_cert = fs::read(dir.join("server.crt")).unwrap();
@@ -889,7 +945,7 @@ mod tests {
     #[test]
     fn meta_json_contains_expiry() {
         let dir = tmp_dir();
-        cmd_certs_generate(Some(dir.clone()), false, 90).unwrap();
+        cmd_certs_generate(Some(dir.clone()), false, 90, &[]).unwrap();
 
         let meta = read_meta(&dir).expect("meta.json must be readable");
         assert!(!meta.expires.is_empty(), "expires must be set");
@@ -903,14 +959,88 @@ mod tests {
     }
 
     #[test]
+    fn extra_sans_are_added_without_dropping_the_local_ones() {
+        // Adding a deployment hostname must never cost the local path:
+        // `nanny run --serve` on loopback, `nanny status` and every test dial
+        // 127.0.0.1, and a cert that stopped covering it would turn a working
+        // machine into a handshake failure.
+        let sans = server_sans(&["gotm-server".to_string(), "10.0.1.4".to_string()]);
+        assert_eq!(
+            sans,
+            vec!["localhost", "127.0.0.1", "gotm-server", "10.0.1.4"]
+        );
+    }
+
+    #[test]
+    fn san_list_is_deduplicated_and_ignores_blanks() {
+        let sans = server_sans(&[
+            "localhost".to_string(),
+            "  ".to_string(),
+            "gotm-server".to_string(),
+            "gotm-server".to_string(),
+        ]);
+        assert_eq!(sans, vec!["localhost", "127.0.0.1", "gotm-server"]);
+    }
+
+    #[test]
+    fn a_generated_cert_carries_the_requested_hostname() {
+        let dir = tmp_dir();
+        cmd_certs_generate(Some(dir.clone()), false, 365, &["gotm-server".to_string()]).unwrap();
+        let meta = read_meta(&dir).unwrap();
+        assert!(
+            meta.san.contains(&"gotm-server".to_string()),
+            "the hostname a client will dial must be on the cert: {:?}",
+            meta.san
+        );
+        assert!(
+            meta.san.contains(&"127.0.0.1".to_string()),
+            "{:?}",
+            meta.san
+        );
+    }
+
+    #[test]
+    fn rotation_keeps_the_hostnames_unless_told_otherwise() {
+        // The failure this prevents: a routine rotation silently narrows the
+        // cert back to localhost, and every joined process across the fleet
+        // starts failing its handshake hours later, with nothing in the
+        // rotation output to suggest why.
+        let dir = tmp_dir();
+        cmd_certs_generate(Some(dir.clone()), false, 365, &["gotm-server".to_string()]).unwrap();
+
+        cmd_certs_rotate(Some(dir.clone()), &[]).unwrap();
+        let kept = read_meta(&dir).unwrap();
+        assert!(
+            kept.san.contains(&"gotm-server".to_string()),
+            "rotation must carry the names forward: {:?}",
+            kept.san
+        );
+
+        // Passing names explicitly replaces the list rather than appending to
+        // it, so a host that is decommissioned can actually be removed.
+        cmd_certs_rotate(Some(dir.clone()), &["other-host".to_string()]).unwrap();
+        let replaced = read_meta(&dir).unwrap();
+        assert!(
+            replaced.san.contains(&"other-host".to_string()),
+            "{:?}",
+            replaced.san
+        );
+        assert!(
+            !replaced.san.contains(&"gotm-server".to_string()),
+            "{:?}",
+            replaced.san
+        );
+    }
+
+    #[test]
     fn rotate_regenerates_certs() {
         let dir = tmp_dir();
-        cmd_certs_generate(Some(dir.clone()), false, 365).unwrap();
+        cmd_certs_generate(Some(dir.clone()), false, 365, &[]).unwrap();
 
         let original_server = fs::read(dir.join("server.crt")).unwrap();
         // Rotate the test dir specifically (not the default ~/.nanny/certs) so
         // the test is hermetic and actually exercises rotation against these certs.
-        cmd_certs_rotate(Some(dir.clone())).unwrap();
+        cmd_certs_rotate(Some(dir.clone()), &[]).unwrap();
 
         let new_server = fs::read(dir.join("server.crt")).unwrap();
         // Certs are regenerated — the PEM bytes differ (a fresh key each rotate).
@@ -925,7 +1055,7 @@ mod tests {
     #[test]
     fn import_file_reference_works() {
         let dir = tmp_dir();
-        cmd_certs_generate(Some(dir.clone()), false, 365).unwrap();
+        cmd_certs_generate(Some(dir.clone()), false, 365, &[]).unwrap();
 
         // Import using @file syntax — re-import the same certs.
         let ca_path = dir.join("ca.crt");
@@ -958,8 +1088,8 @@ mod tests {
         ));
         fs::create_dir_all(&dir_b).unwrap();
 
-        cmd_certs_generate(Some(dir_a.clone()), false, 365).unwrap();
-        cmd_certs_generate(Some(dir_b.clone()), false, 365).unwrap();
+        cmd_certs_generate(Some(dir_a.clone()), false, 365, &[]).unwrap();
+        cmd_certs_generate(Some(dir_b.clone()), false, 365, &[]).unwrap();
 
         let ca_a = fs::read(dir_a.join("ca.crt")).unwrap();
         let cert_b = fs::read(dir_b.join("server.crt")).unwrap();
@@ -975,7 +1105,7 @@ mod tests {
     #[test]
     fn cert_expiry_is_parseable() {
         let dir = tmp_dir();
-        cmd_certs_generate(Some(dir.clone()), false, 30).unwrap();
+        cmd_certs_generate(Some(dir.clone()), false, 30, &[]).unwrap();
 
         let pem = fs::read(dir.join("server.crt")).unwrap();
         let expiry = cert_expiry_from_pem(&pem).expect("expiry must parse");
