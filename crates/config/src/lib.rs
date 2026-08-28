@@ -351,6 +351,31 @@ pub enum LogTarget {
 /// every replica, with nothing written to disk to make it work.
 pub const API_KEY_ENV: &str = "NANNY_API_KEY";
 
+/// Prefix on every run id, so an id is recognisable as one on sight.
+///
+/// Matches the shape `app_` already uses. The two together are the product's
+/// id convention: a type prefix, then 32 hex characters, no dashes.
+pub const RUN_ID_PREFIX: &str = "run_";
+
+/// Mint a run id.
+///
+/// `run_` plus 32 hex characters of uniform randomness, 128 bits, generated
+/// with no coordination and no clock, because the runtime mints these offline
+/// with no database and often no network.
+///
+/// **Uniformly random on purpose, and not time-ordered.** A time-ordered id
+/// (UUIDv7) was considered and rejected: ordering here comes from the
+/// execution's own timestamp, and a leading timestamp would make every short
+/// prefix identical for runs in the same millisecond, which breaks the one
+/// thing a short id is for. Uniform randomness means any prefix identifies the
+/// run, so a console can show `run_9f8e7d6c` and have it be typeable,
+/// searchable and resolvable by an indexed prefix match, exactly as a short
+/// commit hash is.
+#[must_use]
+pub fn new_run_id() -> String {
+    format!("{RUN_ID_PREFIX}{}", uuid::Uuid::new_v4().simple())
+}
+
 /// Environment variable holding the governance server's session token.
 ///
 /// Set on `--serve`, the server uses it instead of minting one. Set on a
@@ -674,6 +699,31 @@ reads_untrused = true
 
         assert_eq!(config.observability.log, LogTarget::Stdout);
         assert!(config.observability.file.is_none());
+    }
+
+    #[test]
+    fn a_run_id_is_typed_and_prefix_addressable() {
+        let id = new_run_id();
+        assert!(id.starts_with("run_"), "{id}");
+        let body = id.strip_prefix("run_").unwrap();
+        assert_eq!(body.len(), 32, "32 hex characters, no dashes: {id}");
+        assert!(body.chars().all(|c| c.is_ascii_hexdigit()), "{id}");
+        // Same shape as an app id, which is the point of having a convention.
+        assert_eq!(id.len(), "app_179d3f16367d4b109b43a6f8f73a396f".len());
+    }
+
+    #[test]
+    fn run_ids_do_not_share_a_leading_prefix() {
+        // The property a short display form depends on, and the reason a
+        // time-ordered id was rejected: ids minted back to back must differ in
+        // their *first* characters, or `run_9f8e7d6c` identifies nothing.
+        let ids: Vec<String> = (0..64).map(|_| new_run_id()).collect();
+        let heads: std::collections::HashSet<&str> = ids.iter().map(|id| &id[..12]).collect();
+        assert_eq!(
+            heads.len(),
+            ids.len(),
+            "64 ids minted in a tight loop collided on their first 8 hex characters"
+        );
     }
 
     #[test]

@@ -506,7 +506,7 @@ fn build_governed_child(
     let run_id = std::env::var("NANNY_RUN_ID")
         .ok()
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        .unwrap_or_else(nanny_config::new_run_id);
 
     let mut cmd = std::process::Command::new(program);
     cmd.args(args);

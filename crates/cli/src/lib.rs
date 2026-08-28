@@ -282,7 +282,7 @@ pub fn declare_rules() {
 /// Mirrors `nanny_sdk.run_scope()` on the Python side.
 #[must_use = "the scope ends when the guard is dropped; binding to `_` drops it immediately"]
 pub fn run_scope(run_id: Option<String>) -> RunScope {
-    let id = run_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let id = run_id.unwrap_or_else(nanny_config::new_run_id);
     let previous = runtime::scoped_run_id();
     runtime::set_scoped_run_id(Some(id.clone()));
     RunScope { id, previous }
@@ -327,7 +327,7 @@ impl Drop for RunScope {
 /// untrusted read poisons another tenant's history, which is a wrong security
 /// verdict rather than a wrong number.
 pub async fn run_scope_async<F: std::future::Future>(run_id: Option<String>, f: F) -> F::Output {
-    let id = run_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let id = run_id.unwrap_or_else(nanny_config::new_run_id);
     runtime::TASK_RUN_ID.scope(id, f).await
 }
 

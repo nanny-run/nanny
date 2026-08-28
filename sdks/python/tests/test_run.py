@@ -109,3 +109,23 @@ def test_concurrent_run_scopes_do_not_clobber_each_other() -> None:
 
     assert seen["a"] == "run-a"
     assert seen["b"] == "run-b"
+
+def test_a_run_id_is_typed_and_prefix_addressable() -> None:
+    """Mirrors `nanny_config`'s own test: the two implementations write ids
+    into the same log, so a drift in shape is a drift in the wire format."""
+    from nanny_sdk.run import new_run_id
+
+    rid = new_run_id()
+    assert rid.startswith("run_")
+    body = rid.removeprefix("run_")
+    assert len(body) == 32, rid
+    assert all(c in "0123456789abcdef" for c in body), rid
+
+
+def test_run_ids_do_not_share_a_leading_prefix() -> None:
+    """The property a short display form depends on. A time-ordered id would
+    fail this, which is why one was rejected."""
+    from nanny_sdk.run import new_run_id
+
+    ids = [new_run_id() for _ in range(64)]
+    assert len({rid[:12] for rid in ids}) == len(ids)

@@ -32,7 +32,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 
-__all__ = ["run_scope"]
+__all__ = ["new_run_id", "run_scope"]
 
 _SCOPED_RUN_ID: ContextVar[str | None] = ContextVar("nanny_scoped_run_id", default=None)
 
@@ -40,6 +40,25 @@ _SCOPED_RUN_ID: ContextVar[str | None] = ContextVar("nanny_scoped_run_id", defau
 def _scoped_run_id() -> str | None:
     """The active `run_scope()` id, if any. Used by `_client._run_id()`."""
     return _SCOPED_RUN_ID.get()
+
+
+#: Prefix on every run id, so an id is recognisable as one on sight. Matches the
+#: shape ``app_`` already uses: a type prefix, then 32 hex characters, no dashes.
+RUN_ID_PREFIX = "run_"
+
+
+def new_run_id() -> str:
+    """Mint a run id: ``run_`` plus 32 hex characters, 128 random bits.
+
+    Mirrors ``nanny_config::new_run_id`` on the Rust side, and the two must not
+    drift: a governor and the SDKs joining it write ids into the same log.
+
+    Uniformly random on purpose, not time-ordered. A leading timestamp would
+    make every short prefix identical for runs in the same millisecond, and a
+    short id exists precisely so it can be read, typed and looked up, the way a
+    short commit hash is.
+    """
+    return f"{RUN_ID_PREFIX}{uuid.uuid4().hex}"
 
 
 @contextmanager
@@ -63,7 +82,7 @@ def run_scope(run_id: str | None = None) -> Iterator[str]:
     With no scope ever entered, `_client._run_id()` falls through to
     `NANNY_RUN_ID` exactly as before this existed.
     """
-    rid = run_id or str(uuid.uuid4())
+    rid = run_id or new_run_id()
     token = _SCOPED_RUN_ID.set(rid)
     try:
         yield rid
