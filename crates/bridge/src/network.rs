@@ -47,9 +47,9 @@ use nanny_runtime::ToolRegistry;
 
 use super::{
     handle_agent_enter, handle_agent_exit, handle_app, handle_events, handle_harness,
-    handle_health, handle_llm_usage, handle_rule_evaluate, handle_status, handle_stop,
-    handle_tool_call, init_run_template, record_governor, stopped_reason, take_run_events,
-    BridgeComponents, BridgeResp, BridgeState, ContentType, RunTemplate,
+    handle_health, handle_llm_usage, handle_rule_evaluate, handle_rules, handle_status,
+    handle_stop, handle_tool_call, init_run_template, record_governor, stopped_reason,
+    take_run_events, BridgeComponents, BridgeResp, BridgeState, ContentType, RunTemplate,
 };
 use std::sync::mpsc::Sender;
 
@@ -406,6 +406,14 @@ async fn route_harness(State(app): State<AppState>, headers: HeaderMap, body: By
     to_response(handle_harness(&body, &shared))
 }
 
+async fn route_rules(State(app): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+    let shared = app.run_state(&headers);
+    if let Some(reason) = stopped_reason(&shared) {
+        return stopped_gone(&reason);
+    }
+    to_response(handle_rules(&body, &shared))
+}
+
 async fn route_app(State(app): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
     let shared = app.run_state(&headers);
     if let Some(reason) = stopped_reason(&shared) {
@@ -527,6 +535,7 @@ fn build_router(app: AppState) -> Router {
         .route("/agent/exit", post(route_agent_exit))
         .route("/llm/usage", post(route_llm_usage))
         .route("/harness", post(route_harness))
+        .route("/rules", post(route_rules))
         .route("/app", post(route_app))
         // Fallback for genuinely unmatched requests. CONNECT never reaches this;
         // GovernorService (see above) intercepts it before the router at all.
@@ -1014,9 +1023,93 @@ fn gen_certs_for_test(dir: &Path) {
 mod tests {
     use super::*;
     use nanny_runtime::ToolRegistry;
-    use std::collections::HashMap;
+    use std::collections::{BTreeSet, HashMap};
     use std::sync::atomic::Ordering;
     use std::time::Duration;
+
+    // Path parity ─────────────────────────────────────────────────────────────
+
+    /// Every POST path the socket dispatch in `lib.rs` answers.
+    ///
+    /// Read out of the source rather than maintained by hand, so the test
+    /// cannot pass against a list that has drifted from the code it describes.
+    ///
+    /// Two forms, because the dispatch has two. Most paths are match arms
+    /// (`("POST", "/x") => …`), but `/stop` is an early guard above the match
+    /// (`method == "POST" && path == "/stop"`) since it stays accepted after a
+    /// run has stopped. Reading only the arms would have reported `/stop` as
+    /// network-only, which is exactly the kind of false positive that gets a
+    /// parity test deleted.
+    fn dispatch_post_paths() -> BTreeSet<String> {
+        let src = include_str!("lib.rs");
+        src.lines()
+            .filter_map(|line| {
+                let line = line.trim();
+                if let Some(rest) = line.strip_prefix(r#"("POST", ""#) {
+                    return rest.split('"').next().map(str::to_string);
+                }
+                if line.starts_with(r#"if method == "POST" && path == ""#) {
+                    return line
+                        .split(r#"path == ""#)
+                        .nth(1)?
+                        .split('"')
+                        .next()
+                        .map(str::to_string);
+                }
+                None
+            })
+            .collect()
+    }
+
+    /// Every POST path registered on the axum router below.
+    fn router_post_paths() -> BTreeSet<String> {
+        let src = include_str!("network.rs");
+        src.lines()
+            .filter_map(|line| {
+                let trimmed = line.trim();
+                // `.route("/x", post(...))` — only POST; GET routes are the
+                // read surface and have no dispatch counterpart.
+                if !trimmed.starts_with(".route(\"") || !trimmed.contains("post(") {
+                    return None;
+                }
+                let path = trimmed.strip_prefix(".route(\"")?.split('"').next()?;
+                Some(path.to_string())
+            })
+            .collect()
+    }
+
+    /// The two transports must answer the same set of POST paths.
+    ///
+    /// This is the defect that produced the test. `POST /rules` was added to
+    /// the socket dispatch and never to the router, so under `--serve` it fell
+    /// through to `route_not_found` and 404'd — and both SDKs post it
+    /// fire-and-forget (`let _ = http_post("/rules", …)`), so nothing surfaced.
+    /// The rules half of declared authority silently never arrived for exactly
+    /// the fleet deployments most likely to be paying for it.
+    ///
+    /// Asserting set *equality*, not "rules is present", is the point: the
+    /// class of bug is a path added to one transport and not the other, in
+    /// either direction, and only equality catches the next one.
+    #[test]
+    fn socket_and_network_answer_the_same_post_paths() {
+        let dispatch = dispatch_post_paths();
+        let router = router_post_paths();
+
+        assert!(
+            !dispatch.is_empty() && !router.is_empty(),
+            "path extraction found nothing — the parser has drifted from the source, \
+             which would make this test vacuous"
+        );
+        assert_eq!(
+            dispatch,
+            router,
+            "socket dispatch and axum router disagree on POST paths.\n\
+             only in dispatch: {:?}\n\
+             only in router:   {:?}",
+            dispatch.difference(&router).collect::<Vec<_>>(),
+            router.difference(&dispatch).collect::<Vec<_>>(),
+        );
+    }
 
     // secure_compare ──────────────────────────────────────────────────────────
 
