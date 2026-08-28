@@ -175,6 +175,11 @@ pub fn cmd_server_start(
         )
     })?;
 
+    // Resolved before the forwarder is spawned so a dropped batch can name the
+    // file its events also went to. `None` here is the honest answer under
+    // `log = "stdout"`, which is a deliberate no-op for `--serve` (see below).
+    let local_log_path = config.observability.resolve_log_path(&cwd)?;
+
     let event_sink = target.ok().map(|target| {
         let (tx, rx) = std::sync::mpsc::channel();
         crate::sync::ServerForwarder::spawn(
@@ -183,6 +188,7 @@ pub fn cmd_server_start(
             target.api_key,
             session_token.clone(),
             &cwd,
+            local_log_path.clone(),
         );
         tx
     });
@@ -195,8 +201,8 @@ pub fn cmd_server_start(
     // stdout output would be noisy and wrong, unlike a short-lived local run
     // where that's the whole point. Uses the same resolution logic as local
     // `nanny run` (`ObservabilityConfig::resolve_log_path`), so both paths
-    // land on the same `.nanny/logs/<name>` file.
-    let local_log_path = config.observability.resolve_log_path(&cwd)?;
+    // land on the same `.nanny/logs/<name>` file. Resolved above, before the
+    // forwarder, so the same value describes both the log and the outbox.
 
     println!("nanny: name ({}), appId ({})", app.name, app.app_id);
 

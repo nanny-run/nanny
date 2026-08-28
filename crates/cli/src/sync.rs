@@ -258,6 +258,53 @@ fn send_batch(
     Delivery::Retryable
 }
 
+/// Why a batch is being dropped rather than retried.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Dropped {
+    /// The cloud refused this run's own events with a status that will not
+    /// change on a retry.
+    RefusedLive(u16),
+    /// The cloud refused a batch held over from an earlier run.
+    RefusedStored(u16),
+    /// The outbox hit its size cap and the oldest batch had to go.
+    OutboxFull,
+}
+
+/// What to tell an operator when a batch is dropped.
+///
+/// A pure function so each branch is directly assertable, the same shape
+/// `Spool::other_environment_notice` already uses. It exists because the two
+/// call sites below both used to state that the events "remain in the local
+/// log" unconditionally, which is false whenever no log file was written:
+/// `LogTarget` defaults to `Stdout`, and under `--serve` a stdout target is a
+/// deliberate no-op, so the default fleet deployment has no local log at all.
+/// Telling an operator their evidence is safe in a file that does not exist is
+/// the one thing a compliance product must never do.
+fn dropped_notice(dropped: Dropped, log_path: Option<&Path>) -> String {
+    let cause = match dropped {
+        Dropped::RefusedLive(status) => {
+            format!("the cloud refused these events ({status}); not retrying")
+        }
+        Dropped::RefusedStored(status) => {
+            format!("the cloud refused a batch held from an earlier run ({status}); discarding it")
+        }
+        Dropped::OutboxFull => {
+            format!("outbox is full ({MAX_SPOOL_BYTES} bytes); dropping the oldest unsent batch")
+        }
+    };
+    match log_path {
+        Some(path) => format!(
+            "nanny: sync: {cause}. Those events remain in {}. Enforcement is unaffected.",
+            path.display()
+        ),
+        None => format!(
+            "nanny: sync: {cause}. Those events were not written to a log file, so they are \
+             gone: set [observability] log = \"file\" to keep a local copy. Enforcement is \
+             unaffected."
+        ),
+    }
+}
+
 /// A durable outbox for batches the cloud could not take yet.
 ///
 /// The local NDJSON log cannot serve as the buffer on its own, which is worth
@@ -284,6 +331,12 @@ fn send_batch(
 pub struct Spool {
     dir: PathBuf,
     base_dir: PathBuf,
+    /// Where this run also wrote its events locally, when it wrote them to a
+    /// file at all. `None` under `log = "stdout"` (the default) and under
+    /// `--serve`, where a file is the only local target. Carried so that a
+    /// message about dropping a batch can say what actually happened to those
+    /// events instead of assuming a file exists.
+    log_path: Option<PathBuf>,
 }
 
 impl Spool {
@@ -306,7 +359,21 @@ impl Spool {
                 .join("spool")
                 .join(environment.dir_name()),
             base_dir: base_dir.to_path_buf(),
+            log_path: None,
         }
+    }
+
+    /// Where this run's events are also written locally, if anywhere.
+    fn log_path(&self) -> Option<&Path> {
+        self.log_path.as_deref()
+    }
+
+    /// Record where this run's events are also being written locally, so a
+    /// dropped batch can name that file. Callers that write no log file leave
+    /// this unset, which is the honest default rather than the convenient one.
+    pub fn logging_to(mut self, log_path: Option<PathBuf>) -> Self {
+        self.log_path = log_path;
+        self
     }
 
     /// How many batches are held here, without touching any of them.
@@ -398,8 +465,8 @@ impl Spool {
         while total + incoming > MAX_SPOOL_BYTES && !entries.is_empty() {
             let (path, size) = entries.remove(0);
             eprintln!(
-                "nanny: sync: outbox is full ({MAX_SPOOL_BYTES} bytes); dropping the oldest \
-                 unsent batch. Events in it are still in the local log."
+                "{}",
+                dropped_notice(Dropped::OutboxFull, self.log_path.as_deref())
             );
             let _ = std::fs::remove_file(&path);
             total = total.saturating_sub(size);
@@ -450,8 +517,8 @@ impl Spool {
                 }
                 Delivery::Permanent(status) => {
                     eprintln!(
-                        "nanny: sync: the cloud refused a stored batch ({status}); discarding it. \
-                         The events remain in the local log."
+                        "{}",
+                        dropped_notice(Dropped::RefusedStored(status), self.log_path.as_deref())
                     );
                     let _ = std::fs::remove_file(&path);
                 }
@@ -487,6 +554,7 @@ impl CloudSync {
         api_key: String,
         session_token: &str,
         base_dir: &Path,
+        log_path: Option<PathBuf>,
     ) -> Option<Self> {
         let session = session_token.to_string();
         let client = reqwest::blocking::Client::builder()
@@ -496,7 +564,7 @@ impl CloudSync {
             .ok()?;
 
         Spool::warn_about_the_other_environment(base_dir, Environment::from_api_key(&api_key));
-        let spool = Spool::new(base_dir, &api_key);
+        let spool = Spool::new(base_dir, &api_key).logging_to(log_path);
         let (tx, rx) = std::sync::mpsc::channel::<String>();
         let handle = std::thread::spawn(move || {
             // Backfill first: on the forwarder thread, so a cloud that is still
@@ -539,9 +607,10 @@ impl ServerForwarder {
         api_key: String,
         server_secret: String,
         base_dir: &Path,
+        log_path: Option<PathBuf>,
     ) {
         Spool::warn_about_the_other_environment(base_dir, Environment::from_api_key(&api_key));
-        let spool = Spool::new(base_dir, &api_key);
+        let spool = Spool::new(base_dir, &api_key).logging_to(log_path);
         std::thread::spawn(move || {
             let Ok(client) = reqwest::blocking::Client::builder()
                 .connect_timeout(Duration::from_secs(3))
@@ -581,8 +650,8 @@ impl ServerForwarder {
                     Delivery::Permanent(status) => {
                         if !warned {
                             eprintln!(
-                                "nanny: sync: the cloud refused fleet events ({status}); not \
-                                 retrying. Enforcement is unaffected."
+                                "{}",
+                                dropped_notice(Dropped::RefusedLive(status), spool.log_path())
                             );
                             warned = true;
                         }
@@ -629,8 +698,8 @@ fn worker(
             Delivery::Permanent(status) => {
                 if !*warned {
                     eprintln!(
-                        "nanny: sync: the cloud refused these events ({status}); not retrying. \
-                         They remain in the local log. Enforcement is unaffected."
+                        "{}",
+                        dropped_notice(Dropped::RefusedLive(status), spool.log_path())
                     );
                     *warned = true;
                 }
@@ -894,7 +963,7 @@ mod tests {
         let (port, rx) = mock_ingest_server();
         let dir = temp_app_dir();
         let endpoint = format!("http://127.0.0.1:{port}/v1/ingest");
-        let sender = CloudSync::start(endpoint, "nny_test".to_string(), "session-abc", &dir)
+        let sender = CloudSync::start(endpoint, "nny_test".to_string(), "session-abc", &dir, None)
             .expect("sender starts");
         sender.enqueue(r#"{"event":"ExecutionStarted"}"#.to_string());
         sender.enqueue(r#"{"event":"ExecutionStopped"}"#.to_string());
@@ -928,6 +997,7 @@ mod tests {
             "k".to_string(),
             "s",
             &dir,
+            None,
         )
         .expect("sender starts");
         sender.enqueue(r#"{"event":"ToolAllowed"}"#.to_string());
@@ -947,6 +1017,7 @@ mod tests {
             "k".to_string(),
             "run-1",
             &dir,
+            None,
         )
         .expect("sender starts");
         sender.enqueue(r#"{"event":"ExecutionStarted"}"#.to_string());
@@ -1081,6 +1152,58 @@ mod tests {
     // ── Partitioned by environment (Stage 37, C1) ──────────────────────────────
 
     #[test]
+    fn a_dropped_batch_names_the_log_file_when_one_exists() {
+        let path = PathBuf::from("/app/.nanny/logs/log.ndjson");
+        let notice = dropped_notice(Dropped::RefusedStored(400), Some(&path));
+        assert!(
+            notice.contains("/app/.nanny/logs/log.ndjson"),
+            "an operator needs the actual path to go and look: {notice}"
+        );
+        assert!(
+            notice.contains("400"),
+            "the refusing status belongs in it: {notice}"
+        );
+    }
+
+    #[test]
+    fn a_dropped_batch_never_claims_a_log_that_was_not_written() {
+        // The defect this closes: both call sites used to say "the events
+        // remain in the local log" unconditionally, while `LogTarget` defaults
+        // to `Stdout` and `--serve` treats stdout as a no-op. On the default
+        // fleet deployment that sentence was false at the exact moment Cloud
+        // dropped the evidence.
+        for dropped in [
+            Dropped::RefusedLive(400),
+            Dropped::RefusedStored(400),
+            Dropped::OutboxFull,
+        ] {
+            let notice = dropped_notice(dropped, None);
+            assert!(
+                !notice.contains("remain in"),
+                "must not claim the events are kept anywhere: {notice}"
+            );
+            assert!(
+                notice.contains("not written to a log file"),
+                "must say plainly that nothing was kept: {notice}"
+            );
+            assert!(
+                notice.contains("log = \"file\""),
+                "and must say how to keep it next time: {notice}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_full_outbox_says_so_rather_than_reporting_a_refusal() {
+        let notice = dropped_notice(Dropped::OutboxFull, None);
+        assert!(notice.contains("outbox is full"), "{notice}");
+        assert!(
+            !notice.contains("refused"),
+            "a local cap is not the cloud rejecting anything: {notice}"
+        );
+    }
+
+    #[test]
     fn a_sandbox_batch_is_invisible_to_a_live_drain_and_vice_versa() {
         // The bug this exists to close: before partitioning, `drain` posted
         // with whatever key the next process happened to hold, so a batch held
@@ -1193,6 +1316,7 @@ mod tests {
             "nny_live_x".to_string(),
             "live-session",
             &dir,
+            None,
         )
         .expect("sender starts");
         sender.enqueue(r#"{"event":"LiveOnly"}"#.to_string());
@@ -1263,6 +1387,7 @@ mod tests {
             "nny_k".to_string(),
             "current-run",
             &dir,
+            None,
         )
         .expect("sender starts");
         sender.flush_and_join();
@@ -1291,6 +1416,7 @@ mod tests {
             "nny_k".to_string(),
             "srvsecret".to_string(),
             &dir,
+            None,
         );
         tx.send(("run_abc".to_string(), vec![r#"{"e":"X"}"#.to_string()]))
             .unwrap();
