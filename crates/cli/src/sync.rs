@@ -307,14 +307,23 @@ fn dropped_notice(dropped: Dropped, log_path: Option<&Path>) -> String {
 
 /// A durable outbox for batches the cloud could not take yet.
 ///
-/// The local NDJSON log cannot serve as the buffer on its own, which is worth
-/// spelling out because it looks like it should. The log is append-only across
-/// *every* run the app has ever done, and the events in it carry no session:
-/// `X-Nanny-Session` is a per-run header, not a field. Replaying a byte range
-/// of that file would have to pick one session for events that belonged to
-/// many, and the cloud keys an execution off exactly that value, so a whole
-/// history would be merged into one bogus run. A high-water mark over the log
-/// is the obvious design and it is wrong for that reason.
+/// The local NDJSON log cannot serve as the buffer, which is worth spelling out
+/// because it looks like it should. Two reasons, and the weaker one used to be
+/// stated here alone:
+///
+/// - **Lifetime.** The spool is transient: a batch exists only while it is
+///   undelivered and is removed the moment it lands, so a healthy run leaves it
+///   empty. The log is permanent and append-only across every run the app has
+///   ever done. Replaying it would mean re-sending history, not a backlog.
+/// - **Ownership.** The log is the operator's, for their own tooling, and
+///   `LogTarget` defaults to `Stdout`, so on most deployments there is no file
+///   to replay at all. Sync cannot depend on a file the operator decides
+///   whether to write.
+///
+/// An earlier version of this comment rested the case on the log carrying no
+/// session. That stopped being true when every logged event gained `run_id` and
+/// `seq`, and the cloud reads `run_id` from the payload. The separation still
+/// holds, for the two reasons above, but not for that one.
 ///
 /// The spool stores what the log cannot: the batch *and* the session it belongs
 /// to, so a replay lands under the run that actually produced it. Cloud dedups

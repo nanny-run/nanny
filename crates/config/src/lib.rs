@@ -227,10 +227,14 @@ impl ToolConfig {
 
 /// Controls where the structured event log is written.
 ///
-/// Pipe stdout to your own storage if persistence is required in "stdout" mode.
-/// Phase 2 cloud ingests this log and makes it durable and queryable — and can
-/// backfill from the local file below even for a run that happened before this
-/// machine was ever logged in, since the file always lives in the same place.
+/// This log belongs to whoever runs the agent, not to Nanny. It exists so an
+/// operator can pipe events into their own observability stack; Nanny writes it
+/// and reads it back nowhere. Pipe stdout to your own storage if persistence is
+/// required in "stdout" mode.
+///
+/// It is **not** the path to the cloud. Forwarding reads events from the engine
+/// directly, and `Spool` holds anything undelivered until it can be retried, so
+/// a run syncs identically whether this is set to "file" or "stdout".
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ObservabilityConfig {
     /// Where to write the NDJSON event log.
