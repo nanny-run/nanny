@@ -351,6 +351,53 @@ pub enum LogTarget {
 /// every replica, with nothing written to disk to make it work.
 pub const API_KEY_ENV: &str = "NANNY_API_KEY";
 
+/// Environment variable holding the governance server's session token.
+///
+/// Set on `--serve`, the server uses it instead of minting one. Set on a
+/// joining process, it is the credential that process presents. **Both sides
+/// must hold the same value**, which is the whole point: a governor and the
+/// processes that join it across machines have no shared filesystem to
+/// discover one through.
+pub const SESSION_TOKEN_ENV: &str = "NANNY_SESSION_TOKEN";
+
+/// Shortest session token `--serve` will accept from an operator.
+///
+/// 32 characters, satisfied by `uuidgen` and by `openssl rand -hex 16`.
+pub const MIN_SESSION_TOKEN_LEN: usize = 32;
+
+/// Resolve the session token a governance server should run with.
+///
+/// `Ok(None)` means nothing was configured and the caller should mint one, the
+/// behaviour every local run has always had.
+///
+/// **A length floor, and deliberately not a format check.** "Is a UUID" is not
+/// "is unguessable": a v1 UUID is a timestamp and a MAC address and would pass
+/// such a check, while `openssl rand -hex 32` would fail it. Length is the
+/// closest cheap proxy for the property that actually matters, and it lets an
+/// operator bring whatever their secrets manager emits.
+///
+/// This validates rather than trusts because the token is what admits a
+/// process to a governor: a weak one is a policy bypass, so it is a guard on an
+/// authority decision, not a guard against typos.
+pub fn resolve_session_token(configured: Option<&str>) -> Result<Option<String>, String> {
+    let Some(raw) = configured else {
+        return Ok(None);
+    };
+    let token = raw.trim();
+    if token.is_empty() {
+        return Ok(None);
+    }
+    if token.chars().count() < MIN_SESSION_TOKEN_LEN {
+        return Err(format!(
+            "{SESSION_TOKEN_ENV} is too short ({} characters; {MIN_SESSION_TOKEN_LEN} minimum). \
+             This token is what admits a process to this governor, so a guessable one is a \
+             policy bypass. Generate one with `openssl rand -hex 16` or `uuidgen`.",
+            token.chars().count()
+        ));
+    }
+    Ok(Some(token.to_string()))
+}
+
 /// Whether a nanny.toml still carries a `[managed]` section. That block
 /// (endpoint / api_key) was retired in favor of the `NANNY_API_KEY` environment
 /// variable; it is now ignored, so the CLI warns rather than silently doing
@@ -627,6 +674,59 @@ reads_untrused = true
 
         assert_eq!(config.observability.log, LogTarget::Stdout);
         assert!(config.observability.file.is_none());
+    }
+
+    #[test]
+    fn an_unset_session_token_means_mint_one() {
+        assert_eq!(resolve_session_token(None), Ok(None));
+        // An empty or whitespace-only variable is "unset" too: a platform that
+        // injects every declared variable, set or not, is normal.
+        assert_eq!(resolve_session_token(Some("")), Ok(None));
+        assert_eq!(resolve_session_token(Some("   ")), Ok(None));
+    }
+
+    #[test]
+    fn a_configured_session_token_is_used_verbatim() {
+        let token = "0123456789abcdef0123456789abcdef";
+        assert_eq!(
+            resolve_session_token(Some(token)),
+            Ok(Some(token.to_string()))
+        );
+        // Trimmed, because a value pasted into a deployment UI routinely
+        // carries a trailing newline and the two sides must match exactly.
+        assert_eq!(
+            resolve_session_token(Some("  0123456789abcdef0123456789abcdef\n")),
+            Ok(Some(token.to_string()))
+        );
+    }
+
+    #[test]
+    fn a_short_session_token_is_refused_with_a_way_forward() {
+        let err = resolve_session_token(Some("dev")).unwrap_err();
+        assert!(err.contains("too short"), "{err}");
+        assert!(
+            err.contains("policy bypass"),
+            "must say why it matters: {err}"
+        );
+        assert!(
+            err.contains("openssl rand"),
+            "must say how to fix it: {err}"
+        );
+    }
+
+    #[test]
+    fn the_floor_is_length_and_never_a_format() {
+        // The property that matters is unguessability, and "looks like a UUID"
+        // is not that. A v1 UUID is a timestamp plus a MAC address: it would
+        // pass any format check and is partly predictable. Meanwhile a raw
+        // random hex string is stronger and matches no UUID shape at all.
+        let uuid_v1 = "2c1b6f8a-9d3e-11ee-b9d1-0242ac120002";
+        let raw_random = "9f8e7d6c5b4a39281706f5e4d3c2b1a0";
+        assert!(resolve_session_token(Some(uuid_v1)).is_ok());
+        assert!(resolve_session_token(Some(raw_random)).is_ok());
+        // Exactly at the floor passes; one under does not.
+        assert!(resolve_session_token(Some(&"a".repeat(MIN_SESSION_TOKEN_LEN))).is_ok());
+        assert!(resolve_session_token(Some(&"a".repeat(MIN_SESSION_TOKEN_LEN - 1))).is_err());
     }
 
     #[test]

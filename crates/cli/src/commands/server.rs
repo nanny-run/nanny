@@ -147,7 +147,26 @@ pub fn cmd_server_start(
     // forwarder that talks to the cloud lives here. The status line prints
     // either way, because a governor that silently stops reporting for a whole fleet
     // is the worst version of the failure v0.5.0 shipped.
-    let session_token = uuid::Uuid::new_v4().to_string();
+    // Configured when the operator set one, minted otherwise. A governor and
+    // the processes joining it from other containers or machines share no
+    // filesystem, so a token minted here could never be discovered by them and
+    // would change on every restart; setting it is how a fleet deployment
+    // holds still across redeploys. Local runs set nothing and are unchanged.
+    let session_token = match nanny_config::resolve_session_token(
+        std::env::var(nanny_config::SESSION_TOKEN_ENV)
+            .ok()
+            .as_deref(),
+    ) {
+        Ok(Some(configured)) => {
+            println!(
+                "nanny: session token taken from {}",
+                nanny_config::SESSION_TOKEN_ENV
+            );
+            configured
+        }
+        Ok(None) => uuid::Uuid::new_v4().to_string(),
+        Err(message) => anyhow::bail!(message),
+    };
     let target = crate::sync::resolve_sync(env, no_sync);
     println!(
         "{}",
