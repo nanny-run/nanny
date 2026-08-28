@@ -13,6 +13,14 @@ CMD ["nanny", "run", "--serve", "--", "discord"]
 
 `--serve` starts the governance server and launches your `[start].cmd` underneath it. Trailing arguments append to that command, exactly as with plain `nanny run`.
 
+<Note>
+  **Always deploy with `--serve`, even for a single process.** It is the only
+  shape verified against a real container, a real port, and a real restart, so
+  it is the one guaranteed to behave the same on every platform. Plain
+  `nanny run` still works and stays the right choice for local development
+  (see [Quickstart](/v0.6/quickstart)), but production always means `--serve`.
+</Note>
+
 Nothing is written to disk to make this work: no credential file, no login step, no state carried between deploys. A fresh container behaves the same as one that has been running for a month, and twenty replicas behave the same as one.
 
 ## One secret
@@ -34,9 +42,12 @@ Leave it unset and everything still works. Enforcement is local and never depend
 
 ## Which command to use
 
+**In production, every row below starts with `--serve`.** The only question is
+whether it launches your process directly or a second process joins it.
+
 | Your situation | Command |
 | --- | --- |
-| One app, one process | `nanny run` |
+| One app, one process | `nanny run --serve` |
 | Several processes under one rule set | `nanny run --serve` (governor) + `nanny run --join=<appId>` |
 | A governor with no app of its own | `nanny run --serve` with no `[start]` |
 

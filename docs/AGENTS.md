@@ -60,7 +60,11 @@ Every stale page on this site got there because that step was optional.
 - **stop reason** — the value in `ExecutionStopped.reason`; always use the exact enum name (`RuleDenied`, not "rule violation")
 - **tool** — a function annotated with `#[nanny::tool]` or `@tool`; not "action", "function", or "capability"
 - **rule** — a function annotated with `#[nanny::rule]` or `@rule`; not "policy", "check", or "validator"
-- **agent scope** — a named execution context activated by `#[nanny::agent]` or `@agent`
+- **app** — the identity a deployment governs under; permanent id plus name, written once by `nanny init` to `.nanny/app.json`, declared every run via `AppIdentified`. **This is the only noun for something you connect, name, or search by id.** One process or one governor scope is one app; a governor can hold several
+- **agent** — colloquial term for the AI software an app runs; not a Nanny data object. There is no `agent.json`, no `AgentIdentified` event, no per-agent id. Fine in prose ("Nanny governs AI agents"); never the object of a UI verb like Connect, Search, or Name — that object is always an app
+- **agent scope** — a named execution context activated by `#[nanny::agent]` or `@agent`, describing a phase *within* one governed run, not the run or the app itself
+- **governor** — the long-lived process started by `nanny run --serve`; can hold several apps at once, each still attributed separately
+- **harness** — the agent framework running inside an app (LangChain, CrewAI, a hand-rolled loop), declared via `HarnessIdentified`; distinct from the app itself
 - **tool label** — an operator-declared property of a tool (`reads_untrusted`, `external_effect`, `destructive`, `moves_money`, `reads_sensitive`); not "tag", "category", or "permission"
 - **declared authority** — what an agent was permitted to do, recorded before it did anything; not "permissions" or "grants"
 - **rule pack** — a versioned set of rules installed with `nanny rules add`; not "plugin", "ruleset", or "policy bundle"
