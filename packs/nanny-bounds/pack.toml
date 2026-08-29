@@ -1,0 +1,36 @@
+# Opt-in, and not recommended to anyone by default.
+#
+# Every rule here carries a number, or the name of a tool, that belongs to one
+# application: how many untrusted reads are too many, what payment is too large,
+# which tool counts as approval. Those are real controls and worth having, but
+# nobody outside your application can choose the value, so installing this pack
+# unread will deny work you meant to allow.
+#
+# Two of them (cap_total_tool_calls_per_run, cap_external_effect_calls_per_run)
+# are close relatives of the step ceiling v0.6.0 deleted, kept here because a
+# bound on *actions* is an authority statement in a way a bound on tokens never
+# was. The number is still yours.
+#
+# Prefer per-tool `max_calls` in nanny.toml where it fits: it is the operator's
+# own statement, it is enforced by the engine before rules run, and a rule that
+# restates it more loosely will silently win.
+
+name = "nanny:bounds"
+version = "1.0.0"
+description = "Bounds on how far a run may go. Opt-in: every number here is a starting point you are expected to change."
+python = "python"
+rules = [
+  "no_oversized_args",
+  "cap_destructive_calls_per_run",
+  "no_payment_above_threshold",
+  "cap_money_moving_calls_per_run",
+  "cap_cumulative_amount_per_run",
+  "cap_untrusted_reads_per_run",
+  "no_external_effect_soon_after_untrusted_read",
+  "no_external_effect_outside_operating_hours",
+  "no_consecutive_identical_tool",
+  "cap_external_effect_calls_per_run",
+  "cap_total_tool_calls_per_run",
+  "require_approval_before_external_effect",
+  "no_agent_spawn_beyond_depth",
+]

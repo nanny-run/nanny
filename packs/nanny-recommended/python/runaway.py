@@ -14,52 +14,25 @@ from nanny_sdk._context import PolicyContext
 
 @rule("no_identical_repeat_call")
 def no_identical_repeat_call(ctx: PolicyContext) -> bool:
-    """Deny the same tool with the same arguments twice in a row.
+    """Deny an argument-less tool called twice in a row.
 
-    The signature of a stuck loop. Identical arguments mean the agent is not
-    responding to what it learned, so the second call cannot produce information
-    the first did not.
+    A call with no arguments carries nothing to distinguish it from the one
+    before, so repeating it immediately cannot produce information the first did
+    not: the signature of a stuck loop.
+
+    **It deliberately stops there.** The obvious rule is "same tool, same
+    arguments", and it is not implementable with this context:
+    ``tool_call_history`` holds names only and ``last_tool_args`` belongs to the
+    *pending* call, so the previous call's arguments are not available to
+    compare against. An earlier version of this rule claimed to make that
+    comparison and, having no arguments to compare, denied every consecutive
+    call that had any arguments at all — which refuses an ordinary research loop
+    on its second search. Narrow and true beats broad and wrong, especially in a
+    pack that installs unread.
     """
     pending = ctx.requested_tool
     if pending is None or not ctx.tool_call_history:
         return True
     if ctx.tool_call_history[-1] != pending:
         return True
-    return not ctx.last_tool_args
-
-
-@rule("no_consecutive_identical_tool")
-def no_consecutive_identical_tool(ctx: PolicyContext) -> bool:
-    """Deny the same tool N times consecutively, regardless of arguments."""
-    limit = 5
-    pending = ctx.requested_tool
-    if pending is None:
-        return True
-    run = 0
-    for tool in reversed(ctx.tool_call_history):
-        if tool != pending:
-            break
-        run += 1
-    return run < limit
-
-
-@rule("cap_external_effect_calls_per_run")
-def cap_external_effect_calls_per_run(ctx: PolicyContext) -> bool:
-    """Bound how many outward actions one run may take.
-
-    The blast radius of a run that goes wrong, stated as a number.
-    """
-    limit = 10
-    used = sum(
-        count
-        for tool, count in ctx.tool_call_counts.items()
-        if ctx.tool_has(tool, "external_effect")
-    )
-    return used < limit
-
-
-@rule("cap_total_tool_calls_per_run")
-def cap_total_tool_calls_per_run(ctx: PolicyContext) -> bool:
-    """Bound total tool calls in a run."""
-    limit = 200
-    return sum(ctx.tool_call_counts.values()) < limit
+    return bool(ctx.last_tool_args)

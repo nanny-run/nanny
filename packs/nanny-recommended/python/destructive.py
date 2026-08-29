@@ -24,21 +24,6 @@ def _amounts(ctx: PolicyContext) -> list[float]:
     return out
 
 
-@rule("dry_run_denies_all_destructive")
-def dry_run_denies_all_destructive(ctx: PolicyContext) -> bool:
-    """A global off switch for irreversible actions.
-
-    Enabled by editing this rule's constant. Deliberately not a config flag: a
-    kill switch that can be flipped from anywhere is one more thing that can be
-    flipped by mistake.
-    """
-    dry_run = False
-    pending = ctx.requested_tool
-    if not dry_run or pending is None:
-        return True
-    return not ctx.tool_has(pending, "destructive")
-
-
 @rule("no_destructive_without_confirmation")
 def no_destructive_without_confirmation(ctx: PolicyContext) -> bool:
     """Deny an irreversible action that no confirmation step preceded."""
@@ -48,40 +33,6 @@ def no_destructive_without_confirmation(ctx: PolicyContext) -> bool:
     return CONFIRM_TOOL in ctx.tool_call_history
 
 
-@rule("cap_destructive_calls_per_run")
-def cap_destructive_calls_per_run(ctx: PolicyContext) -> bool:
-    """Bound irreversible actions per run."""
-    limit = 3
-    used = sum(
-        count for tool, count in ctx.tool_call_counts.items() if ctx.tool_has(tool, "destructive")
-    )
-    return used < limit
-
-
-@rule("no_payment_above_threshold")
-def no_payment_above_threshold(ctx: PolicyContext) -> bool:
-    """Deny a single payment above a declared amount.
-
-    A spend limit denominated in money, which is the unit a founder can reason
-    about, rather than in tokens, which is not.
-    """
-    threshold = 1_000.0
-    pending = ctx.requested_tool
-    if pending is None or not ctx.tool_has(pending, "moves_money"):
-        return True
-    return all(a <= threshold for a in _amounts(ctx))
-
-
-@rule("cap_money_moving_calls_per_run")
-def cap_money_moving_calls_per_run(ctx: PolicyContext) -> bool:
-    """Bound how many payments one run may make."""
-    limit = 5
-    used = sum(
-        count for tool, count in ctx.tool_call_counts.items() if ctx.tool_has(tool, "moves_money")
-    )
-    return used < limit
-
-
 @rule("no_payment_without_prior_approval")
 def no_payment_without_prior_approval(ctx: PolicyContext) -> bool:
     """Deny a payment that no approval step preceded."""
@@ -89,17 +40,3 @@ def no_payment_without_prior_approval(ctx: PolicyContext) -> bool:
     if pending is None or not ctx.tool_has(pending, "moves_money"):
         return True
     return "request_approval" in ctx.tool_call_history
-
-
-@rule("cap_cumulative_amount_per_run")
-def cap_cumulative_amount_per_run(ctx: PolicyContext) -> bool:
-    """Bound the total moved in one run.
-
-    Per-call thresholds are trivially defeated by splitting a payment, so the
-    cumulative figure is the one that binds.
-    """
-    ceiling = 5_000.0
-    pending = ctx.requested_tool
-    if pending is None or not ctx.tool_has(pending, "moves_money"):
-        return True
-    return sum(_amounts(ctx)) <= ceiling

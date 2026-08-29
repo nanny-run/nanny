@@ -43,20 +43,3 @@ def no_untrusted_read_after_secrets(ctx: PolicyContext) -> bool:
     if pending is None or not ctx.tool_has(pending, "reads_untrusted"):
         return True
     return not any(ctx.tool_has(t, "reads_sensitive") for t in ctx.tool_call_history)
-
-
-@rule("no_external_effect_soon_after_untrusted_read")
-def no_external_effect_soon_after_untrusted_read(ctx: PolicyContext) -> bool:
-    """Deny an outward action within N calls of untrusted content arriving.
-
-    A looser sibling of the first rule, for applications that legitimately read
-    untrusted content and later act, but never immediately. Distance is the
-    signal: an outward action in the same breath as a fetch is the injection
-    shape.
-    """
-    window = 3
-    pending = ctx.requested_tool
-    if pending is None or not ctx.tool_has(pending, "external_effect"):
-        return True
-    recent = ctx.tool_call_history[-window:]
-    return not any(ctx.tool_has(t, "reads_untrusted") for t in recent)

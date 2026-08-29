@@ -70,17 +70,6 @@ def no_pii_to_external_effect_tools(ctx: PolicyContext) -> bool:
     return not any(p.search(blob) for p in PII_PATTERNS)
 
 
-@rule("no_oversized_args")
-def no_oversized_args(ctx: PolicyContext) -> bool:
-    """Deny an argument payload past a declared size.
-
-    Bulk is the shape of exfiltration: nobody emails a colleague sixty thousand
-    characters by accident.
-    """
-    limit = 64_000
-    return len(_args(ctx)) < limit
-
-
 @rule("no_private_network_urls")
 def no_private_network_urls(ctx: PolicyContext) -> bool:
     """Deny URL arguments matching declared private or loopback patterns.
