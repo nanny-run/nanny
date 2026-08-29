@@ -8,7 +8,10 @@
 # pack, and this one had eight such rules until 2026-08-29 — one of them a step
 # ceiling, the primitive v0.6.0 deleted, wearing a rule's clothing.
 #
-# Bounds live in nanny:bounds, which is opt-in and says so.
+# Rules that need a number are not shipped at all. A cap is a fact about one
+# application, so it belongs in that application's own `@rule`, or in a
+# community pack its author chose knowingly, never in a first-party pack that
+# installs unread.
 
 name = "nanny:recommended"
 version = "1.0.0"
