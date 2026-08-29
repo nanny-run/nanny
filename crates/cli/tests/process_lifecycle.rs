@@ -1260,3 +1260,58 @@ fn rules_add_refuses_a_tampered_pack() {
         "nothing may be written on failure"
     );
 }
+
+// ── Fail-closed on a missing rule pack, on both start paths ──────────────────
+
+/// A config declaring a pack that is not on disk, plus an app identity so
+/// `--serve` gets far enough to reach the pack check.
+fn write_config_declaring_a_missing_pack(dir: &Path) {
+    fs::write(
+        dir.join("nanny.toml"),
+        "[start]\ncmd = \"true\"\n\n[tools]\nallowed = [\"a\"]\n\n\
+         [rules]\nextends = [\"nanny:owasp@1.0.0\"]\n",
+    )
+    .unwrap();
+    fs::create_dir_all(dir.join(".nanny")).unwrap();
+    fs::write(
+        dir.join(".nanny/app.json"),
+        "{\"app_id\":\"app_packcheck00000000000000000000\",\"name\":\"packcheck\"}",
+    )
+    .unwrap();
+}
+
+/// Both start paths must refuse, and this is asserted as a pair on purpose.
+///
+/// The guarantee is that a pack named in `[rules] extends` and missing from
+/// disk stops the run: the operator believes controls are in force that are
+/// not. It was implemented in `cmd_run` only, so it held for local development
+/// and not for `--serve`, which is the shape every container runs — an image
+/// missing its vendored pack booted and ran unguarded, silently, because
+/// nothing else checks. Testing one path would have passed throughout.
+#[test]
+fn a_missing_rule_pack_refuses_to_start_on_both_paths() {
+    for args in [vec!["run"], vec!["run", "--serve"]] {
+        let dir = temp_dir();
+        write_config_declaring_a_missing_pack(&dir);
+
+        let out = Command::new(nanny_bin())
+            .args(&args)
+            .current_dir(&dir)
+            .output()
+            .expect("nanny runs");
+
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !out.status.success(),
+            "`nanny {}` started with a declared pack missing from disk; \
+             stdout: {} stderr: {stderr}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stdout),
+        );
+        assert!(
+            stderr.contains("nanny:owasp"),
+            "`nanny {}` must name the pack it could not find: {stderr}",
+            args.join(" "),
+        );
+    }
+}

@@ -486,6 +486,35 @@ fn command_program(cmd: &std::process::Command) -> String {
 /// Shared by `--join` (joining someone else's governor) and `--serve` (running
 /// the app under the governor this process just started), so the two can never
 /// drift on how a governed child is wired.
+/// Resolve the rule packs a config declares, refusing to start without them.
+///
+/// A pack named in `[rules] extends` but absent from disk means the operator
+/// believes controls are in force that are not, so the honest response is to
+/// refuse rather than run an agent less governed than its config says.
+///
+/// **Shared by `nanny run` and `nanny run --serve` deliberately.** It lived
+/// only in the former until 2026-08-29, which meant the fail-closed guarantee
+/// held for local development and not for `--serve` — the shape every container
+/// runs. An image missing its vendored pack booted and ran unguarded, silently,
+/// because nothing else checks: the SDK loads whatever is on disk and carries on
+/// when that is nothing. Same defect as `/rules` being registered on the socket
+/// dispatch and missing from the network router, and the same fix: one
+/// implementation both paths call.
+pub fn resolve_declared_packs(
+    config: &nanny_config::NannyConfig,
+    config_dir: &Path,
+) -> Result<Vec<nanny_config::pack::PackManifest>> {
+    let pinned = config.rules.pinned()?;
+    let packs = nanny_config::pack::load_declared_packs(config_dir, &pinned)?;
+    if !packs.is_empty() {
+        println!(
+            "nanny: rule packs — {:?}",
+            packs.iter().map(|p| p.slug()).collect::<Vec<_>>()
+        );
+    }
+    Ok(packs)
+}
+
 fn build_governed_child(
     command: Vec<String>,
     server: &NetworkServerInfo,
@@ -612,21 +641,7 @@ fn cmd_run(
     }
 
     // ── Resolve declared rule packs ───────────────────────────────────────────
-    // Before anything runs. A pack named in [rules] extends but absent from
-    // disk means the operator believes controls are in force that are not, so
-    // the honest response is to refuse rather than to start an agent that is
-    // less governed than its config says.
-    let declared_packs = {
-        let pinned = config.rules.pinned()?;
-        let packs = nanny_config::pack::load_declared_packs(config_dir, &pinned)?;
-        if !packs.is_empty() {
-            println!(
-                "nanny: rule packs — {:?}",
-                packs.iter().map(|p| p.slug()).collect::<Vec<_>>()
-            );
-        }
-        packs
-    };
+    let declared_packs = resolve_declared_packs(&config, config_dir)?;
     let _ = &declared_packs;
 
     // Require [start] — nanny run always reads the command from config.

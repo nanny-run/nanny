@@ -99,6 +99,12 @@ pub fn cmd_server_start(
     // exactly the bug this keying exists to fix.
     let app = AppIdentity::load_required(&cwd)?;
 
+    // Before the governor binds anything. A pack declared in [rules] extends
+    // and missing from disk means this fleet would run less governed than its
+    // config claims, and a governor is the one place that matters most: every
+    // joined process inherits this rule set.
+    let _declared_packs = crate::resolve_declared_packs(&config, &cwd)?;
+
     // Proxy mode is opt-in.
 
     // Build BridgeComponents from config (no CLI ceiling — server uses config values).
