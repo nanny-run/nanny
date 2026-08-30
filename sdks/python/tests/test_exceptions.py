@@ -1,4 +1,4 @@
-"""Day 5 — exception mapping tests.
+"""Day 5, exception mapping tests.
 
 Exercises every path through ``_raise_for_stop`` directly and verifies
 the full public exception hierarchy.
@@ -15,7 +15,7 @@ from nanny_sdk._client import _raise_for_stop
 from nanny_sdk.exceptions import NannyStop
 
 # ---------------------------------------------------------------------------
-# _raise_for_stop — every reason string
+# _raise_for_stop: every reason string
 # ---------------------------------------------------------------------------
 
 
@@ -56,7 +56,7 @@ def test_all_exceptions_importable() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Inheritance — all are NannyStop subclasses
+# Inheritance: all are NannyStop subclasses
 # ---------------------------------------------------------------------------
 
 

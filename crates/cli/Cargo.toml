@@ -1,6 +1,6 @@
 [package]
 name        = "nannyd"
-description = "Nanny — execution boundary for AI agents. CLI (nanny run) and Rust SDK (#[tool], #[rule], #[agent])."
+description = "Authorization and audit for AI agents that take real-world actions. CLI (nanny run) and Rust SDK (#[tool], #[rule], #[agent])."
 readme       = "../../README.md"
 version.workspace    = true
 edition.workspace    = true
@@ -30,7 +30,7 @@ serde_json   = { workspace = true }
 shlex        = "2"
 toml_edit    = { workspace = true }
 sha2         = { workspace = true }
-# v0.2.0 — Network Bridge
+# v0.2.0: Network Bridge
 reqwest      = { workspace = true }
 rcgen        = { workspace = true }
 notify       = { workspace = true }

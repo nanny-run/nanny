@@ -1,11 +1,14 @@
-//! nanny — Rust SDK and CLI.
+//! nanny: Rust SDK and CLI.
 //!
 //! # Usage
 //!
 //! ```toml
 //! [dependencies]
-//! nanny = "0.3"
+//! nannyd = "0.6"
 //! ```
+//!
+//! The package is `nannyd`; the library it exposes is `nanny`, which is why the
+//! import below does not match the dependency name.
 //!
 //! ```rust,ignore
 //! use nanny::{tool, rule, agent, PolicyContext};
@@ -44,7 +47,7 @@ pub use nanny_macros::agent;
 
 /// Fetch a URL via nanny's built-in `http_get` bridge tool.
 ///
-/// The request is executed by the nanny bridge — the calling process never
+/// The request is executed by the nanny bridge: the calling process never
 /// opens a network connection directly. Nanny enforces the allowlist, charges
 /// tokens (200 per request), and applies the step limit before making the
 /// request.
@@ -72,14 +75,14 @@ pub use nanny_macros::agent;
 /// }
 /// ```
 pub fn http_get(url: String) -> Result<String, String> {
-    // Evaluate local rules first — same as #[nanny::tool] does.
+    // Evaluate local rules first: same as #[nanny::tool] does.
     // This ensures #[nanny::rule] functions (e.g. "no_loop") fire for
     // built-in bridge tools, not just developer-defined #[nanny::tool] functions.
     let mut args = std::collections::HashMap::new();
     args.insert("url".to_string(), url.clone());
     if let Some(rule_name) = runtime::evaluate_local_rules("http_get", args) {
         runtime::report_stop("RuleDenied");
-        eprintln!("nanny: stopped — RuleDenied: {rule_name}");
+        eprintln!("nanny: stopped, RuleDenied: {rule_name}");
         std::process::exit(1);
     }
 
@@ -92,7 +95,7 @@ pub fn http_get(url: String) -> Result<String, String> {
 /// Measured LLM token usage, reported to the bridge via [`report_usage`].
 ///
 /// Only `input` and `output` are ever required. `model` and `provider` are
-/// optional attribution labels — identifiers only, never prompt or response
+/// optional attribution labels: identifiers only, never prompt or response
 /// content, and never pricing. Omit them with `..Default::default()`:
 ///
 /// ```rust,ignore
@@ -104,21 +107,21 @@ pub struct Usage {
     pub input: u64,
     /// Completion / output tokens produced by the LLM call.
     pub output: u64,
-    /// Optional model identifier (e.g. `"gpt-4o"`). Label only — no pricing.
+    /// Optional model identifier (e.g. `"gpt-4o"`). Label only: no pricing.
     pub model: Option<String>,
-    /// Optional provider identifier (e.g. `"openai"`). Label only — no pricing.
+    /// Optional provider identifier (e.g. `"openai"`). Label only: no pricing.
     pub provider: Option<String>,
-    /// Optional finer split of `input` (never additional tokens beyond it) —
+    /// Optional finer split of `input` (never additional tokens beyond it),
     /// set these only if the provider's response reports prompt-caching
     /// usage (e.g. OpenAI's `usage.prompt_tokens_details.cached_tokens`,
     /// Anthropic's `cache_read_input_tokens`/`cache_creation_input_tokens`).
     /// Reporting only, same as `model`/`provider`: never debited separately
-    /// from `input`, and no pricing logic reads these in the engine — they
+    /// from `input`, and no pricing logic reads these in the engine: they
     /// exist so a downstream cost calculator can price cache-hit tokens at
     /// their real, much cheaper rate.
     pub cache_read: Option<u64>,
     pub cache_write: Option<u64>,
-    /// Optional harness attribution reported alongside this call — the "on every
+    /// Optional harness attribution reported alongside this call: the "on every
     /// request" path (parity with the Python SDK). Deduped bridge-side, so it is
     /// safe to set on every report. Prefer [`set_harness`] for a one-shot declare.
     pub harness: Option<Harness>,
@@ -127,17 +130,17 @@ pub struct Usage {
 /// Report measured LLM token usage to the nanny bridge.
 ///
 /// This is the Rust counterpart to Python's `nanny.instrument()`. Rust cannot
-/// monkey-patch an LLM client, so — idiomatically — usage is reported
+/// monkey-patch an LLM client, so: idiomatically, usage is reported
 /// explicitly: after an LLM call, hand nanny the token counts already present
 /// on the response.
 ///
 /// `input + output` is debited from the active budget; `model`/`provider` (if
 /// set) are recorded as attribution labels in the audit log. Only numbers and
-/// identifiers cross the boundary — never prompt or response content.
+/// identifiers cross the boundary: never prompt or response content.
 ///
 /// # Passthrough mode
 ///
-/// When running outside `nanny run` (no bridge active) this is a no-op — the
+/// When running outside `nanny run` (no bridge active) this is a no-op: the
 /// same passthrough contract as `#[nanny::tool]`.
 ///
 /// Fire-and-forget: never blocks the agent and never panics. Transport errors
@@ -171,7 +174,7 @@ pub fn report_usage(usage: Usage) {
 /// The agentic harness that ran this agent (e.g. `opencode`, `langgraph`,
 /// `crewai`), declared to the nanny bridge via [`set_harness`].
 ///
-/// This is our equivalent of OpenRouter's "app" column — an attribution label
+/// This is our equivalent of OpenRouter's "app" column: an attribution label
 /// only, recorded once per run. It is distinct from `#[nanny::agent(...)]`,
 /// which names a *limits scope*, not the harness. Only `name` is required:
 ///
@@ -197,7 +200,7 @@ pub struct Harness {
 ///
 /// # Passthrough mode
 ///
-/// When running outside `nanny run` (no bridge active) this is a no-op — the
+/// When running outside `nanny run` (no bridge active) this is a no-op: the
 /// same passthrough contract as `report_usage`. An empty `name` is ignored.
 pub fn set_harness(harness: Harness) {
     runtime::set_harness(harness.name, harness.version);
@@ -331,7 +334,7 @@ pub async fn run_scope_async<F: std::future::Future>(run_id: Option<String>, f: 
     runtime::TASK_RUN_ID.scope(id, f).await
 }
 
-// ── Private runtime — for generated code only ─────────────────────────────────
+// ── Private runtime: for generated code only ─────────────────────────────────
 //
 // Everything below this line is used exclusively by code generated by
 // nanny-macros. It is not a public API. Names and signatures may change
@@ -390,10 +393,10 @@ mod runtime {
     /// Returns `true` if any bridge transport is active.
     ///
     /// Priority (checked in order):
-    ///   1. `NANNY_BRIDGE_SOCKET`  — Unix domain socket (macOS/Linux local)
-    ///   2. `NANNY_BRIDGE_PORT`    — TCP loopback (Windows local)
-    ///   3. `NANNY_BRIDGE_ADDR`    — TCP + mTLS (network / cross-machine)
-    ///   4. None of the above      — passthrough (no-op)
+    ///   1. `NANNY_BRIDGE_SOCKET` : Unix domain socket (macOS/Linux local)
+    ///   2. `NANNY_BRIDGE_PORT`   : TCP loopback (Windows local)
+    ///   3. `NANNY_BRIDGE_ADDR`   : TCP + mTLS (network / cross-machine)
+    ///   4. None of the above     : passthrough (no-op)
     pub fn is_active() -> bool {
         bridge_socket_path().is_some() || bridge_tcp_port().is_some() || bridge_addr().is_some()
     }
@@ -414,7 +417,7 @@ mod runtime {
         std::env::var("NANNY_BRIDGE_PORT").ok()?.parse().ok()
     }
 
-    /// `NANNY_BRIDGE_ADDR` — host:port of the network governance server.
+    /// `NANNY_BRIDGE_ADDR`: host:port of the network governance server.
     /// Set automatically by `nanny run` when a server is running.
     fn bridge_addr() -> Option<String> {
         std::env::var("NANNY_BRIDGE_ADDR")
@@ -509,7 +512,7 @@ mod runtime {
     //   File path:   NANNY_BRIDGE_CA=/path/to/ca.crt
     //   Inline PEM:  NANNY_BRIDGE_CA="-----BEGIN CERTIFICATE-----\n..."
     //
-    // Inline PEM works without a filesystem — useful in Docker/k8s where secrets
+    // Inline PEM works without a filesystem: useful in Docker/k8s where secrets
     // are injected as env var values rather than mounted files.
     //
     // NANNY_BRIDGE_CERT may be a combined cert+key PEM bundle, in which case
@@ -575,7 +578,7 @@ mod runtime {
             return parse_http_response(&raw);
         }
 
-        // Transport 3: NANNY_BRIDGE_ADDR — loopback is plain HTTP (mirrors the
+        // Transport 3: NANNY_BRIDGE_ADDR: loopback is plain HTTP (mirrors the
         // server), non-loopback is mTLS.
         if let Some(addr) = bridge_addr() {
             if addr_is_loopback(&addr) {
@@ -630,7 +633,7 @@ mod runtime {
             return parse_http_response(&raw);
         }
 
-        // Transport 3: NANNY_BRIDGE_ADDR — loopback is plain HTTP (mirrors the
+        // Transport 3: NANNY_BRIDGE_ADDR: loopback is plain HTTP (mirrors the
         // server), non-loopback is mTLS.
         if let Some(addr) = bridge_addr() {
             if addr_is_loopback(&addr) {
@@ -653,7 +656,7 @@ mod runtime {
     /// Build a reqwest blocking client with mTLS client cert.
     ///
     /// Loads cert/key/CA from env vars or ~/.nanny/certs/ defaults.
-    /// Returns `None` if cert files are missing or malformed — callers treat
+    /// Returns `None` if cert files are missing or malformed: callers treat
     /// this as bridge unavailable (fail-closed when is_active() is true).
     fn build_tls_client() -> Option<reqwest::blocking::Client> {
         let certs_dir = default_nanny_certs_dir();
@@ -674,7 +677,7 @@ mod runtime {
         reqwest::blocking::Client::builder()
             .add_root_certificate(ca_cert)
             .identity(identity)
-            .use_rustls_tls() // force rustls — Identity::from_pem produces a rustls identity
+            .use_rustls_tls() // force rustls, Identity::from_pem produces a rustls identity
             .build()
             .ok()
     }
@@ -730,7 +733,7 @@ mod runtime {
     /// Returns the name of the first denying rule, or `None` if all pass.
     ///
     /// Fetches all live counters from the bridge `/status` endpoint before
-    /// evaluating rules — `BridgeState` is the single source of truth.
+    /// evaluating rules: `BridgeState` is the single source of truth.
     ///
     /// Fails closed if the bridge is active but unreachable: rules cannot be
     /// evaluated reliably against zeroed counters.
@@ -748,16 +751,16 @@ mod runtime {
         let elapsed_ms = client_state().lock().unwrap().start.elapsed().as_millis() as u64;
 
         // Fetch all tracked counters from the bridge (authoritative state).
-        // If the bridge is active but unreachable, fail closed — same logic as
+        // If the bridge is active but unreachable, fail closed: same logic as
         // call_tool, which returns ToolVerdict::Stop("BridgeUnavailable").
         let status = match fetch_bridge_status() {
             Some(s) => s,
             None if is_active() => {
                 report_stop("BridgeUnavailable");
-                eprintln!("nanny: stopped — BridgeUnavailable (bridge unreachable during rule evaluation)");
+                eprintln!("nanny: stopped, BridgeUnavailable (bridge unreachable during rule evaluation)");
                 std::process::exit(1);
             }
-            // Passthrough mode (no bridge env vars) — zeros are correct; rules
+            // Passthrough mode (no bridge env vars): zeros are correct; rules
             // still run but counters will be empty, which is expected offline.
             None => BridgeStatus {
                 tokens_spent: 0,
@@ -833,9 +836,9 @@ mod runtime {
     /// What the bridge decided about a tool call.
     #[derive(Debug)]
     pub enum ToolVerdict {
-        /// Allowed — run the original function body.
+        /// Allowed: run the original function body.
         Run,
-        /// Denied or stopped — panic with this message.
+        /// Denied or stopped: panic with this message.
         Stop(String),
     }
 
@@ -863,7 +866,7 @@ mod runtime {
             }
             _ => {
                 // If the bridge is unreachable while we are in a governed run,
-                // the enforcement guarantee is broken — fail closed rather than
+                // the enforcement guarantee is broken: fail closed rather than
                 // silently allowing the tool call to proceed ungoverned.
                 // If we are not in a governed run (passthrough mode, no env vars
                 // set), is_active() returns false and we run normally.
@@ -880,7 +883,7 @@ mod runtime {
     ///
     /// Unlike `call_tool` (which is for user-defined tools), this forwards
     /// `args_json` to the bridge and returns the tool's actual output content
-    /// on success. The bridge executes the tool itself — the child process
+    /// on success. The bridge executes the tool itself: the child process
     /// never runs any local logic for it.
     ///
     /// Returns `Err(reason)` if the call is denied, stopped, or the bridge
@@ -924,7 +927,7 @@ mod runtime {
         }
     }
 
-    /// POST /stop to the bridge — report a stop reason before calling exit(1).
+    /// POST /stop to the bridge: report a stop reason before calling exit(1).
     ///
     /// The bridge records this reason so the CLI emits it in `ExecutionStopped`
     /// instead of falling back to `ProcessCrashed`. Silently ignored if the
@@ -937,7 +940,7 @@ mod runtime {
     /// POST /stop with RuleDenied metadata so the bridge can emit the NDJSON event.
     ///
     /// Carries `tool` and `rule_name` so `handle_stop` can append a `RuleDenied`
-    /// event to the stream — client-side rule denials never reach `/tool/call`,
+    /// event to the stream: client-side rule denials never reach `/tool/call`,
     /// so the bridge would otherwise have no way to emit the event.
     pub fn report_stop_rule(tool: &str, rule_name: &str) {
         let body = serde_json::json!({
@@ -951,7 +954,7 @@ mod runtime {
 
     // ── LLM usage reporting ───────────────────────────────────────────────────
 
-    /// POST /llm/usage — report measured LLM token usage.
+    /// POST /llm/usage: report measured LLM token usage.
     ///
     /// No-op in passthrough mode (no bridge) and for zero-token reports.
     /// Fire-and-forget: the bridge response is ignored and transport errors are
@@ -993,7 +996,7 @@ mod runtime {
 
     // ── Harness declaration ───────────────────────────────────────────────────
 
-    /// POST /harness — declare the agentic harness that ran this agent.
+    /// POST /harness: declare the agentic harness that ran this agent.
     ///
     /// No-op in passthrough mode (no bridge) and for an empty name.
     /// Fire-and-forget: the bridge response is ignored and transport errors are
@@ -1056,7 +1059,7 @@ mod runtime {
 
     // ── Agent enter / exit ────────────────────────────────────────────────────
 
-    /// POST /agent/enter — switch to a named limits set.
+    /// POST /agent/enter: switch to a named limits set.
     pub fn agent_enter(name: &str) {
         let body = serde_json::json!({"name": name}).to_string();
         if let Some(resp) = http_post("/agent/enter", &body) {
@@ -1066,7 +1069,7 @@ mod runtime {
         }
     }
 
-    /// POST /agent/exit — revert to global limits.
+    /// POST /agent/exit: revert to global limits.
     pub fn agent_exit() {
         http_post("/agent/exit", "{}");
     }
@@ -1116,7 +1119,7 @@ mod tests {
 
     #[test]
     fn report_usage_noop_in_passthrough() {
-        // SAFETY: see `inactive_when_no_env_vars` — single-threaded harness.
+        // SAFETY: see `inactive_when_no_env_vars`: single-threaded harness.
         unsafe {
             std::env::remove_var("NANNY_BRIDGE_SOCKET");
             std::env::remove_var("NANNY_BRIDGE_PORT");
@@ -1139,7 +1142,7 @@ mod tests {
 
     #[test]
     fn set_harness_noop_in_passthrough() {
-        // SAFETY: see `inactive_when_no_env_vars` — single-threaded harness.
+        // SAFETY: see `inactive_when_no_env_vars`: single-threaded harness.
         unsafe {
             std::env::remove_var("NANNY_BRIDGE_SOCKET");
             std::env::remove_var("NANNY_BRIDGE_PORT");

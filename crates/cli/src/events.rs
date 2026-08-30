@@ -1,8 +1,8 @@
-// events.rs — Structured NDJSON event log for nanny executions.
+// events.rs: Structured NDJSON event log for nanny executions.
 //
 // One JSON object per line. Written append-only to stdout or a file.
 // ExecutionStarted is always the first event.
-// ExecutionStopped is always the last event — every exit path must emit it.
+// ExecutionStopped is always the last event: every exit path must emit it.
 
 use anyhow::{Context, Result};
 use nanny_config::ObservabilityConfig;
@@ -13,10 +13,10 @@ use std::path::Path;
 
 // ── EventWriter ───────────────────────────────────────────────────────────────
 
-/// Writes ExecutionEvents as NDJSON — one line per event.
+/// Writes ExecutionEvents as NDJSON: one line per event.
 ///
 /// Open with `EventWriter::from_config`. Write events with `write`.
-/// The writer flushes on every call — no buffered surprises on kill.
+/// The writer flushes on every call: no buffered surprises on kill.
 pub struct EventWriter {
     out: Box<dyn Write>,
 }

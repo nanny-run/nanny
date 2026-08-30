@@ -16,9 +16,9 @@ license     = "Apache-2.0"
 repository  = "https://github.com/nanny-run/nanny"
 authors     = ["Evans Ibok <hello@nanny.run>"]
 
-# Shared dependency versions — pin once, inherit everywhere.
+# Shared dependency versions: pin once, inherit everywhere.
 [workspace.dependencies]
-# Internal crates — path + version kept in sync with [workspace.package] version.
+# Internal crates: path + version kept in sync with [workspace.package] version.
 nanny-core    = { path = "crates/core",    version = "0.6.0" }
 nanny-config  = { path = "crates/config",  version = "0.6.0" }
 nanny-macros  = { path = "crates/macros",  version = "0.6.0" }
@@ -39,7 +39,7 @@ notify       = "8"
 dirs         = "6"
 x509-parser  = { version = "0.18", features = ["verify"] }
 time         = { version = "0.3", features = ["formatting", "parsing", "macros"] }
-# v0.2.0 — Network Bridge (server + SDK TLS client)
+# v0.2.0: Network Bridge (server + SDK TLS client)
 axum         = { version = "0.8" }
 axum-server  = { version = "0.8", features = ["tls-rustls-no-provider"] }
 tower        = { version = "0.5" }

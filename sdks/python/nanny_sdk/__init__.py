@@ -1,4 +1,4 @@
-"""Nanny SDK: execution boundary for AI agents.
+"""Nanny SDK: authorization and audit for AI agents that take real-world actions.
 
     from nanny_sdk import tool, rule, agent
     from nanny_sdk import RuleDenied, ToolDenied

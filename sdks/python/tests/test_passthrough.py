@@ -1,16 +1,16 @@
-"""Day 6 — Passthrough verification.
+"""Day 6, Passthrough verification.
 
 All tests verify that when neither NANNY_BRIDGE_SOCKET nor NANNY_BRIDGE_PORT is
 set (i.e. running ``python agent.py`` directly, not under ``nanny run``):
 
-- ``@tool`` returns the original function unchanged — no wrapper, no network calls.
-- ``@agent`` returns the original function unchanged — no wrapper, no network calls.
+- ``@tool`` returns the original function unchanged, no wrapper, no network calls.
+- ``@agent`` returns the original function unchanged, no wrapper, no network calls.
 - ``@rule`` registers the function in _RULES as normal but is never *called*,
   because ``@tool`` in passthrough skips ``_check_rules`` entirely.
 - All three decorators together on the same call path execute without error.
 - Importing from ``nanny_sdk`` succeeds with no env vars set.
 
-No ``mock_bridge`` fixture — no network activity is expected in any of these tests.
+No ``mock_bridge`` fixture, no network activity is expected in any of these tests.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from nanny_sdk import (
 from nanny_sdk._decorators import _RULES
 
 # ---------------------------------------------------------------------------
-# Module-wide fixture — both bridge env vars absent for every test here
+# Module-wide fixture: both bridge env vars absent for every test here
 # ---------------------------------------------------------------------------
 
 
@@ -40,7 +40,7 @@ def _no_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Import — zero errors with no env vars
+# Import: zero errors with no env vars
 # ---------------------------------------------------------------------------
 
 
@@ -59,7 +59,7 @@ def test_all_public_symbols_importable_without_env_vars() -> None:
 
 
 # ---------------------------------------------------------------------------
-# @tool — sync passthrough
+# @tool: sync passthrough
 # ---------------------------------------------------------------------------
 
 
@@ -90,7 +90,7 @@ def test_tool_sync_passthrough_no_exception() -> None:
 
 
 # ---------------------------------------------------------------------------
-# @tool — async passthrough
+# @tool: async passthrough
 # ---------------------------------------------------------------------------
 
 
@@ -113,7 +113,7 @@ async def test_tool_async_passthrough_returns_value() -> None:
 
 
 # ---------------------------------------------------------------------------
-# @rule — passthrough behaviour
+# @rule: passthrough behaviour
 # ---------------------------------------------------------------------------
 
 
@@ -128,7 +128,7 @@ def test_rule_always_registered_in_passthrough() -> None:
 
 
 def test_rule_never_called_in_passthrough() -> None:
-    """In passthrough @tool skips _check_rules entirely — rule fn never invoked."""
+    """In passthrough @tool skips _check_rules entirely, rule fn never invoked."""
     call_count = 0
 
     @rule("track_calls")
@@ -146,7 +146,7 @@ def test_rule_never_called_in_passthrough() -> None:
 
 
 # ---------------------------------------------------------------------------
-# @agent — sync passthrough
+# @agent: sync passthrough
 # ---------------------------------------------------------------------------
 
 
@@ -177,7 +177,7 @@ def test_agent_sync_passthrough_no_exception() -> None:
 
 
 # ---------------------------------------------------------------------------
-# @agent — async passthrough
+# @agent: async passthrough
 # ---------------------------------------------------------------------------
 
 
@@ -205,7 +205,7 @@ async def test_agent_async_passthrough_returns_value() -> None:
 
 
 def test_all_decorators_together_sync() -> None:
-    """@rule + @tool + @agent on the same sync call path — no error, correct value."""
+    """@rule + @tool + @agent on the same sync call path, no error, correct value."""
 
     @rule("no_loop")
     def check_loop(ctx: object) -> bool:
@@ -223,7 +223,7 @@ def test_all_decorators_together_sync() -> None:
 
 
 async def test_all_decorators_together_async() -> None:
-    """@rule + @tool + @agent on the same async call path — no error, correct value."""
+    """@rule + @tool + @agent on the same async call path, no error, correct value."""
 
     @rule("no_loop")
     def check_loop(ctx: object) -> bool:

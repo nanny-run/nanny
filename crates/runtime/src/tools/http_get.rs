@@ -1,12 +1,12 @@
-// http_get — the first real tool.
+// http_get: the first real tool.
 //
 // Makes a single HTTP GET request and returns the response body.
 //
 // Rules:
 // - URL argument is required and must start with http:// or https://
-// - Response body is capped at 1MB — fail closed on large responses
-// - Timeout is enforced — the tool cannot run forever
-// - Cost is only charged on success — failed calls do not spend budget
+// - Response body is capped at 1MB: fail closed on large responses
+// - Timeout is enforced: the tool cannot run forever
+// - Cost is only charged on success: failed calls do not spend budget
 // - Non-2xx HTTP responses are treated as failures
 
 use nanny_core::tool::{Tool, ToolArgs, ToolError, ToolOutput};
@@ -85,7 +85,7 @@ impl Tool for HttpGet {
 
         // ── Step 3: Build the HTTP agent with timeout ─────────────────────────
         //
-        // The agent is created per-call intentionally — no connection pooling,
+        // The agent is created per-call intentionally: no connection pooling,
         // no shared state between tool executions. Each call is independent.
         let agent = ureq::AgentBuilder::new()
             .timeout(Duration::from_millis(self.timeout_ms))
@@ -93,12 +93,12 @@ impl Tool for HttpGet {
 
         // ── Step 4: Make the request ──────────────────────────────────────────
         let response = agent.get(url).call().map_err(|e| match e {
-            // Non-2xx HTTP status — the server replied but with an error.
+            // Non-2xx HTTP status: the server replied but with an error.
             ureq::Error::Status(code, _) => ToolError::ExecutionFailed(format!("HTTP {code}")),
-            // Transport-level error — timeout, DNS failure, connection refused.
+            // Transport-level error: timeout, DNS failure, connection refused.
             ureq::Error::Transport(ref t) => {
                 // ureq surfaces timeouts as transport errors.
-                // We detect them by message content — not ideal but correct for v0.1.
+                // We detect them by message content: not ideal but correct for v0.1.
                 let msg = t.to_string();
                 if msg.contains("timed out") || msg.contains("deadline") {
                     ToolError::Timeout {
@@ -114,7 +114,7 @@ impl Tool for HttpGet {
         //
         // `take(MAX_BODY_BYTES)` ensures we never read more than 1MB.
         // If the response is larger, we stop at the limit and return what we have.
-        // This is intentional — fail closed on large payloads.
+        // This is intentional: fail closed on large payloads.
         let mut body = String::new();
         response
             .into_reader()

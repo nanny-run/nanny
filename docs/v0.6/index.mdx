@@ -3,13 +3,13 @@ title: Introduction
 description: What Nanny is, what it is not, and when to use it.
 ---
 
-You deploy a multi-agent system on Friday. Monday morning your CFO sends a Slack: "Why did we spend $4,000 over the weekend?" One agent got stuck in a loop. Nobody stopped it. No audit trail. Nothing.
+You deploy a multi-agent system on Friday. Monday morning a customer forwards you an email your agent sent them. Nobody approved it, nobody knew it could send email, and there is no record of what the agent was allowed to do or why it decided to.
 
 This is happening right now at hundreds of companies.
 
-**Nanny is the enforcement primitive that prevents it.**
+**Nanny is the authorization and audit layer that prevents it.**
 
-Nanny is an open-source authorization and audit layer for AI agents that take real-world actions. You declare what each agent is allowed to do, which tools it may call and under what rules, and the moment it tries something outside that, Nanny stops the run and records exactly what happened.
+Your agent may only do what it is authorized to do, and you can prove it. Nanny is open source, and governs AI agents that take real-world actions. You declare what each agent is allowed to do, which tools it may call and under what rules, and the moment it tries something outside that, Nanny stops the run and records exactly what happened.
 
 No grace period. No soft warnings. No recovery logic. No negotiation.
 
@@ -43,7 +43,7 @@ Nanny enforces what you declared. It adds no intelligence: it never reads your p
 
 ## Who it is for
 
-Nanny is for developers and teams running agents in production — or preparing to.
+Nanny is for developers and teams running agents in production, or preparing to.
 
 It is a good fit if you:
 
@@ -52,7 +52,7 @@ It is a good fit if you:
 - Need to prove an agent **could not** have done something, not just that it did not
 - Want a **structured audit trail** of every tool call and stop reason for every execution
 - Are building with **CrewAI, LangChain, or any Python or Rust agent framework**
-- Want enforcement that is **not tied to any agent framework** — use CrewAI, LangGraph, or any Python or Rust framework without lock-in
+- Want enforcement that is **not tied to any agent framework**, use CrewAI, LangGraph, or any Python or Rust framework without lock-in
 
 ---
 
@@ -91,7 +91,7 @@ without being written for it. See [Tool labels](/v0.6/concepts/tool-labels).
 
 Nanny is designed to meet you where you are and grow with you.
 
-**Nanny CLI** — The enforcement entry point. Governs any agent process in any language as its parent process supervisor. Install it once as a system tool and use `nanny run` from any project that has a `nanny.toml` with a `[start]` command configured.
+**Nanny CLI**: the enforcement entry point. Governs any agent process in any language as its parent process supervisor. Install it once as a system tool and use `nanny run` from any project that has a `nanny.toml` with a `[start]` command configured.
 
 ```bash
 nanny run           # reads [start].cmd from nanny.toml
@@ -112,7 +112,7 @@ nanny run --serve   # run a governance server for many processes
 
 The Nanny runtime is fully open source under the **Apache 2.0 licence**.
 
-Source code, issues, and contributions live at [github.com/nanny-run/nanny](https://github.com/nanny-run/nanny). Cloud is the managed layer above the OSS primitive — not a replacement for it.
+Source code, issues, and contributions live at [github.com/nanny-run/nanny](https://github.com/nanny-run/nanny). Cloud is the managed layer above the OSS primitive, not a replacement for it.
 
 ---
 

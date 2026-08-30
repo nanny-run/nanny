@@ -1,8 +1,8 @@
 # Contributing to Nanny
 
-> **Audience:** OSS contributors — developers who want to improve the engine, fix bugs, or add built-in tools. If you are looking to _use_ nanny in your project, see the [documentation](https://docs.nanny.run) instead.
+> **Audience:** OSS contributors, developers who want to improve the engine, fix bugs, or add built-in tools. If you are looking to _use_ nanny in your project, see the [documentation](https://docs.nanny.run) instead.
 
-Thank you for taking the time to contribute. Nanny is a small, focused primitive — every contribution should make agents more predictable, auditable, or safe. This guide explains how to contribute effectively.
+Thank you for taking the time to contribute. Nanny is a small, focused primitive, every contribution should make agents more predictable, auditable, or safe. This guide explains how to contribute effectively.
 
 ---
 
@@ -36,9 +36,9 @@ Thank you for taking the time to contribute. Nanny is a small, focused primitive
 
 Every line of code in this repo must answer "yes" to this question:
 
-> Does this make agents more predictable, auditable, or safe — from the machine's perspective?
+> Does this make agents more predictable, auditable, or safe, from the machine's perspective?
 
-If the answer involves humans making decisions, dashboards, retries, heuristics, soft warnings, or anything resembling intelligence — it does not belong in this repository. It belongs in an application layer built on top of nanny.
+If the answer involves humans making decisions, dashboards, retries, heuristics, soft warnings, or anything resembling intelligence, it does not belong in this repository. It belongs in an application layer built on top of nanny.
 
 This is not a philosophical preference. It is the reason nanny is trustworthy. The moment a safety primitive starts making "smart" decisions, it stops being safe.
 
@@ -114,7 +114,7 @@ These are permanent constraints, not temporary gaps. They protect the property t
 
 ## Codebase map
 
-The repository has two independent build systems: a Rust workspace under `crates/` and a Python package under `sdks/python/`. They share the same repo and version number but have no toolchain overlap — `cd sdks/python && uv sync && uv run pytest` runs without touching Cargo, and `cargo build --workspace` runs without touching Python.
+The repository has two independent build systems: a Rust workspace under `crates/` and a Python package under `sdks/python/`. They share the same repo and version number but have no toolchain overlap, `cd sdks/python && uv sync && uv run pytest` runs without touching Cargo, and `cargo build --workspace` runs without touching Python.
 
 ---
 
@@ -142,7 +142,7 @@ Entry points:
 
 If your PR changes user-facing behaviour, CLI output, config schema, or event format, update the docs site (`docs/`) and any affected example READMEs in the same PR.
 
-**Rust crates** — all six are published to crates.io. `nannyd` (`cli`) is the developer-facing crate. The others are its published dependencies and are not intended to be used directly.
+**Rust crates**, all six are published to crates.io. `nannyd` (`cli`) is the developer-facing crate. The others are its published dependencies and are not intended to be used directly.
 
 | Crate     | crates.io name  | Developer-facing | What it does                                                                                   |
 | --------- | --------------- | ---------------- | ---------------------------------------------------------------------------------------------- |
@@ -155,12 +155,12 @@ If your PR changes user-facing behaviour, CLI output, config schema, or event fo
 
 **The dependency direction is strict:** `core` has no internal dependencies. Everything else depends on `core`. `core` never imports `runtime`, `bridge`, or `cli`.
 
-**Python SDK** — lives at `sdks/python/`. Published as `nanny-sdk` on PyPI. Toolchain: `uv` (package manager), `hatchling` (build backend), `pytest` + `pytest-httpserver` (tests), `ruff` (lint), `mypy` (type checking). The root `Cargo.toml` workspace does not include `sdks/` — there is no toolchain collision.
+**Python SDK**, lives at `sdks/python/`. Published as `nanny-sdk` on PyPI. Toolchain: `uv` (package manager), `hatchling` (build backend), `pytest` + `pytest-httpserver` (tests), `ruff` (lint), `mypy` (type checking). The root `Cargo.toml` workspace does not include `sdks/`, there is no toolchain collision.
 
 | Path                         | What it is                                                             |
 | ---------------------------- | ---------------------------------------------------------------------- |
 | `sdks/python/nanny_sdk/`     | The importable package (`from nanny_sdk import tool, rule, agent`)     |
-| `sdks/python/tests/`         | Unit tests — all use a `mock_bridge` fixture, no real bridge required  |
+| `sdks/python/tests/`         | Unit tests, all use a `mock_bridge` fixture, no real bridge required  |
 | `sdks/python/pyproject.toml` | Package metadata, build config, tool config (`ruff`, `mypy`, `pytest`) |
 
 If you are adding a new enforcement rule, it goes in `runtime`. If you are adding a new event type, it goes in `core/src/events/event.rs`. If you are changing CLI behaviour, it goes in `cli/src/main.rs`.

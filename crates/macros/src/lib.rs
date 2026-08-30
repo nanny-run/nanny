@@ -1,4 +1,4 @@
-//! nanny-macros — proc-macro attributes for per-function governance.
+//! nanny-macros: proc-macro attributes for per-function governance.
 //!
 //! These macros are re-exported as `nanny::tool`, `nanny::rule`, `nanny::agent`
 //! via the `nanny` crate. Do not depend on this crate directly.
@@ -6,7 +6,7 @@
 //! # Passthrough mode
 //!
 //! All macros are no-ops when `NANNY_BRIDGE_SOCKET` / `NANNY_BRIDGE_PORT` are
-//! absent. The original function runs exactly as written — no overhead.
+//! absent. The original function runs exactly as written: no overhead.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -30,9 +30,9 @@ use syn::{parse_macro_input, FnArg, ItemFn, LitInt, LitStr, Meta, Pat};
 ///
 /// When active (running under `nanny run`):
 /// 1. All registered `#[nanny::rule]` functions are evaluated first.
-/// 2. The bridge is called via `POST /tool/call` — policy enforced, tokens charged.
+/// 2. The bridge is called via `POST /tool/call`: policy enforced, tokens charged.
 /// 3. If allowed, the original function body runs.
-/// 4. If denied or stopped, the process panics with a `nanny: stopped —` message.
+/// 4. If denied or stopped, the process panics with a `nanny: stopped , ` message.
 ///
 /// When inactive (no bridge env vars), the function runs without any overhead.
 #[proc_macro_attribute]
@@ -120,14 +120,14 @@ fn expand_tool(input: ItemFn, tokens: u64) -> syn::Result<TokenStream2> {
 
             if let Some(__rule_name) = ::nanny::__private::evaluate_local_rules(#fn_str, __nanny_tool_args) {
                 ::nanny::__private::report_stop_rule(#fn_str, __rule_name);
-                ::std::eprintln!("nanny: stopped — RuleDenied: {}", __rule_name);
+                ::std::eprintln!("nanny: stopped, RuleDenied: {}", __rule_name);
                 ::std::process::exit(1);
             }
 
             match ::nanny::__private::call_tool(#fn_str, #tokens) {
                 ::nanny::__private::ToolVerdict::Run  => __nanny_impl(#(#forward_args),*),
                 ::nanny::__private::ToolVerdict::Stop(__reason) => {
-                    ::std::eprintln!("nanny: stopped — {}", __reason);
+                    ::std::eprintln!("nanny: stopped, {}", __reason);
                     ::std::process::exit(1);
                 }
             }
@@ -155,7 +155,7 @@ fn expand_tool(input: ItemFn, tokens: u64) -> syn::Result<TokenStream2> {
 /// call evaluates all registered rules before contacting the bridge.
 ///
 /// Returning `false` stops execution immediately with
-/// `nanny: stopped — RuleDenied: <name>`.
+/// `nanny: stopped: RuleDenied: <name>`.
 ///
 /// When inactive (no bridge), the function still exists but is never called by nanny.
 #[proc_macro_attribute]
@@ -212,7 +212,7 @@ fn expand_rule(input: ItemFn, name_lit: LitStr) -> syn::Result<TokenStream2> {
 ///
 /// If the named set does not exist in `nanny.toml`, panics immediately on entry.
 ///
-/// When inactive (no bridge), the function runs normally — no bridge calls.
+/// When inactive (no bridge), the function runs normally: no bridge calls.
 #[proc_macro_attribute]
 pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
     let name_lit = parse_macro_input!(attr as LitStr);
@@ -265,7 +265,7 @@ fn expand_agent(input: ItemFn, name_lit: LitStr) -> syn::Result<TokenStream2> {
 
             ::nanny::__private::agent_enter(#name_lit);
 
-            // RAII guard: calls agent_exit on drop — fires on panic or normal return.
+            // RAII guard: calls agent_exit on drop: fires on panic or normal return.
             struct __NannyAgentGuard;
             impl ::std::ops::Drop for __NannyAgentGuard {
                 fn drop(&mut self) {
@@ -292,7 +292,7 @@ fn forward_arg_names(
     for arg in inputs {
         match arg {
             FnArg::Receiver(_) => {
-                // Handled by caller — should never reach here.
+                // Handled by caller: should never reach here.
                 unreachable!()
             }
             FnArg::Typed(pat_type) => {
@@ -302,7 +302,7 @@ fn forward_arg_names(
                         names.push(quote! { #name });
                     }
                     Pat::Wild(_) => {
-                        // `_: T` — generate a unique ident for forwarding.
+                        // `_: T`: generate a unique ident for forwarding.
                         // This case is unusual and the inner fn will have the
                         // same `_` pattern, so we can't forward by name.
                         // Emit a compile error to keep things clean.

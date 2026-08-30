@@ -1,10 +1,10 @@
-// Certification tests for `#[nanny::rule]` — rules that actually fire.
+// Certification tests for `#[nanny::rule]`: rules that actually fire.
 //
 // `macro_integration.rs` covers the null case (no rules registered → allow
 // all). It cannot cover the positive case: rules register through
 // `inventory`, which collects at link time across the whole test binary, so
 // any rule declared there would apply to every test in that file. This file
-// is a separate binary for exactly that reason — the rules below are global
+// is a separate binary for exactly that reason: the rules below are global
 // to it and to nothing else.
 //
 // Within this binary the same constraint still applies, so each rule is keyed

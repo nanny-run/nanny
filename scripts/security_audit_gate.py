@@ -12,7 +12,7 @@ manifest paths matching --scope.
   unallowlisted (or allowlisted-but-expired) finding remains.
 
 --scope examples: reports the same filtered set with no allowlist
-  cross-reference and always exits 0 — this scope is informational only,
+  cross-reference and always exits 0, this scope is informational only,
   see .github/workflows/security-audit.yml's own header for why.
 
 Usage:
@@ -57,7 +57,7 @@ def matching_allowlist_entry(alert_number: int, allowlist: list[dict]) -> dict |
             continue
         expiry = parse_expiry(entry.get("expiry", ""))
         if expiry is not None and expiry < today:
-            continue  # expired — does not cover the alert, falls through to failing
+            continue  # expired, does not cover the alert, falls through to failing
         return entry
     return None
 

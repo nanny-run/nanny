@@ -147,7 +147,7 @@ fn wait_for_port(port: u16, attempts: u32) -> bool {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-/// A process that exits on its own completes cleanly — exit code 0.
+/// A process that exits on its own completes cleanly: exit code 0.
 #[test]
 fn fast_exit_completes_cleanly() {
     let dir = temp_dir();
@@ -186,7 +186,7 @@ fn fast_exit_completes_cleanly() {
 /// Bridge events (ToolAllowed, RuleDenied, ToolDenied, …) are flushed into the NDJSON
 /// stream before ExecutionStopped, so ExecutionStopped is always the last line.
 ///
-/// This test uses `echo` as the child command — it exits immediately without
+/// This test uses `echo` as the child command: it exits immediately without
 /// making any bridge tool calls, so no per-tool events are produced.  The key
 /// assertion is structural: every line is valid JSON and ExecutionStopped is last.
 #[test]
@@ -228,7 +228,7 @@ fn execution_stopped_is_always_last_line() {
 
 /// ExecutionStopped carries numeric `steps` and `tokens_spent` fields.
 ///
-/// This test uses `echo` — no bridge tool calls — so both values are
+/// This test uses `echo`: no bridge tool calls, so both values are
 /// legitimately 0. The point is to assert the fields are present and
 /// numeric, catching any regression where they are hardcoded to 0 even
 /// when tools are called.  See the bridge-level
@@ -330,7 +330,7 @@ log = "stdout"
     );
 }
 
-// ── T6: nanny run --serve — non-loopback without certs fails fast ────────────
+// ── nanny run --serve: non-loopback without certs fails fast ────────────
 //
 // `server.rs` bails before starting the server when the bind address is
 // non-loopback and cert files don't exist. Tests the error message content
@@ -379,7 +379,7 @@ log = "stdout"
     );
 }
 
-// ── T7: nanny run --serve — loopback does NOT require cert files ─────────────
+// ── nanny run --serve: loopback does NOT require cert files ─────────────
 //
 // Default addr is 127.0.0.1 (loopback) → no cert check → server binds
 // successfully even when ~/.nanny/certs/ doesn't exist.
@@ -401,7 +401,7 @@ log = "stdout"
 #[test]
 fn server_start_loopback_does_not_require_cert_files() {
     let dir = temp_dir();
-    let home = temp_dir(); // fresh NANNY_HOME — no certs directory
+    let home = temp_dir(); // fresh NANNY_HOME, no certs directory
 
     fs::write(
         dir.join("nanny.toml"),
@@ -437,7 +437,7 @@ log = "stdout"
     );
 }
 
-// ── T8: nanny run --join=<id> joins an explicit governance server ────────────
+// ── nanny run --join=<id> joins an explicit governance server ────────────
 //
 // There is no auto-detection anymore, two unrelated apps' governors on one
 // machine must never collide by one silently absorbing the other's run. A
@@ -633,7 +633,7 @@ cmd = "echo joined-work"
     );
 }
 
-// ── T9: nanny run --join=<id> fails loudly when that server isn't reachable ──
+// ── nanny run --join=<id> fails loudly when that server isn't reachable ──
 //
 // An explicit `--join` that doesn't find its target is a mistake worth
 // surfacing, not something to quietly fall back to a local bridge for, the
@@ -989,7 +989,7 @@ fn execution_started_carries_a_stable_config_hash() {
     assert_eq!(hashes[0].len(), 64, "sha256 hex");
 }
 
-/// Gap G5: `ExecutionStarted` carries the runtime's own version, so a fleet
+/// `ExecutionStarted` carries the runtime's own version, so a fleet
 /// operator can answer "which of my machines are on an old runtime" from the
 /// log alone, without cross-referencing which binary happened to be deployed
 /// where.
@@ -1285,7 +1285,7 @@ fn write_config_declaring_a_missing_pack(dir: &Path) {
 /// The guarantee is that a pack named in `[rules] extends` and missing from
 /// disk stops the run: the operator believes controls are in force that are
 /// not. It was implemented in `cmd_run` only, so it held for local development
-/// and not for `--serve`, which is the shape every container runs — an image
+/// and not for `--serve`, which is the shape every container runs: an image
 /// missing its vendored pack booted and ran unguarded, silently, because
 /// nothing else checks. Testing one path would have passed throughout.
 #[test]

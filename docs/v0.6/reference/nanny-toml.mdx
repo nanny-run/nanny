@@ -32,8 +32,8 @@ extends = ["nanny:recommended@1.0.0"]   # installed with nanny rules add
 # ── Observability ─────────────────────────────────────────────────────────────
 
 [observability]
-log  = "stdout"   # "stdout" | "file" — "file" writes to .nanny/logs/log.ndjson
-# file = "events"   # optional, bare name only, no extension — see below
+log  = "stdout"   # "stdout" | "file": "file" writes to .nanny/logs/log.ndjson
+# file = "events"   # optional, bare name only, no extension: see below
 
 # Cloud sync isn't a config field. It turns on for any machine that sets
 # the NANNY_API_KEY environment variable. There is no endpoint or key here.
@@ -106,7 +106,7 @@ A pack named here but not installed stops the run before it starts. Add it with
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `log` | `"stdout"` \| `"file"` | `"stdout"` | Destination for the NDJSON event stream. |
-| `file` | string | `"log"` | Optional. A bare name, no extension and no path separators — Nanny always appends `.ndjson`. The directory is always `.nanny/logs/`, owned by Nanny, auto-created and gitignored — not configurable. |
+| `file` | string | `"log"` | Optional. A bare name, no extension and no path separators. Nanny always appends `.ndjson`. The directory is always `.nanny/logs/`, owned by Nanny, auto-created and gitignored, not configurable. |
 
 ---
 

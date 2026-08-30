@@ -1,6 +1,6 @@
 [package]
 name        = "nanny-macros"
-description = "Proc-macro attributes for nanny — re-exported via the nanny crate"
+description = "Proc-macro attributes for nanny, re-exported via the nanny crate"
 version.workspace    = true
 edition.workspace    = true
 license.workspace    = true

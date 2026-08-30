@@ -1,14 +1,14 @@
-// nanny-bridge — local enforcement server + network bridge server.
+// nanny-bridge: local enforcement server + network bridge server.
 pub mod network;
 
-// nanny-bridge — local enforcement server.
+// nanny-bridge: local enforcement server.
 //
 // Runs as a background thread inside the `nanny run` process.
 // The child process communicates with it over a Unix domain socket (macOS/Linux)
 // or TCP loopback (Windows).
 //
-// Unix:    /tmp/nanny-<session-token>.sock — no port, no conflicts, ever
-// Windows: 127.0.0.1:<dynamic-port>       — OS-assigned, loopback only
+// Unix:    /tmp/nanny-<session-token>.sock: no port, no conflicts, ever
+// Windows: 127.0.0.1:<dynamic-port>      : OS-assigned, loopback only
 //
 // Every request must carry the session token in `X-Nanny-Session-Token`.
 // The token is a UUID v4 generated fresh for each execution.
@@ -60,7 +60,7 @@ pub struct BridgeMetrics {
 /// On Unix (macOS / Linux): a Unix domain socket. No port, no conflicts.
 ///   Inject `NANNY_BRIDGE_SOCKET` into the child environment.
 ///   The socket path embeds the session token UUID, and Unix filesystem
-///   permissions restrict access to the creating user — no extra auth needed
+///   permissions restrict access to the creating user: no extra auth needed
 ///   to connect, but the `X-Nanny-Session-Token` header is still required.
 ///
 /// On Windows: TCP loopback on an OS-assigned port.
@@ -69,16 +69,16 @@ pub struct BridgeMetrics {
 ///   connection to 127.0.0.1:<port>. The session token (a random UUID passed
 ///   via `NANNY_SESSION_TOKEN` and required as `X-Nanny-Session-Token` on
 ///   every request) is the sole authentication mechanism. The token is
-///   visible to child processes spawned by the agent — do not spawn untrusted
+///   visible to child processes spawned by the agent: do not spawn untrusted
 ///   sub-processes from within a governed agent on Windows.
 ///
 /// In both cases inject `NANNY_SESSION_TOKEN`.
 #[derive(Debug, Clone)]
 pub enum BridgeAddress {
-    /// Unix domain socket — macOS and Linux only.
+    /// Unix domain socket: macOS and Linux only.
     #[cfg(unix)]
     Unix(std::path::PathBuf),
-    /// TCP port on 127.0.0.1 — Windows fallback.
+    /// TCP port on 127.0.0.1: Windows fallback.
     Tcp(u16),
 }
 
@@ -113,7 +113,7 @@ pub(crate) struct BridgeState {
     /// whose purpose is making genuine gaps detectable.
     next_seq: u64,
 
-    // Enforcement — stored separately so /rule/evaluate can access
+    // Enforcement: stored separately so /rule/evaluate can access
     // rule_evaluator directly without evaluating the full policy chain.
     tool_permission_policy: ToolPermissionPolicy,
     rule_evaluator: RuleEvaluator,
@@ -166,7 +166,7 @@ pub struct Bridge {
 impl Bridge {
     /// Start the bridge.
     ///
-    /// On Unix, binds a Unix domain socket before returning — ready immediately.
+    /// On Unix, binds a Unix domain socket before returning: ready immediately.
     /// On Windows, binds a TCP loopback socket on an OS-assigned port.
     /// `run_id` is supplied by the caller rather than minted here: the CLI
     /// writes `ExecutionStarted` before the bridge exists, and a bookend
@@ -221,7 +221,7 @@ fn start_transport(
     // Remove stale socket if present (shouldn't happen with UUID names).
     let _ = std::fs::remove_file(&socket_path);
 
-    // Bind in the main thread — socket is ready before start() returns.
+    // Bind in the main thread: socket is ready before start() returns.
     let listener = std::os::unix::net::UnixListener::bind(&socket_path)
         .map_err(|e| BridgeError::Start(format!("socket bind failed: {e}")))?;
 
@@ -253,10 +253,10 @@ fn start_transport(
     shared: Arc<Mutex<BridgeState>>,
     registry: Arc<ToolRegistry>,
 ) -> Result<Bridge, BridgeError> {
-    // Bind to port 0 — the OS assigns a free ephemeral port per bridge instance.
+    // Bind to port 0: the OS assigns a free ephemeral port per bridge instance.
     // This supports concurrent `nanny run` processes on the same machine without
     // conflict. The actual bound port is read back via server_addr() and injected
-    // into the child process environment as NANNY_BRIDGE_PORT — child processes
+    // into the child process environment as NANNY_BRIDGE_PORT: child processes
     // never hardcode the port themselves.
     let server =
         tiny_http::Server::http("127.0.0.1:0").map_err(|e| BridgeError::Start(e.to_string()))?;
@@ -316,7 +316,7 @@ impl Bridge {
 
     /// Mark the execution as stopped with the given reason.
     ///
-    /// Idempotent — calling twice does nothing after the first stop.
+    /// Idempotent: calling twice does nothing after the first stop.
     pub fn stop(&self, reason: impl Into<String>) {
         let reason: String = reason.into();
         let mut guard = self.shared.lock().unwrap();
@@ -335,7 +335,7 @@ impl Bridge {
     }
 
     /// Declare this governance server's identity, emitting `GovernorIdentified`
-    /// (Gap G6). Called once, by `--serve`'s startup path — a plain (non-serve)
+    ///. Called once, by `--serve`'s startup path: a plain (non-serve)
     /// `nanny run` has no governor to identify and never calls this.
     pub fn declare_governor(
         &self,
@@ -372,7 +372,7 @@ impl Drop for Bridge {
 
 // ── Transport-agnostic request / response ─────────────────────────────────────
 
-/// A parsed incoming request — transport-independent.
+/// A parsed incoming request: transport-independent.
 struct BridgeReq {
     method: String,
     path: String,
@@ -418,7 +418,7 @@ fn dispatch(
     shared: &Arc<Mutex<BridgeState>>,
     registry: &Arc<ToolRegistry>,
 ) -> BridgeResp {
-    // Token check — required on every request.
+    // Token check: required on every request.
     let token_ok = {
         let guard = shared.lock().unwrap();
         req.token.as_deref() == Some(guard.session_token.as_str())
@@ -430,7 +430,7 @@ fn dispatch(
     let method = req.method.as_str();
     let path = req.path.as_str();
 
-    // Read-only endpoints — always available, even after execution stops.
+    // Read-only endpoints: always available, even after execution stops.
     match (method, path) {
         ("GET", "/health") => return handle_health(shared),
         ("GET", "/status") => return handle_status(shared),
@@ -438,7 +438,7 @@ fn dispatch(
         _ => {}
     }
 
-    // /stop — child reports its own stop reason before calling exit(1).
+    // /stop: child reports its own stop reason before calling exit(1).
     // Always accepted, even after execution has already stopped (idempotent).
     if method == "POST" && path == "/stop" {
         return handle_stop(&req.body, shared);
@@ -534,7 +534,7 @@ pub(crate) fn handle_tool_call(
         Err(_) => return BridgeResp::json(400, r#"{"error":"invalid request body"}"#),
     };
 
-    // Build PolicyContext and evaluate — hold lock briefly, then release.
+    // Build PolicyContext and evaluate: hold lock briefly, then release.
     // The engine's own `max_calls` rule, if it governs this tool. Recorded as
     // cleared when the call is allowed, the same as any SDK-side rule.
     let engine_rule = shared
@@ -594,13 +594,13 @@ pub(crate) fn handle_tool_call(
             if let Some(name) = engine_rule {
                 cleared_by.push(name);
             }
-            // Execute tool — no lock held during execution (may be slow for http_get).
+            // Execute tool: no lock held during execution (may be slow for http_get).
             let cost = registry.declared_cost(&call.tool).unwrap_or(0);
             let result = registry.call(&call.tool, &call.args);
 
             match result {
                 Err(ToolCallError::NotFound { .. }) => {
-                    // User-defined tool — the function body runs in the child process.
+                    // User-defined tool: the function body runs in the child process.
                     // The bridge just charges the declared token cost and records the call.
                     let cost = call.tokens.unwrap_or(0);
                     {
@@ -750,9 +750,9 @@ pub(crate) fn handle_agent_exit(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp 
 /// Submits LLM token usage from `nanny::report_usage` (Rust) or a
 /// nanny.instrument()-wrapped client (Python). Records `input + output` tokens
 /// and emits an `LlmUsageRecorded` audit event. The
-/// optional `model`/`provider` are recorded as labels only — no pricing.
+/// optional `model`/`provider` are recorded as labels only: no pricing.
 /// The optional `cache_read`/`cache_write` are a finer split of `input` for
-/// providers that report prompt-caching usage — reporting only, never
+/// providers that report prompt-caching usage: reporting only, never
 /// counted separately from `input`.
 ///
 /// Returns `{"status":"ok"}`. Usage is measured, never enforced: no token
@@ -772,14 +772,14 @@ pub(crate) fn handle_llm_usage(body: &[u8], shared: &Arc<Mutex<BridgeState>>) ->
         input: u64,
         #[serde(default)]
         output: u64,
-        // Optional attribution labels — identifiers only, never content or pricing.
+        // Optional attribution labels: identifiers only, never content or pricing.
         #[serde(default)]
         model: Option<String>,
         #[serde(default)]
         provider: Option<String>,
         // Optional finer split of `input` (never additional tokens beyond
         // it), present only for providers that report prompt-caching usage.
-        // Reporting only, same as model/provider — never debited separately,
+        // Reporting only, same as model/provider: never debited separately,
         // `total` below still just sums input + output regardless.
         #[serde(default)]
         cache_read: Option<u64>,
@@ -829,7 +829,7 @@ pub(crate) fn handle_llm_usage(body: &[u8], shared: &Arc<Mutex<BridgeState>>) ->
 /// POST /harness {"name": "...", "version"?: "..."}
 ///
 /// Records the agentic harness that ran the loop (opencode, langgraph, …),
-/// declared via `nanny::set_harness`. Emits a `HarnessIdentified` audit event —
+/// declared via `nanny::set_harness`. Emits a `HarnessIdentified` audit event,
 /// our equivalent of OpenRouter's "app" column. Attribution label only: never
 /// content and never pricing.
 ///
@@ -1220,7 +1220,7 @@ pub(crate) fn handle_stop(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> Brid
     };
     let mut guard = shared.lock().unwrap();
     // When the SDK reports a client-side rule denial it knows both the rule name
-    // and the tool that triggered it — emit the RuleDenied event here so the
+    // and the tool that triggered it: emit the RuleDenied event here so the
     // NDJSON stream contains it even though no /tool/call ever reached the bridge.
     if reason == "RuleDenied" {
         let tool = parsed["tool"].as_str().unwrap_or("").to_string();
@@ -1252,7 +1252,7 @@ pub(crate) fn handle_stop(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> Brid
 // ── State helpers ─────────────────────────────────────────────────────────────
 
 /// Mark execution as stopped.
-/// Idempotent — does nothing if already stopped.
+/// Idempotent: does nothing if already stopped.
 /// ExecutionStopped is emitted by the CLI, not the bridge.
 pub(crate) fn mark_stopped(state: &mut BridgeState, reason: &str) {
     if matches!(state.execution, ExecutionState::Stopped { .. }) {
@@ -1323,8 +1323,8 @@ pub(crate) fn record_app(state: &mut BridgeState, app_id: String, name: String) 
 }
 
 /// Append a `GovernorIdentified` event only when the identity actually
-/// changes (Gap G6). Mirrors `record_app`. Unlike an app id, no field here is
-/// required to be non-blank — `name` is best-effort (a hostname lookup can
+/// changes. Mirrors `record_app`. Unlike an app id, no field here is
+/// required to be non-blank: `name` is best-effort (a hostname lookup can
 /// fail) and this is attribution, not a credential.
 pub(crate) fn record_governor(
     state: &mut BridgeState,
@@ -1384,10 +1384,9 @@ pub(crate) fn stopped_response(reason: &str) -> BridgeResp {
 
 /// Template for building fresh per-run enforcement state in the network server.
 ///
-/// The governance server keeps one [`BridgeState`] per run id (see G3 —
-/// "Nanny stops the run, not the host"). All runs share one immutable
-/// [`ToolRegistry`]; everything else — counters, stop state, scope
-/// stacks — is cloned per run from this template so each run is independently
+/// The governance server keeps one [`BridgeState`] per run id (/// "Nanny stops the run, not the host"). All runs share one immutable
+/// [`ToolRegistry`]; everything else: counters, stop state, scope
+/// stacks: is cloned per run from this template so each run is independently
 /// governed and independently stoppable.
 pub(crate) struct RunTemplate {
     session_token: String,
@@ -1500,7 +1499,7 @@ mod tests {
         b
     }
 
-    /// Bridge with custom allowed tools and an empty registry — exercises
+    /// Bridge with custom allowed tools and an empty registry: exercises
     /// the user-defined tool path (NotFound → charge tokens → return allowed).
     fn started_with_tools(allowed_tools: Vec<String>, _max_tokens: u64) -> Bridge {
         let components = BridgeComponents {
@@ -1749,7 +1748,7 @@ mod tests {
         let b = Bridge::start(
             BridgeComponents {
                 registry: ToolRegistry::new(),
-                allowed_tools: vec![], // empty allowlist — all tools denied
+                allowed_tools: vec![], // empty allowlist, all tools denied
                 per_tool_max_calls: Default::default(),
                 tool_labels: Default::default(),
             },
@@ -1922,7 +1921,7 @@ mod tests {
         // Make one tool call so bridge tracks 1 echo call.
         post(&b, "/tool/call", r#"{"tool":"echo","args":{}}"#);
 
-        // Rule evaluate with tool="echo" and no explicit counts — uses tracked state.
+        // Rule evaluate with tool="echo" and no explicit counts: uses tracked state.
         let (_, body) = post(&b, "/rule/evaluate", r#"{"tool":"echo"}"#);
         let v = json_val(&body);
         assert_eq!(v["status"], "denied");
@@ -2179,7 +2178,7 @@ mod tests {
         assert_eq!(s, 200);
         assert_eq!(json_val(&body)["status"], "ok");
 
-        // Debited exactly input+output — cache_read/cache_write never change
+        // Debited exactly input+output: cache_read/cache_write never change
         // the debit, they're a reporting-only split of input already
         // included in it, never additional tokens.
         let (_, status) = get(&b, "/status");
@@ -2202,7 +2201,7 @@ mod tests {
         assert_eq!(s, 200);
         assert_eq!(json_val(&body)["status"], "ok");
 
-        // Attribution only — no tokens debited.
+        // Attribution only: no tokens debited.
         let (_, status) = get(&b, "/status");
         assert_eq!(json_val(&status)["tokens_spent"], 0);
 
@@ -2243,13 +2242,13 @@ mod tests {
     #[test]
     fn app_records_identity_and_dedups() {
         let b = started(1000);
-        let (s, body) = post(&b, "/app", r#"{"app_id":"app_abc","name":"gotm-nanny"}"#);
+        let (s, body) = post(&b, "/app", r#"{"app_id":"app_abc","name":"acme-agent"}"#);
         assert_eq!(s, 200);
         assert!(body.contains("\"ok\""));
 
         // Re-declaring the same identity must not append a second event: a
         // caller is allowed to (re)declare on every request.
-        post(&b, "/app", r#"{"app_id":"app_abc","name":"gotm-nanny"}"#);
+        post(&b, "/app", r#"{"app_id":"app_abc","name":"acme-agent"}"#);
 
         let (_, events) = get(&b, "/events");
         let identified: Vec<_> = events
@@ -2259,7 +2258,7 @@ mod tests {
             .collect();
         assert_eq!(identified.len(), 1, "identical app must be deduped");
         assert_eq!(identified[0]["app_id"], "app_abc");
-        assert_eq!(identified[0]["name"], "gotm-nanny");
+        assert_eq!(identified[0]["name"], "acme-agent");
     }
 
     #[test]
@@ -2321,7 +2320,7 @@ mod tests {
         // Attribution only: declaring an app must not consume tokens or calls.
         let b = started(1000);
         let before = b.metrics();
-        post(&b, "/app", r#"{"app_id":"app_abc","name":"gotm-nanny"}"#);
+        post(&b, "/app", r#"{"app_id":"app_abc","name":"acme-agent"}"#);
         let after = b.metrics();
         assert_eq!(
             before.tokens_spent, after.tokens_spent,
@@ -2333,7 +2332,7 @@ mod tests {
         );
     }
 
-    // ── Governor identity (Stage 37, C4, Gap G6) ────────────────────────────────
+    // ── Governor identity ────────────────────────────────
 
     #[test]
     fn governor_records_identity_and_dedups() {
@@ -2395,7 +2394,7 @@ mod tests {
             "/llm/usage",
             r#"{"input":5,"output":5,"harness":{"name":"opencode"}}"#,
         );
-        // Same harness again — must NOT emit a second HarnessIdentified.
+        // Same harness again: must NOT emit a second HarnessIdentified.
         post(
             &b,
             "/llm/usage",
@@ -2476,7 +2475,7 @@ mod tests {
 
     #[test]
     fn tool_failure_emits_tool_failed_event() {
-        // FailingTool always returns Err — the bridge must emit ToolFailed to /events
+        // FailingTool always returns Err: the bridge must emit ToolFailed to /events
         // and must NOT stop execution (tool failure is an audit event, not a hard stop).
         let mut registry = ToolRegistry::new();
         registry.register(Box::new(FailingTool));
@@ -2504,7 +2503,7 @@ mod tests {
             events.iter().any(|v| v["event"] == "ToolFailed"),
             "ToolFailed event must appear in /events after a tool execution error\ngot: {events_body}"
         );
-        // Execution must NOT have stopped — ToolFailed is audit-only.
+        // Execution must NOT have stopped: ToolFailed is audit-only.
         assert!(
             matches!(b.execution_state(), ExecutionState::Running),
             "execution must remain running after a tool failure"
@@ -2525,7 +2524,7 @@ mod tests {
             .any(|v| v["event"] == "ExecutionStopped");
         assert!(
             !has_stopped,
-            "bridge must not emit ExecutionStopped — that is the CLI's job"
+            "bridge must not emit ExecutionStopped, that is the CLI's job"
         );
     }
 
@@ -2546,9 +2545,9 @@ mod tests {
         assert_eq!(json_val(&get(&b, "/health").1)["reason"], "ToolDenied");
     }
 
-    // ── Day 7 — Security ──────────────────────────────────────────────────────
+    // ── Day 7: Security ──────────────────────────────────────────────────────
 
-    /// On Unix: the bridge uses a socket file — no port, no conflicts.
+    /// On Unix: the bridge uses a socket file: no port, no conflicts.
     /// On Windows: the bridge binds to loopback and the port is reachable.
     #[test]
     fn bridge_has_valid_and_reachable_address() {
@@ -2676,7 +2675,7 @@ mod tests {
         );
     }
 
-    // ── handle_stop — RuleDenied event emission ───────────────────────────────
+    // ── handle_stop: RuleDenied event emission ───────────────────────────────
 
     /// POST /stop with RuleDenied + tool + rule_name emits a RuleDenied event.
     ///
@@ -2714,7 +2713,7 @@ mod tests {
     /// POST /stop with RuleDenied but no tool or rule_name does not emit an event.
     ///
     /// The bridge cannot construct a meaningful RuleDenied event without both
-    /// fields — omitting the event is safer than emitting one with empty fields.
+    /// fields: omitting the event is safer than emitting one with empty fields.
     #[test]
     fn handle_stop_rule_denied_without_metadata_emits_no_rule_denied_event() {
         let b = started(1000);

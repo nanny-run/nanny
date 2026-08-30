@@ -1,7 +1,7 @@
 version: 2
 updates:
   # The real, shipped product. Security-update PRs for these are the ones
-  # dependabot-auto-merge.yml is willing to auto-merge — see that file for
+  # dependabot-auto-merge.yml is willing to auto-merge: see that file for
   # why this is currently gated off pending branch protection on main.
   - package-ecosystem: cargo
     directory: /
@@ -17,7 +17,7 @@ updates:
     open-pull-requests-limit: 10
     labels: ["dependencies", "python", "sdk"]
 
-  # Demo apps, not installed by any real user. Grouped and capped lower —
+  # Demo apps, not installed by any real user. Grouped and capped lower,
   # these matter for security-audit.yml's non-blocking report, not for
   # release gating, so they don't need the same update cadence as shipped
   # code and shouldn't compete with it for review attention.

@@ -56,7 +56,7 @@ impl RuleDecl {
 /// ordering and correlation.
 ///
 /// The log is append-only. Events are never modified or deleted.
-/// If `ExecutionStopped` is missing from a log, the process crashed —
+/// If `ExecutionStopped` is missing from a log, the process crashed,
 /// that absence is itself an auditable fact.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event")]
@@ -90,8 +90,8 @@ pub enum ExecutionEvent {
         config_hash: String,
         /// This runtime's own version (`CARGO_PKG_VERSION`), e.g. `"0.6.0"`.
         ///
-        /// Gap G5: before this, nothing in the event log carried the runtime's
-        /// own version — only the rule pack and the harness had one. Without
+        /// Before this, nothing in the event log carried the runtime's
+        /// own version: only the rule pack and the harness had one. Without
         /// it, "which of my machines are still on an old runtime" is
         /// unanswerable the day after publishing a fix, since every run looks
         /// the same regardless of which binary produced it.
@@ -117,7 +117,7 @@ pub enum ExecutionEvent {
 
     /// Emitted when a tool call is blocked by the allowlist ([tools] allowed).
     ///
-    /// The tool was not in the permitted set — execution stops immediately.
+    /// The tool was not in the permitted set: execution stops immediately.
     /// Distinct from `RuleDenied`: this fires from `ToolPermissionPolicy`,
     /// before any rule evaluation.
     ToolDenied { ts: u64, tool: String },
@@ -145,7 +145,7 @@ pub enum ExecutionEvent {
 
     /// Emitted when a permitted tool fails during execution.
     ///
-    /// Distinct from a policy denial — the tool was allowed but encountered
+    /// Distinct from a policy denial: the tool was allowed but encountered
     /// an error (network failure, bad args, timeout).
     /// No cost is charged on tool failure.
     ToolFailed {
@@ -154,22 +154,22 @@ pub enum ExecutionEvent {
         error: String,
     },
 
-    /// Emitted when LLM token usage is reported to the bridge — via
+    /// Emitted when LLM token usage is reported to the bridge: via
     /// `nanny::report_usage` (Rust) or `nanny.instrument()` (Python).
     ///
     /// `input`/`output` are the measured token counts debited from the active
-    /// budget — enforcement always sums these two, regardless of what
+    /// budget: enforcement always sums these two, regardless of what
     /// `cache_read`/`cache_write` say, so a provider that doesn't report
     /// cache usage behaves exactly as before. `model`/`provider` are optional
     /// attribution labels: identifiers only, never prompt or response
-    /// content, and never pricing — cost is a hosted-layer concern, never the
+    /// content, and never pricing: cost is a hosted-layer concern, never the
     /// engine's.
     ///
     /// `cache_read`/`cache_write` are an optional finer split of `input`
-    /// (never additional tokens beyond it — `input` is always the true
+    /// (never additional tokens beyond it: `input` is always the true
     /// total, cache_read/cache_write always a genuine subset of it), present
     /// only for providers that report prompt-caching usage at all (OpenAI,
-    /// Anthropic, DeepSeek, Gemini — see `nanny_sdk.instrument`'s
+    /// Anthropic, DeepSeek, Gemini: see `nanny_sdk.instrument`'s
     /// per-provider extraction), absent (not zero) for providers that don't.
     /// This is a promise about Nanny's own wire format, not a fact about
     /// every provider's raw API: some providers (DeepSeek, OpenAI) report a
@@ -197,12 +197,12 @@ pub enum ExecutionEvent {
         cache_write: Option<u64>,
     },
 
-    /// Emitted once when the agent declares the agentic harness that ran it —
+    /// Emitted once when the agent declares the agentic harness that ran it,
     /// via `nanny::set_harness` (Rust) or the SDK.
     ///
     /// `name` is the harness identifier (e.g. `"opencode"`, `"langgraph"`);
     /// `version` is optional. This is our equivalent of OpenRouter's "app"
-    /// column — an attribution label only, never content and never pricing.
+    /// column: an attribution label only, never content and never pricing.
     /// Distinct from `AgentScopeEntered`, which names a `@nanny::agent`
     /// scope, not the harness.
     HarnessIdentified {
@@ -236,14 +236,14 @@ pub enum ExecutionEvent {
 
     /// Emitted once when a `--serve` governance server starts.
     ///
-    /// Gap G6: the cloud currently derives a governor handle by HMAC of the
+    /// the cloud currently derives a governor handle by HMAC of the
     /// server secret. That groups a governor's runs correctly, but gives no
-    /// name, address or version, and rotates whenever the secret does — every
+    /// name, address or version, and rotates whenever the secret does: every
     /// process restart, since the secret is a fresh value each time. This is
     /// the stable identity to show instead, parallel to `AppIdentified`:
     /// attribution only, never affects enforcement or a stop.
     ///
-    /// Not emitted by a plain (non-`--serve`) `nanny run` — there is no
+    /// Not emitted by a plain (non-`--serve`) `nanny run`: there is no
     /// governor to identify; that run's `governorId` stays absent, as today.
     GovernorIdentified {
         ts: u64,
@@ -278,7 +278,7 @@ pub enum ExecutionEvent {
 
     /// Emitted when the agent exits a named scope via `agent_exit`.
     ///
-    /// Paired with `AgentScopeEntered` — together they bracket the governed scope.
+    /// Paired with `AgentScopeEntered`: together they bracket the governed scope.
     AgentScopeExited { ts: u64, name: String },
 
     /// Emitted as the final event when execution stops for any reason.

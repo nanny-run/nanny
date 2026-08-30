@@ -1,6 +1,6 @@
 [package]
 name        = "nanny-core"
-description = "Core traits and types for the nanny execution boundary"
+description = "Core traits and types for nanny, the authorization and audit layer for AI agents"
 version.workspace    = true
 edition.workspace    = true
 license.workspace    = true

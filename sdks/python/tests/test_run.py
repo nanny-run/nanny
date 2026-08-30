@@ -1,4 +1,4 @@
-"""nanny_sdk.run_scope — scoping a governed run to a thread or task."""
+"""nanny_sdk.run_scope, scoping a governed run to a thread or task."""
 
 from __future__ import annotations
 
@@ -66,12 +66,12 @@ def test_run_scope_restores_the_previous_state_on_exit(monkeypatch: pytest.Monke
     assert client._run_id() == "env-run"
     with nanny_sdk.run_scope("scoped-run"):
         assert client._run_id() == "scoped-run"
-    # Falls back to the env var again once the scope exits — never leaks.
+    # Falls back to the env var again once the scope exits: never leaks.
     assert client._run_id() == "env-run"
 
 
 def test_run_scope_wins_over_the_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A scope takes priority even if NANNY_RUN_ID is also set — the scoped,
+    """A scope takes priority even if NANNY_RUN_ID is also set, the scoped,
     per-thread id is always the more specific, more recent intent."""
     monkeypatch.setenv("NANNY_RUN_ID", "env-run")
     with nanny_sdk.run_scope("scoped-run"):

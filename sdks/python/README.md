@@ -8,7 +8,7 @@
 
 # nanny-sdk
 
-Python SDK for [Nanny](https://github.com/nanny-run/nanny): the enforcement primitive for autonomous AI agents.
+Python SDK for [Nanny](https://github.com/nanny-run/nanny): the authorization and audit layer for AI agents that take real-world actions.
 
 `@tool`, `@rule`, and `@agent` decorators that enforce tool allowlists, per-tool call caps, and custom rules per function call. Works with LangChain, CrewAI, or any Python agent framework.
 

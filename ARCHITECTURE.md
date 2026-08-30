@@ -1,6 +1,6 @@
 # Architecture
 
-This document explains how Nanny enforces its guarantees and how to design agents that work correctly with it. Read this before building — the enforcement model has specific properties that affect how you should structure your code.
+This document explains how Nanny enforces its guarantees and how to design agents that work correctly with it. Read this before building, the enforcement model has specific properties that affect how you should structure your code.
 
 ---
 
@@ -10,7 +10,7 @@ When you run `nanny run`, Nanny becomes the **parent process** of your agent. It
 
 This means:
 - The agent cannot catch, delay, or prevent a stop
-- A limit breach kills the process — no exceptions, no cleanup hooks
+- A limit breach kills the process, no exceptions, no cleanup hooks
 - The enforcement is structural, not advisory
 
 The child process communicates with the parent through an enforcement bridge. Every tool call the agent makes passes through this bridge before anything executes. The bridge decides whether to allow it, charge tokens, and record it. If a limit is crossed, the parent kills the child immediately.
@@ -34,9 +34,9 @@ The child process communicates with the parent through an enforcement bridge. Ev
 
 The enforcement bridge runs in two configurations depending on how agents are deployed.
 
-**Local bridge (default — `nanny run`):**
+**Local bridge (default, `nanny run`):**
 
-The bridge runs as a thread inside the `nanny` process. It communicates with the agent through a Unix domain socket on macOS and Linux, or a TCP loopback port on Windows. Both are OS-enforced — no process outside the same user session can connect. The bridge starts when `nanny run` spawns the child process and exits when the child exits.
+The bridge runs as a thread inside the `nanny` process. It communicates with the agent through a Unix domain socket on macOS and Linux, or a TCP loopback port on Windows. Both are OS-enforced, no process outside the same user session can connect. The bridge starts when `nanny run` spawns the child process and exits when the child exits.
 
 **Governance server (`nanny run --serve`):**
 
@@ -49,7 +49,7 @@ The governance server is the right choice when:
 
 The local bridge is the right choice for everything else. It has no setup and no cert management.
 
-**The protocol is the same regardless of mode.** The SDK client (Rust or Python) checks for `NANNY_BRIDGE_SOCKET`, then `NANNY_BRIDGE_PORT`, then `NANNY_BRIDGE_ADDR`. Whichever is set, the same HTTP-over-transport protocol runs on top. Changing from local to network enforcement is a configuration change — no code changes needed.
+**The protocol is the same regardless of mode.** The SDK client (Rust or Python) checks for `NANNY_BRIDGE_SOCKET`, then `NANNY_BRIDGE_PORT`, then `NANNY_BRIDGE_ADDR`. Whichever is set, the same HTTP-over-transport protocol runs on top. Changing from local to network enforcement is a configuration change, no code changes needed.
 
 ```
 Local mode:
@@ -69,9 +69,9 @@ Every execution is governed by three independent limits. Any one of them stops t
 
 | Limit | What it counts | Requires instrumentation |
 |-------|----------------|--------------------------|
-| `timeout` | Wall-clock time in ms | No — works for any process |
-| `steps` | Tool calls made | Yes — SDK |
-| `tokens` | Tokens spent | Yes — SDK |
+| `timeout` | Wall-clock time in ms | No, works for any process |
+| `steps` | Tool calls made | Yes, SDK |
+| `tokens` | Tokens spent | Yes, SDK |
 
 Timeout enforcement is free. Step and token enforcement require your agent to declare its tools using the SDK so the bridge knows when a tool call happens and what to charge.
 
@@ -88,7 +88,7 @@ A **tool** is a function your agent calls to do work. When you declare a functio
 - Tokens are charged and the step count increments on each successful call
 - Any rule denial stops execution before the function body runs
 
-Tools are declared in `nanny.toml` under `[tools] allowed`. The SDK decorator/macro marks the corresponding function in your code. Both are required — the config says what is permitted, the code says when it is used.
+Tools are declared in `nanny.toml` under `[tools] allowed`. The SDK decorator/macro marks the corresponding function in your code. Both are required, the config says what is permitted, the code says when it is used.
 
 ### Rule
 
@@ -102,7 +102,7 @@ Rules fire on every tool call, before the call executes. They receive a read-onl
 - Labels for every allowed tool, not only the pending one
 - Elapsed time, tokens measured, and wall-clock at evaluation
 
-Rules are stateless by design. All state they need comes from the execution snapshot. They cannot modify execution state — they can only allow or deny.
+Rules are stateless by design. All state they need comes from the execution snapshot. They cannot modify execution state, they can only allow or deny.
 
 A denial exits the process immediately. The denied tool never runs.
 
@@ -136,7 +136,7 @@ interleaved runs, and those two fields are what make it readable.
 
 This is the most important architectural decision you will make.
 
-**Do not rely on an LLM to invoke tools.** Nanny's enforcement is model-agnostic — it does not depend on the model's ability to use tool-calling APIs. An LLM that can't invoke tools doesn't bypass governance; it just produces output that your code ignores. But if your agent architecture depends on the LLM issuing tool calls for governance to work, a weaker model breaks your enforcement entirely.
+**Do not rely on an LLM to invoke tools.** Nanny's enforcement is model-agnostic, it does not depend on the model's ability to use tool-calling APIs. An LLM that can't invoke tools doesn't bypass governance; it just produces output that your code ignores. But if your agent architecture depends on the LLM issuing tool calls for governance to work, a weaker model breaks your enforcement entirely.
 
 The correct pattern:
 
@@ -145,14 +145,14 @@ LLM:       planning · reasoning · summarizing
 Your code: deciding when to call tools · calling them deterministically
 ```
 
-Concretely: your code drives the tool calls. The LLM tells you *what* to do (which URLs to fetch, which files to read); your code actually does it. Governance fires on every call your code makes — not on calls the LLM invents.
+Concretely: your code drives the tool calls. The LLM tells you *what* to do (which URLs to fetch, which files to read); your code actually does it. Governance fires on every call your code makes, not on calls the LLM invents.
 
 This makes your agent:
-- **Model-agnostic** — enforcement works regardless of which model you use
-- **Predictable** — the call sequence is determined by your code, not the model
-- **Testable** — you can verify governance fires without needing a live model
+- **Model-agnostic**: enforcement works regardless of which model you use
+- **Predictable**: the call sequence is determined by your code, not the model
+- **Testable**: you can verify governance fires without needing a live model
 
-The alternative — letting the LLM dispatch tool calls directly through a tool-calling API — works when the model reliably uses the API. It breaks silently when it doesn't. Under Nanny, that breakage means the model hallucinates results instead of being stopped, which is the opposite of what governance is for.
+The alternative, letting the LLM dispatch tool calls directly through a tool-calling API, works when the model reliably uses the API. It breaks silently when it doesn't. Under Nanny, that breakage means the model hallucinates results instead of being stopped, which is the opposite of what governance is for.
 
 ---
 
@@ -166,15 +166,15 @@ Every execution ends with an `ExecutionStopped` event carrying a `reason` field.
 | `ToolDenied` | A tool call was blocked: the tool is not on the allowlist. Checked before any rule runs. |
 | `RuleDenied` | A custom rule returned a denial. The tool never ran. |
 | `ManualStop` | Execution was stopped programmatically via the SDK. |
-| `ProcessCrashed` | The process exited unexpectedly with a non-zero code. Nanny did not stop it — something in the agent's own code did (panic, unhandled error, OOM, or the process could not be started). |
+| `ProcessCrashed` | The process exited unexpectedly with a non-zero code. Nanny did not stop it, something in the agent's own code did (panic, unhandled error, OOM, or the process could not be started). |
 
-Note: `ToolFailed` is an **event** emitted when a permitted tool fails at runtime (network error, bad arguments). It is not a stop reason — execution continues and the agent receives an error response. Handle tool errors in your agent code rather than letting them propagate as crashes.
+Note: `ToolFailed` is an **event** emitted when a permitted tool fails at runtime (network error, bad arguments). It is not a stop reason, execution continues and the agent receives an error response. Handle tool errors in your agent code rather than letting them propagate as crashes.
 
 One stop reason requires attention from the developer rather than the operator:
 
-- **`ProcessCrashed`** — this is not a governance event. Inspect your agent's stderr for the actual error. If the process could not be started at all, verify `[start].cmd` in `nanny.toml` is correct and the binary exists.
+- **`ProcessCrashed`**: this is not a governance event. Inspect your agent's stderr for the actual error. If the process could not be started at all, verify `[start].cmd` in `nanny.toml` is correct and the binary exists.
 
-All other reasons are governance events — Nanny stopped the agent deliberately.
+All other reasons are governance events: Nanny stopped the agent deliberately.
 
 ---
 
@@ -183,13 +183,13 @@ All other reasons are governance events — Nanny stopped the agent deliberately
 Rules are evaluated on every tool call. The sequence for any tool call is:
 
 1. All registered rules are evaluated against the current execution state
-2. If any rule returns `false`, the process exits immediately — the tool never runs, no tokens are charged, no step is counted
+2. If any rule returns `false`, the process exits immediately, the tool never runs, no tokens are charged, no step is counted
 3. If all rules pass, the bridge evaluates the allowlist and limits
 4. If the bridge allows the call, it executes, tokens are charged, and the step count increments
 
-Rules fire at step 1. Everything else is downstream of that. This is why a rule denial produces `steps: 0` in the event log if it fires on the first tool call — the bridge never recorded a step because the call never reached it.
+Rules fire at step 1. Everything else is downstream of that. This is why a rule denial produces `steps: 0` in the event log if it fires on the first tool call, the bridge never recorded a step because the call never reached it.
 
-Rules are evaluated in registration order. Write rules that are fast and pure — they run on every call.
+Rules are evaluated in registration order. Write rules that are fast and pure, they run on every call.
 
 ---
 
@@ -197,11 +197,11 @@ Rules are evaluated in registration order. Write rules that are fast and pure �
 
 A few properties to keep in mind:
 
-**Rules receive the full call history.** Use this for loop detection, repetition limits, and sequencing constraints. The history is a list of tool names in call order — not deduplicated.
+**Rules receive the full call history.** Use this for loop detection, repetition limits, and sequencing constraints. The history is a list of tool names in call order, not deduplicated.
 
 **Rules receive the current call's arguments.** Use this for content-based enforcement: blocking specific file paths, URL patterns, or argument values before the call executes.
 
-**Rules are stateless.** If you need to count calls to a specific tool, use `tool_call_counts` from the execution snapshot — the bridge maintains this for you. Do not use mutable module-level state in rules.
+**Rules are stateless.** If you need to count calls to a specific tool, use `tool_call_counts` from the execution snapshot, the bridge maintains this for you. Do not use mutable module-level state in rules.
 
 **Rules should be conservative.** A rule that incorrectly denies a legitimate call stops the agent. A rule that incorrectly allows a bad call lets it through. When in doubt, deny.
 
@@ -240,15 +240,15 @@ Keep those two jobs separate when designing a pipeline.
 
 Before shipping, verify that each of your governance constraints actually fires. The recommended approach is to construct minimal inputs that exercise each constraint:
 
-- **Allowlist** — call a tool that is not in `[tools] allowed`. It should produce `ToolDenied`.
-- **Rules** — construct input that your rule is designed to block. It should produce `RuleDenied`.
-- **Per-tool cap** — call one tool past its `max_calls`. It should produce `RuleDenied` with `rule_name = "<tool>.max_calls"`.
-- **Declared authority** — read `ExecutionStarted` and confirm `allowed_tools`, `tool_labels`, and `config_hash` match the config you shipped.
-- **Rule packs** — remove an installed pack from disk while leaving it in `[rules] extends`. The run should refuse to start.
+- **Allowlist**: call a tool that is not in `[tools] allowed`. It should produce `ToolDenied`.
+- **Rules**: construct input that your rule is designed to block. It should produce `RuleDenied`.
+- **Per-tool cap**: call one tool past its `max_calls`. It should produce `RuleDenied` with `rule_name = "<tool>.max_calls"`.
+- **Declared authority**: read `ExecutionStarted` and confirm `allowed_tools`, `tool_labels`, and `config_hash` match the config you shipped.
+- **Rule packs**: remove an installed pack from disk while leaving it in `[rules] extends`. The run should refuse to start.
 
-Use the `ExecutionStopped` event in the NDJSON log to verify the reason. Do not rely on stderr output alone — the event log is the authoritative record.
+Use the `ExecutionStopped` event in the NDJSON log to verify the reason. Do not rely on stderr output alone, the event log is the authoritative record.
 
-Keep these test inputs alongside your agent code. They are as important as unit tests — they verify that your governance constraints work as designed, not just that your agent logic works.
+Keep these test inputs alongside your agent code. They are as important as unit tests, they verify that your governance constraints work as designed, not just that your agent logic works.
 
 ---
 

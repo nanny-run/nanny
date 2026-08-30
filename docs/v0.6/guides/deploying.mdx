@@ -31,7 +31,7 @@ NANNY_API_KEY=nny_...
 
 Create it in the dashboard under **Settings → API Keys**, then set it however your platform sets secrets: a Fly secret, a Kubernetes `Secret`, a Coolify environment variable. That single variable decides whether runs sync; see [Connect to Nanny Cloud](/v0.6/guides/managed-mode).
 
-The key's prefix (`nny_live_` or `nny_sdbx_`) also decides whether this deployment writes real evidence or throwaway sandbox data — see [Live and sandbox](/v0.6/guides/environments) before deploying against a live key for the first time.
+The key's prefix (`nny_live_` or `nny_sdbx_`) also decides whether this deployment writes real evidence or throwaway sandbox data, see [Live and sandbox](/v0.6/guides/environments) before deploying against a live key for the first time.
 
 Leave it unset and everything still works. Enforcement is local and never depends on the cloud.
 
@@ -77,7 +77,7 @@ This is working as intended, since the allowlist is doing its job, but it is a s
 
 ```
 nanny: mode managed, syncing to https://api.nanny.run (app: your-app)
-nanny: governance server started  (plain HTTP — loopback)
+nanny: governance server started  (plain HTTP, loopback)
   address      : 127.0.0.1:62669
 nanny: running [start] under this governor
 ```

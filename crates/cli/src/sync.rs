@@ -1,4 +1,4 @@
-//! Cloud sync — forwards a copy of the append-only NDJSON event log to the cloud.
+//! Cloud sync: forwards a copy of the append-only NDJSON event log to the cloud.
 //!
 //! Enforcement stays entirely local (the bridge is untouched); this is a
 //! best-effort, fire-and-forget side channel.
@@ -91,7 +91,7 @@ fn no_sync_from_env() -> bool {
 }
 
 /// Which side of the cloud's `nny_live_`/`nny_sdbx_` split a key belongs to,
-/// derived from its prefix and nothing else — never configured, never asked
+/// derived from its prefix and nothing else: never configured, never asked
 /// for (`--env` stays absent from `--help`; there is one host). An
 /// unrecognized prefix (a key minted before the split existed, or anything
 /// malformed) defaults to Live, matching the cloud's own default.
@@ -117,7 +117,7 @@ impl Environment {
         }
     }
 
-    /// The one this run is *not* — the side C2's startup notice checks.
+    /// The one this run is *not*: the side C2's startup notice checks.
     fn other(self) -> Self {
         match self {
             Environment::Live => Environment::Sandbox,
@@ -333,7 +333,7 @@ fn dropped_notice(dropped: Dropped, log_path: Option<&Path>) -> String {
 /// Partitioned by environment (`.nanny/spool/live/`, `.nanny/spool/sandbox/`),
 /// derived from the key a `Spool` is constructed with. Before this split, the
 /// spool stored `{session}\n{body}` with no endpoint or key recorded, and
-/// `drain` posted with whatever key the *next* process happened to hold — a
+/// `drain` posted with whatever key the *next* process happened to hold: a
 /// batch held under a sandbox key would flush into live under a live key, and
 /// report success. Partitioning makes that unreachable rather than guarded: a
 /// `Spool` constructed with a live key only ever sees the live subdirectory.
@@ -352,14 +352,14 @@ impl Spool {
     /// The outbox for an app, under its own `.nanny/` directory. Alongside the
     /// logs rather than in `~/.nanny`, so it travels with the checkout that
     /// produced it and is removed with it. `api_key` decides which
-    /// environment's subdirectory this instance reads and writes — see the
+    /// environment's subdirectory this instance reads and writes: see the
     /// struct docs.
     pub fn new(base_dir: &Path, api_key: &str) -> Self {
         Self::for_environment(base_dir, Environment::from_api_key(api_key))
     }
 
     /// Same as `new`, given an already-resolved `Environment` rather than a
-    /// key to derive one from — how C2's startup notice inspects the sibling
+    /// key to derive one from: how C2's startup notice inspects the sibling
     /// side without a key for it.
     fn for_environment(base_dir: &Path, environment: Environment) -> Self {
         Self {
@@ -390,7 +390,7 @@ impl Spool {
         self.entries().len()
     }
 
-    /// C2's startup notice, as text — `None` when there is nothing to say. A
+    /// C2's startup notice, as text: `None` when there is nothing to say. A
     /// pure function so the message itself is directly assertable, with the
     /// `eprintln!` side effect kept to the one-line caller below.
     fn other_environment_notice(base_dir: &Path, environment: Environment) -> Option<String> {
@@ -405,7 +405,7 @@ impl Spool {
         })
     }
 
-    /// If the *other* environment's outbox has batches held, say so — before
+    /// If the *other* environment's outbox has batches held, say so: before
     /// this run's own forwarding starts, so switching from a sandbox key back
     /// to live (or vice versa) doesn't silently leave a pile of events
     /// unaccounted for. Never touches what it finds; drain only ever runs
@@ -553,7 +553,7 @@ pub struct CloudSync {
 
 impl CloudSync {
     /// Start the background forwarder for a resolved target. `None` only if the
-    /// HTTP client fails to build — callers treat `None` as "do nothing".
+    /// HTTP client fails to build: callers treat `None` as "do nothing".
     ///
     /// `base_dir` is the app directory, used for the durable outbox. Anything
     /// a previous run could not deliver is sent first, before this run's own
@@ -602,7 +602,7 @@ impl CloudSync {
 }
 
 /// Forwards a governance server's per-run events to the cloud, one ingest batch
-/// per run. Each batch's `X-Nanny-Session` is `{server_secret}:{run_id}` — a
+/// per run. Each batch's `X-Nanny-Session` is `{server_secret}:{run_id}`: a
 /// per-run value that folds in the server's secret token, so the cloud groups
 /// events per run with an unguessable, cross-org-collision-proof session (the API
 /// key is still the real auth). Fire and forget, like `CloudSync`.
@@ -740,6 +740,14 @@ fn worker(
 
 #[cfg(test)]
 mod tests {
+    /// How long a test waits for its mock ingest server to see a request.
+    ///
+    /// Generous on purpose, for the reason the bridge's own client timeout is:
+    /// the suite runs on every core, so a forwarder thread competes with the
+    /// rest of the workspace. Five seconds passed alone and intermittently
+    /// failed together, which reads as flakiness and is really a deadline.
+    const INGEST_WAIT: Duration = Duration::from_secs(30);
+
     use super::*;
     use crate::cloud::CloudEnv;
     use std::io::{Read, Write};
@@ -775,7 +783,7 @@ mod tests {
         apply(NO_SYNC_ENV, prev_no_sync.as_deref());
     }
 
-    // ── resolve_sync (the gate) — no network ──────────────────────────────
+    // ── resolve_sync (the gate): no network ──────────────────────────────
 
     #[test]
     fn syncs_when_the_api_key_is_set() {
@@ -855,10 +863,10 @@ mod tests {
             endpoint: CloudEnv::Prod.ingest_url(),
             api_key: "nny_k".into(),
         };
-        let line = sync_status_line(Ok(&t), Some("gotm-nanny"));
+        let line = sync_status_line(Ok(&t), Some("acme-agent"));
         assert!(line.contains("managed"), "{line}");
         assert!(line.contains("https://api.nanny.run"), "{line}");
-        assert!(line.contains("gotm-nanny"), "{line}");
+        assert!(line.contains("acme-agent"), "{line}");
         assert!(
             !line.contains("/v1/ingest"),
             "show the host, not the route: {line}"
@@ -882,7 +890,7 @@ mod tests {
         assert!(sync_status_line(Err(NoSyncReason::Flag), None).contains("--no-sync"));
     }
 
-    // ── CloudSync (the sender) — mock ingest, injected endpoint ───────────
+    // ── CloudSync (the sender): mock ingest, injected endpoint ───────────
 
     /// One-shot HTTP server: captures the first request and returns 200.
     fn mock_ingest_server() -> (u16, mpsc::Receiver<String>) {
@@ -979,7 +987,7 @@ mod tests {
         sender.flush_and_join();
 
         let req = rx
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(INGEST_WAIT)
             .expect("server received a request");
         let lower = req.to_ascii_lowercase();
         assert!(
@@ -1083,7 +1091,7 @@ mod tests {
 
         assert_eq!(delivered, 1);
         let req = rx_srv
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(INGEST_WAIT)
             .expect("server received it");
         assert!(
             req.to_ascii_lowercase()
@@ -1158,7 +1166,7 @@ mod tests {
         );
     }
 
-    // ── Partitioned by environment (Stage 37, C1) ──────────────────────────────
+    // ── Partitioned by environment ──────────────────────────────
 
     #[test]
     fn a_dropped_batch_names_the_log_file_when_one_exists() {
@@ -1240,7 +1248,7 @@ mod tests {
         );
         assert_eq!(delivered, 1);
         let req = rx_srv
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(INGEST_WAIT)
             .expect("the live batch was sent");
         assert!(req.contains("live-run"), "wrong batch sent:\n{req}");
 
@@ -1259,7 +1267,7 @@ mod tests {
     fn an_unrecognized_key_prefix_defaults_to_live() {
         // A key minted before the split existed (or anything malformed) is
         // still a real key, and getting silently routed into a "sandbox" no
-        // one is watching would be a worse failure than defaulting live —
+        // one is watching would be a worse failure than defaulting live,
         // matching the cloud's own default.
         let dir = temp_app_dir();
         Spool::new(&dir, "nny_oldformat").store("s", r#"{"event":"X"}"#);
@@ -1267,7 +1275,7 @@ mod tests {
         assert_eq!(spooled_files(&dir, "nny_live_anything").len(), 1);
     }
 
-    // ── A mismatched spool is skipped, not sent (Stage 37, C2) ─────────────────
+    // ── A mismatched spool is skipped, not sent ─────────────────
 
     #[test]
     fn the_notice_names_the_count_and_which_side_is_which() {
@@ -1301,7 +1309,7 @@ mod tests {
             Spool::for_environment(&dir, Environment::Sandbox).count(),
             2
         );
-        // The check itself must not consume anything — a count, not a drain.
+        // The check itself must not consume anything: a count, not a drain.
         Spool::warn_about_the_other_environment(&dir, Environment::Live);
         assert_eq!(
             spooled_files(&dir, "nny_sdbx_x").len(),
@@ -1332,7 +1340,7 @@ mod tests {
         sender.flush_and_join();
 
         let req = rx_srv
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(INGEST_WAIT)
             .expect("the live run's own batch was sent");
         assert!(
             !req.contains("Sandbox"),
@@ -1341,7 +1349,7 @@ mod tests {
         assert_eq!(
             spooled_files(&dir, "nny_sdbx_x").len(),
             1,
-            "switching back to sandbox later must recover this batch — it must survive, not be deleted"
+            "switching back to sandbox later must recover this batch, it must survive, not be deleted"
         );
     }
 
@@ -1402,7 +1410,7 @@ mod tests {
         sender.flush_and_join();
 
         let req = rx_srv
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(INGEST_WAIT)
             .expect("backfill was sent");
         assert!(
             req.contains("FromEarlierRun"),
@@ -1432,7 +1440,7 @@ mod tests {
         drop(tx);
 
         let req = rx_srv
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(INGEST_WAIT)
             .expect("server received a request");
         let lower = req.to_ascii_lowercase();
         assert!(lower.contains("post /v1/ingest"), "wrong path:\n{req}");

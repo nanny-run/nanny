@@ -1,17 +1,17 @@
-# AGENTS.md — Nanny repository
+# AGENTS.md: Nanny repository
 
 ## Quick start
 
 **This is a Rust + Python monorepo with two independent build systems.**
 
-- **Rust workspace**: `crates/` — 6 crates, published to crates.io
-- **Python SDK**: `sdks/python/` — published as `nanny-sdk` on PyPI
+- **Rust workspace**: `crates/`, 6 crates, published to crates.io
+- **Python SDK**: `sdks/python/`, published as `nanny-sdk` on PyPI
 
 They share the same repo and version number but have no toolchain overlap.
 
 ## Architecture
 
-**Nanny is an enforcement primitive for autonomous AI agents.** It stops agents that exceed limits (steps, tokens, timeout) or violate rules.
+**Nanny is the authorization and audit layer for AI agents that take real-world actions.** It refuses tool calls the operator has not authorized, and records every decision.
 
 **Key concept**: Nanny becomes the **parent process** of your agent via `nanny run`. All enforcement happens in the parent; the child cannot bypass it.
 
@@ -19,8 +19,8 @@ They share the same repo and version number but have no toolchain overlap.
 
 | Term | Description |
 |------|-------------|
-| **tool** | Function annotated with `#[nanny::tool]` / `@tool` — passes through bridge for enforcement |
-| **rule** | Function annotated with `#[nanny::rule]` / `@rule` — returns `false` to stop execution |
+| **tool** | Function annotated with `#[nanny::tool]` / `@tool`, passes through bridge for enforcement |
+| **rule** | Function annotated with `#[nanny::rule]` / `@rule`, returns `false` to stop execution |
 | **agent scope** | Named limits context activated by `#[nanny::agent]` / `@agent` |
 | **bridge** | Internal enforcement layer (Unix socket / TCP). **Never mention in user-facing docs.** |
 
@@ -28,9 +28,9 @@ They share the same repo and version number but have no toolchain overlap.
 
 Any one stops execution:
 
-- `timeout` — wall-clock ms (no instrumentation needed)
-- `steps` — tool calls (requires SDK)
-- `tokens` — token budget (requires SDK)
+- `timeout`: wall-clock ms (no instrumentation needed)
+- `steps`: tool calls (requires SDK)
+- `tokens`: token budget (requires SDK)
 
 ## Developer workflow
 
@@ -98,7 +98,7 @@ uv run pytest ../../packs/nanny-recommended/tests
 
 - **Rust**: `rustfmt`, no `unwrap()`/`expect()` outside tests, `thiserror` for errors, doc comments on public items
 - **Python**: `ruff` (line-length=100, target-version=py311), `mypy --strict`, `pytest` + `pytest-httpserver` for tests
-- **Versioning**: Docs folders are versioned at minor level only (`v0.4/`, `v1.0/`) — never patch; a patch release updates the current folder in place
+- **Versioning**: Docs folders are versioned at minor level only (`v0.4/`, `v1.0/`), never patch; a patch release updates the current folder in place
 
 ## Branching and releases
 
@@ -112,7 +112,7 @@ uv run pytest ../../packs/nanny-recommended/tests
 
 | Path | Purpose |
 |------|---------|
-| `crates/core` | Traits and types only — no implementations |
+| `crates/core` | Traits and types only, no implementations |
 | `crates/runtime` | Concrete impls: `ToolPermissionPolicy`, `RuleEvaluator`, built-in tools |
 | `crates/bridge` | Local HTTP enforcement server. Wire protocol: `crates/bridge/PROTOCOL.md` |
 | `crates/config` | Parses `nanny.toml` |
@@ -125,7 +125,7 @@ uv run pytest ../../packs/nanny-recommended/tests
 ## Testing
 
 - **Rust**: `cargo test --workspace` runs in parallel; use unique temp file names
-- **Python**: `uv run pytest` uses `mock_bridge` fixture — no real bridge required
+- **Python**: `uv run pytest` uses `mock_bridge` fixture, no real bridge required
 - **Packs**: `uv run pytest ../../packs/nanny-recommended/tests` from `sdks/python`
 
 ## Documentation surfaces
@@ -142,9 +142,9 @@ uv run pytest ../../packs/nanny-recommended/tests
 
 ## Critical gotchas
 
-1. **Direct-call pattern** — your code must drive tool calls; the LLM should reason, not dispatch tools
-2. **Passthrough mode** — decorators and macros are no-ops outside `nanny run`; zero overhead in dev and CI
-3. **Stop reasons** — four, and the set is closed: `ToolDenied`, `RuleDenied`, `AgentCompleted`, `ManualStop`. Only the first two are policy violations
-4. **Rules reference labels, not tool names** — a rule naming `send_outreach` governs one app; a rule reading `external_effect` governs every app whose operator labelled their tools
-5. **Token tracking** — Python: `nanny_sdk.instrument(client)` once at startup. Rust: `nanny::report_usage(...)` after each LLM call. Measured for attribution, never enforced
-6. **`--serve` is the launch mode** — one governor, many runs, one shared log. Every event carries its `run_id`
+1. **Direct-call pattern**, your code must drive tool calls; the LLM should reason, not dispatch tools
+2. **Passthrough mode**, decorators and macros are no-ops outside `nanny run`; zero overhead in dev and CI
+3. **Stop reasons**, four, and the set is closed: `ToolDenied`, `RuleDenied`, `AgentCompleted`, `ManualStop`. Only the first two are policy violations
+4. **Rules reference labels, not tool names**, a rule naming `send_outreach` governs one app; a rule reading `external_effect` governs every app whose operator labelled their tools
+5. **Token tracking**, Python: `nanny_sdk.instrument(client)` once at startup. Rust: `nanny::report_usage(...)` after each LLM call. Measured for attribution, never enforced
+6. **`--serve` is the launch mode**, one governor, many runs, one shared log. Every event carries its `run_id`

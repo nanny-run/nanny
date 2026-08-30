@@ -1,4 +1,4 @@
-"""Day 3 — @rule decorator tests."""
+"""Day 3, @rule decorator tests."""
 
 import pytest
 from pytest_httpserver import HTTPServer
@@ -16,7 +16,7 @@ def _allow() -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Allow path — rule passes, bridge proceeds
+# Allow path: rule passes, bridge proceeds
 # ---------------------------------------------------------------------------
 
 
@@ -37,7 +37,7 @@ def test_rule_allow_bridge_called(mock_bridge: HTTPServer) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Deny path — rule fires before bridge
+# Deny path: rule fires before bridge
 # ---------------------------------------------------------------------------
 
 
@@ -76,7 +76,7 @@ def test_rule_deny_tool_call_never_made(mock_bridge: HTTPServer) -> None:
     with pytest.raises(RuleDenied):
         my_func()
 
-    # No /tool/call handler registered — check_assertions() confirms it was
+    # No /tool/call handler registered: check_assertions() confirms it was
     # never expected (and therefore never reached).
     mock_bridge.check_assertions()
 
@@ -186,7 +186,7 @@ def test_rule_ctx_bridge_fields_populated_from_status(mock_bridge: HTTPServer) -
 def test_rule_ctx_status_failure_fails_closed(mock_bridge: HTTPServer) -> None:
     """If GET /status fails, the tool call is blocked and BridgeUnavailable is raised.
 
-    Silently continuing with zeroed counters would let the agent run ungoverned —
+    Silently continuing with zeroed counters would let the agent run ungoverned,
     a manifesto violation. The SDK must fail closed: bridge unreachable = stop.
     """
     # Override the default /status catch-all with a 500 response.
@@ -194,7 +194,7 @@ def test_rule_ctx_status_failure_fails_closed(mock_bridge: HTTPServer) -> None:
     mock_bridge.expect_oneshot_request("/status", method="GET").respond_with_data(
         "internal error", status=500, content_type="text/plain"
     )
-    # /tool/call should never be reached — no handler registered
+    # /tool/call should never be reached: no handler registered
 
     @rule("should_not_run")
     def should_not_run(ctx: PolicyContext) -> bool:  # pragma: no cover
@@ -290,19 +290,19 @@ def test_rules_evaluated_in_registration_order(mock_bridge: HTTPServer) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Passthrough — rules not evaluated
+# Passthrough: rules not evaluated
 # ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
-# /stop payload on rule denial — tool name and rule name must be sent
+# /stop payload on rule denial: tool name and rule name must be sent
 # ---------------------------------------------------------------------------
 
 
 def test_rule_deny_stop_payload_contains_tool_and_rule_name(mock_bridge: HTTPServer) -> None:
     """When a rule fires, /stop is called with tool and rule_name in the payload.
 
-    The bridge needs both fields to emit the RuleDenied NDJSON event — a bare
+    The bridge needs both fields to emit the RuleDenied NDJSON event, a bare
     {"reason":"RuleDenied"} payload leaves the bridge unable to populate the event.
     """
     mock_bridge.expect_oneshot_request(
@@ -378,7 +378,7 @@ def test_passthrough_rules_not_evaluated(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 # ---------------------------------------------------------------------------
-# Tool labels — rules that name no tool
+# Tool labels: rules that name no tool
 # ---------------------------------------------------------------------------
 
 

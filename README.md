@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <strong>Open-source enforcement primitive for autonomous systems.</strong><br/>
+  <strong>Open-source authorization and audit layer for AI agents that take real-world actions.</strong><br/>
   Bounded authority. Deterministic stops. Provable audit trail.
 </p>
 
@@ -44,14 +44,14 @@ Liability attaches to authority, not consumption. Nobody is accountable for a to
 
 Rules read **labels**, not tool names, so one rule governs any application whose operator has labelled their tools. `no_send_after_read` denies an `external_effect` call once a `reads_untrusted` call has happened in the same run: the shape of an indirect prompt injection, caught without Nanny ever reading the content.
 
-Think of it as a **deterministic enforcement layer** — auditable, and structurally impossible for any agent to bypass.
+Think of it as a **deterministic enforcement layer**, auditable, and structurally impossible for any agent to bypass.
 
 ```mermaid
 flowchart TD
     CMD(["nanny run"])
     CMD --> NANNY
 
-    subgraph NANNY["Nanny — parent process"]
+    subgraph NANNY["Nanny, parent process"]
         direction LR
 
         subgraph CHILD["Child process"]
@@ -79,7 +79,7 @@ flowchart TD
 | Layer                           | What it does                                                                                                                             |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | **Nanny CLI**                   | Tool permission and rule enforcement for any agent process in any language.                                                              |
-| **Rust SDK**                    | Per-function token metering, allowlist enforcement, and custom rules — in-process.                                                       |
+| **Rust SDK**                    | Per-function token metering, allowlist enforcement, and custom rules, in-process.                                                       |
 | **Python SDK**                  | Per-function governance for Python agents: tools, rules, and named phases.                                                               |
 | **Governance server**           | Cross-process and cross-machine enforcement via a long-lived server with mutual TLS.                                                     |
 | **Nanny Cloud**                 | Durable signed audit trails, cost attribution across your fleet, and team access control.                                                |
@@ -109,7 +109,7 @@ Your source is never edited. `@rule` stays for your own private rules.
 
 ## Install
 
-The Nanny CLI is a **system tool** — install it once globally and use `nanny run` from any project that has a `nanny.toml`.
+The Nanny CLI is a **system tool**, install it once globally and use `nanny run` from any project that has a `nanny.toml`.
 
 **macOS**
 
@@ -140,7 +140,7 @@ Or download a pre-built binary directly from [GitHub Releases](https://github.co
 
 ## SDK installation
 
-SDKs are **project dependencies** — add them per project, not globally.
+SDKs are **project dependencies**, add them per project, not globally.
 
 **Rust**
 
@@ -191,7 +191,7 @@ extends = ["nanny:recommended@1.0.0"]
 
 ---
 
-## Rust SDK — all three macros
+## Rust SDK: all three macros
 
 For Rust agents, annotate functions directly to get per-function token accounting,
 allowlist enforcement, and custom policy rules:
@@ -218,19 +218,19 @@ fn check_spiral(ctx: &PolicyContext) -> bool {
 /// Limits revert automatically on return, even if the function panics.
 #[nanny::agent("researcher")]
 async fn run_research(topic: &str) {
-    // ... agent loop — search_web governed by nanny ...
+    // ... agent loop, search_web governed by nanny ...
 }
 ```
 
-All macros are no-ops when running outside `nanny run` — no enforcement overhead.
+All macros are no-ops when running outside `nanny run`, no enforcement overhead.
 
 → Full Rust SDK guide at [docs.nanny.run/guides/rust-sdk](https://docs.nanny.run/guides/rust-sdk)
 
 ---
 
-## Python SDK — all three decorators
+## Python SDK: all three decorators
 
-For Python agents, the same model as the Rust SDK — as decorators:
+For Python agents, the same model as the Rust SDK, as decorators:
 
 ```python
 from nanny_sdk import tool, rule, agent
@@ -251,7 +251,7 @@ def run_research(topic: str) -> list[str]:
     return [search_web(topic)]
 ```
 
-Works with any framework — LangGraph, CrewAI, LangChain, plain Python. In Python-driven pipelines (LangGraph nodes, plain Python loops, CrewAI tasks), use `@nanny_tool` alone — your code calls the function directly and Nanny intercepts every call:
+Works with any framework, LangGraph, CrewAI, LangChain, plain Python. In Python-driven pipelines (LangGraph nodes, plain Python loops, CrewAI tasks), use `@nanny_tool` alone, your code calls the function directly and Nanny intercepts every call:
 
 ```python
 from nanny_sdk import tool as nanny_tool
@@ -268,24 +268,24 @@ When a framework uses its own decorator for tool registration (e.g. LangChain's 
 from langchain_core.tools import tool as lc_tool
 from nanny_sdk import tool as nanny_tool
 
-@lc_tool                   # outer — LangChain registers this for LLM dispatch
-@nanny_tool(tokens=5)      # inner — Nanny intercepts before the function body runs
+@lc_tool                   # outer: LangChain registers this for LLM dispatch
+@nanny_tool(tokens=5)      # inner: Nanny intercepts before the function body runs
 def read_file(path: str) -> str:
     with open(path) as f:
         return f.read()
 ```
 
-All decorators are no-ops when running outside `nanny run` — zero overhead in development and CI.
+All decorators are no-ops when running outside `nanny run`, zero overhead in development and CI.
 
 **LLM token tracking:** call `nanny_sdk.instrument(client)` once at startup to automatically report LLM token usage to Nanny's budget. Works with OpenAI, Groq, Together AI, Azure OpenAI, LiteLLM, Anthropic, Mistral, Google Gemini, and Cohere v2:
 
 ```python
 import nanny_sdk, openai
 client = openai.OpenAI()
-nanny_sdk.instrument(client)   # one line — done
+nanny_sdk.instrument(client)   # one line, done
 ```
 
-For Rust agents, report usage explicitly after each LLM call — Rust can't patch a client at runtime:
+For Rust agents, report usage explicitly after each LLM call, Rust can't patch a client at runtime:
 
 ```rust
 use nanny::{report_usage, Usage};
@@ -319,7 +319,7 @@ nanny run | tee nanny.log
 
 ## Documentation
 
-Full reference at **[docs.nanny.run](https://docs.nanny.run)** — quickstart, concepts, CLI reference, `nanny.toml` schema, event log, Rust SDK guide, and Python SDK guide.
+Full reference at **[docs.nanny.run](https://docs.nanny.run)**, quickstart, concepts, CLI reference, `nanny.toml` schema, event log, Rust SDK guide, and Python SDK guide.
 
 ---
 
@@ -331,4 +331,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-Apache-2.0 — see [LICENSE](LICENSE).
+Apache-2.0, see [LICENSE](LICENSE).

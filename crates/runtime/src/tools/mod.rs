@@ -1,4 +1,4 @@
-// nanny-runtime tools — Tool registry and built-in tool implementations.
+// nanny-runtime tools: Tool registry and built-in tool implementations.
 //
 // This module owns:
 // - ToolRegistry: a collection of registered tools, implements ToolExecutor
@@ -26,7 +26,7 @@ use std::collections::HashMap;
 pub struct ToolRegistry {
     /// Map from tool name to boxed implementation.
     ///
-    /// `Box<dyn Tool>` means any type implementing `Tool` can be stored here —
+    /// `Box<dyn Tool>` means any type implementing `Tool` can be stored here,
     /// regardless of its concrete type. This is Rust's runtime polymorphism.
     tools: HashMap<String, Box<dyn Tool>>,
 }
@@ -64,7 +64,7 @@ impl Default for ToolRegistry {
 /// Create a registry pre-loaded with all built-in Nanny tools.
 ///
 /// Currently includes:
-/// - `http_get` — makes a single HTTP GET request
+/// - `http_get`: makes a single HTTP GET request
 ///
 /// This is the standard starting point for most executions.
 /// Register additional tools on top of this if needed.
@@ -107,7 +107,7 @@ mod tests {
     use super::*;
     use nanny_core::tool::{ToolError, ToolOutput};
 
-    // A minimal tool for testing — always succeeds, costs 5 units.
+    // A minimal tool for testing: always succeeds, costs 5 units.
     struct EchoTool;
     impl Tool for EchoTool {
         fn name(&self) -> &str {

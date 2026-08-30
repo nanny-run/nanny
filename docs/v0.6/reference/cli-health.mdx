@@ -23,7 +23,7 @@ nanny health
 
 A component that was never started is **not checked** and does not cause a non-zero exit. `nanny health` only reports on what is active.
 
-This means `nanny health` run from a regular terminal (outside `nanny run`) will typically show `local enforcement: not running` — that's expected. These env vars are injected by `nanny run` into the child process, not into the terminal that launched it.
+This means `nanny health` run from a regular terminal (outside `nanny run`) will typically show `local enforcement: not running`, that's expected. These env vars are injected by `nanny run` into the child process, not into the terminal that launched it.
 
 ---
 
@@ -49,7 +49,7 @@ certs            : not found  (run `nanny certs generate`)
 
 ```
 local enforcement: not running
-network server   : unreachable  (server.example.com:62669) — connection refused
+network server   : unreachable  (server.example.com:62669), connection refused
 certs            : valid  (expires 2027-05-01T09:00:00Z)
 ```
 
@@ -62,10 +62,10 @@ Exit code is `1` when any active component is unreachable.
 When certs exist and are valid but expire within 30 days, `nanny health` prints a warning to stderr:
 
 ```
-nanny health  : warning — certs expire in 14 day(s). Run `nanny certs rotate` to renew.
+nanny health  : warning, certs expire in 14 day(s). Run `nanny certs rotate` to renew.
 ```
 
-The exit code is still `0` — a near-expiry cert is healthy, just worth knowing about.
+The exit code is still `0`, a near-expiry cert is healthy, just worth knowing about.
 
 ---
 
@@ -84,7 +84,7 @@ HEALTHCHECK --interval=30s --timeout=5s \
 
 ```bash
 if ! nanny health; then
-  echo "Nanny is not healthy — aborting"
+  echo "Nanny is not healthy, aborting"
   exit 1
 fi
 ```

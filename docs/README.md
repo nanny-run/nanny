@@ -7,6 +7,6 @@
 </p>
 
 <p align="center">
-  Documentation for <a href="https://github.com/nanny-run/nanny">Nanny</a> — open-source enforcement primitive for autonomous systems.<br/>
+  Documentation for <a href="https://github.com/nanny-run/nanny">Nanny</a>, the open-source authorization and audit layer for AI agents that take real-world actions.<br/>
   Published at <a href="https://docs.nanny.run"><strong>docs.nanny.run</strong></a>.
 </p>

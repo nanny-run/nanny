@@ -1,4 +1,4 @@
-// runtime.rs — Wires NannyConfig into the runtime components.
+// runtime.rs: Wires NannyConfig into the runtime components.
 //
 // This is the only place in the codebase where config meets the runtime.
 // NannyConfig is the source of truth. Every runtime piece is built from it.
@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 // ── RuntimeComponents ─────────────────────────────────────────────────────────
 
-/// The fully wired runtime — the tool registry — ready to run.
+/// The fully wired runtime: the tool registry, ready to run.
 ///
 /// Every field is derived directly from `NannyConfig`.
 /// Nothing is hardcoded. Nothing comes from ambient state.
@@ -25,7 +25,7 @@ pub struct RuntimeComponents {
 
 /// Build all runtime components from a validated `NannyConfig`.
 ///
-/// The mapping is intentionally explicit — every field traces back to config:
+/// The mapping is intentionally explicit: every field traces back to config:
 ///
 /// ```text
 /// config.tools.*       → allowlist + per-tool max_calls

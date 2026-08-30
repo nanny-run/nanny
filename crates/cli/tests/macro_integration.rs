@@ -1,4 +1,4 @@
-// Day 11 — End-to-end integration tests for the nanny Rust SDK.
+// Day 11: End-to-end integration tests for the nanny Rust SDK.
 //
 // Exercises the __private runtime functions that #[nanny::tool],
 // #[nanny::rule], and #[nanny::agent] generate at their call sites.
@@ -67,7 +67,7 @@ fn clear_env() {
 // ── Passthrough mode ──────────────────────────────────────────────────────────
 
 /// Without transport env vars, `is_active()` returns false.
-/// This is the passthrough gate — macros call it first; if false they invoke
+/// This is the passthrough gate: macros call it first; if false they invoke
 /// the original function body directly without touching the bridge at all.
 #[test]
 fn passthrough_inactive_without_env_vars() {
@@ -110,7 +110,7 @@ fn call_tool_allowed_returns_run() {
 }
 
 /// A tool not on the allowed list → `Stop` with a denial reason.
-/// The generated macro wrapper panics with `nanny: stopped — ToolDenied: ...`.
+/// The generated macro wrapper panics with `nanny: stopped: ToolDenied: ...`.
 #[test]
 fn call_tool_not_in_allowlist_returns_stop() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -135,14 +135,14 @@ fn call_tool_not_in_allowlist_returns_stop() {
 /// contacting the bridge; zero rules means zero denials.
 ///
 /// Must hold ENV_LOCK: `evaluate_local_rules` calls `fetch_bridge_status`,
-/// which calls `is_active()` (reads env vars) and — if active — makes an HTTP
+/// which calls `is_active()` (reads env vars) and: if active, makes an HTTP
 /// request to the bridge. If this test runs concurrently with a test that has
 /// set `NANNY_BRIDGE_SOCKET`, `fetch_bridge_status` may fail while `is_active`
 /// returns true, causing `evaluate_local_rules` to call `std::process::exit(1)`.
 #[test]
 fn evaluate_local_rules_no_rules_registered_allows_all() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    clear_env(); // ensure bridge env vars are absent — passthrough mode expected
+    clear_env(); // ensure bridge env vars are absent, passthrough mode expected
     assert!(
         evaluate_local_rules("any_tool", ::std::collections::HashMap::new()).is_none(),
         "no registered rules must produce None (allow all)"
