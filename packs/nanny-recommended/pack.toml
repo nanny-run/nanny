@@ -5,7 +5,7 @@
 #
 # That is what makes this installable blind. A pack called "recommended" that
 # can refuse an application's ordinary work on its first run is worse than no
-# pack, and this one had eight such rules until 2026-08-29 — one of them a step
+# pack, and this one had eight such rules until 2026-08-29: one of them a step
 # ceiling, the primitive v0.6.0 deleted, wearing a rule's clothing.
 #
 # Rules that need a number are not shipped at all. A cap is a fact about one

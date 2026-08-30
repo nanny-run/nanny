@@ -16,7 +16,7 @@ serde        = { workspace = true }
 serde_json   = { workspace = true }
 anyhow       = { workspace = true }
 dirs         = { workspace = true }
-# v0.2.0 — Network Bridge server
+# v0.2.0: Network Bridge server
 axum         = { workspace = true }
 axum-server  = { workspace = true }
 tower        = { workspace = true }
@@ -30,7 +30,7 @@ base64       = { workspace = true }
 # `GovernorIdentified`'s best-effort machine name (Gap G6).
 hostname     = "0.4"
 
-# TCP transport — only needed on Windows (non-Unix). On macOS/Linux we use
+# TCP transport: only needed on Windows (non-Unix). On macOS/Linux we use
 # a Unix domain socket, which requires no external crate.
 [target.'cfg(not(unix))'.dependencies]
 tiny_http = "0.12"

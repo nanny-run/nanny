@@ -1,6 +1,6 @@
 [package]
 name        = "nanny-config"
-description = "Nanny configuration — nanny.toml parsing and validation"
+description = "Nanny configuration: nanny.toml parsing and validation"
 version.workspace    = true
 edition.workspace    = true
 license.workspace    = true
