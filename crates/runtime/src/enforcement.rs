@@ -1,4 +1,4 @@
-// enforcement.rs — Concrete policy implementations.
+// enforcement.rs: Concrete policy implementations.
 //
 // These are the enforcement decisions. The contract (Policy trait, PolicyContext,
 // PolicyDecision) lives in nanny-core.
@@ -16,7 +16,7 @@ use std::collections::HashMap;
 ///
 /// Permission is an authority question: may this agent call this at all.
 ///
-/// Pure — no state is mutated, no network calls are made.
+/// Pure: no state is mutated, no network calls are made.
 pub struct ToolPermissionPolicy {
     allowed_tools: Vec<String>,
 }
@@ -49,7 +49,7 @@ impl Policy for ToolPermissionPolicy {
 /// Currently enforces:
 ///   - `max_calls`: deny once a tool has been called max_calls times
 ///
-/// Always runs after ToolPermissionPolicy — compose them with ChainPolicy.
+/// Always runs after ToolPermissionPolicy: compose them with ChainPolicy.
 pub struct RuleEvaluator {
     max_calls: HashMap<String, u32>,
 }

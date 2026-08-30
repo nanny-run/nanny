@@ -4,7 +4,7 @@
 //! compile-time constant and can only ever be one of OUR OWN hosts. There is no
 //! arbitrary-URL override and no cloud self-hosting. The "take my data elsewhere"
 //! escape hatch is the open, local event stream (pipe it anywhere), which never
-//! needs a repointable cloud URL — so trusting our host, and even the poll
+//! needs a repointable cloud URL: so trusting our host, and even the poll
 //! interval it hands back, is safe.
 //!
 //! The environment is chosen by an explicit `--env` selector, never inferred from
@@ -43,7 +43,7 @@ impl CloudEnv {
     /// This is the ONLY host the CLI will ever reach; it is never user-supplied.
     ///
     /// Note the app URL (where the browser approves) is a *different* host in
-    /// staging/prod; the CLI never needs it — it arrives as `verification_uri`
+    /// staging/prod; the CLI never needs it: it arrives as `verification_uri`
     /// in the device-code response.
     pub fn api_base(self) -> &'static str {
         match self {
@@ -54,7 +54,7 @@ impl CloudEnv {
     }
 
     /// Where runs and the governance server POST their NDJSON events. Derived
-    /// from the compiled API base, so the CLI never stores or trusts a URL — it
+    /// from the compiled API base, so the CLI never stores or trusts a URL: it
     /// only ever reaches our own host for the env it logged into.
     pub fn ingest_url(self) -> String {
         format!("{}/v1/ingest", self.api_base())

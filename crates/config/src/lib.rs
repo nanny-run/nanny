@@ -3,7 +3,7 @@ pub mod pack;
 // nanny.toml schema, parsing, and strict validation.
 //
 // This crate owns one job: turn a static file into a trusted, validated config.
-// If the file is missing, malformed, or contains illegal values — we fail immediately.
+// If the file is missing, malformed, or contains illegal values: we fail immediately.
 // No silent defaults. No guessing. No recovery.
 //
 // TOML field naming vs Rust field naming:
@@ -17,10 +17,10 @@ use thiserror::Error;
 
 // ── Error type ────────────────────────────────────────────────────────────────
 
-/// Every way config loading can fail. All failures are final — there is no fallback.
+/// Every way config loading can fail. All failures are final: there is no fallback.
 #[derive(Debug, Error)]
 pub enum ConfigError {
-    #[error("config file not found at '{path}' — run `nanny init` to create one")]
+    #[error("config file not found at '{path}', run `nanny init` to create one")]
     NotFound { path: String },
 
     #[error("could not read config file: {0}")]
@@ -30,7 +30,7 @@ pub enum ConfigError {
     Parse(String),
 
     #[error(
-        "rule pack '{0}' has no version — pin it as 'name@version'. \
+        "rule pack '{0}' has no version, pin it as 'name@version'. \
          An unpinned pack lets the rules change without anyone deciding to \
          change them, and makes past evidence mean something different later."
     )]
@@ -38,7 +38,7 @@ pub enum ConfigError {
 
     #[error(
         "rule pack '{name}@{version}' is declared in [rules] extends but is not \
-         installed at '{path}' — run `nanny rules add {name}@{version}`"
+         installed at '{path}', run `nanny rules add {name}@{version}`"
     )]
     RulePackMissing {
         name: String,
@@ -52,7 +52,7 @@ pub enum ConfigError {
 /// The full contents of a nanny.toml file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NannyConfig {
-    /// How to launch the project. `nanny run` always reads this — extra args
+    /// How to launch the project. `nanny run` always reads this: extra args
     /// passed after `--` are appended to `cmd`.
     #[serde(default)]
     pub start: Option<StartConfig>,
@@ -121,7 +121,7 @@ impl RulesConfig {
 
 // ── StartConfig ───────────────────────────────────────────────────────────────
 
-/// Project start configuration — how to launch the agent under nanny enforcement.
+/// Project start configuration: how to launch the agent under nanny enforcement.
 ///
 /// ```toml
 /// [start]
@@ -242,7 +242,7 @@ pub struct ObservabilityConfig {
     pub log: LogTarget,
 
     /// Optional override for the log's name when log = "file". Defaults to
-    /// "log" if not set. A bare name only — no extension, no path
+    /// "log" if not set. A bare name only: no extension, no path
     /// separators: Nanny always appends `.ndjson` and always owns the
     /// directory (`.nanny/logs/`, created automatically). See
     /// `resolve_log_path`.
@@ -266,7 +266,7 @@ impl ObservabilityConfig {
     /// `base_dir` (the directory nanny.toml lives in). Returns `None` for
     /// `LogTarget::Stdout`.
     ///
-    /// The directory is always `base_dir/.nanny/logs/` — never configurable,
+    /// The directory is always `base_dir/.nanny/logs/`: never configurable,
     /// created here if it doesn't exist yet, exactly like `.nanny/servers/`
     /// already auto-creates itself for governor state. `file`, if set, must
     /// be a bare name: no path separators (the directory isn't the
@@ -279,13 +279,13 @@ impl ObservabilityConfig {
                 let name = self.file.as_deref().unwrap_or(Self::DEFAULT_NAME);
                 if name.contains('/') || name.contains('\\') {
                     return Err(ConfigError::Parse(format!(
-                        "observability.file = '{name}' must be a bare name, not a path — \
+                        "observability.file = '{name}' must be a bare name, not a path, \
                          the directory is always .nanny/logs/, owned by nanny"
                     )));
                 }
                 if name.contains('.') {
                     return Err(ConfigError::Parse(format!(
-                        "observability.file = '{name}' must not include an extension — \
+                        "observability.file = '{name}' must not include an extension, \
                          nanny always appends .ndjson, e.g. file = \"events\""
                     )));
                 }
@@ -299,7 +299,7 @@ impl ObservabilityConfig {
 }
 
 /// Best-effort: append `.nanny/logs/` to `.gitignore` if it isn't already
-/// covered. Never fails the caller — a missed gitignore entry is a nudge,
+/// covered. Never fails the caller: a missed gitignore entry is a nudge,
 /// not a hard requirement. These are audit-trail logs, not source: they
 /// belong on disk (where they are also the durable buffer that lets a run
 /// back-sync history to Cloud after an outage) but never in git.
@@ -459,9 +459,9 @@ pub fn load(path: &Path) -> Result<NannyConfig, ConfigError> {
         let msg = e.to_string();
         // Surface actionable hints for the most common config mistakes.
         let hint = if msg.contains("missing field `cmd`") {
-            " — add `cmd = \"<your command>\"` under [start]"
+            ", add `cmd = \"<your command>\"` under [start]"
         } else if msg.contains("missing field") && msg.contains("start") {
-            " — add a [start] section with `cmd = \"<your command>\"`"
+            ", add a [start] section with `cmd = \"<your command>\"`"
         } else {
             ""
         };
@@ -473,7 +473,7 @@ pub fn load(path: &Path) -> Result<NannyConfig, ConfigError> {
 
 /// The canonical starter nanny.toml written by `nanny init`.
 ///
-/// This is a static string — not generated from structs — so the comments
+/// This is a static string: not generated from structs, so the comments
 /// and formatting are preserved exactly as the user will see them.
 pub fn default_toml() -> &'static str {
     r#"# Generated by `nanny init`. Edit to match your agent's requirements.
@@ -533,14 +533,14 @@ allowed = ["http_get"]
 
 [observability]
 # Where to write the structured NDJSON event log.
-# "stdout" — stream events to the terminal in real time (default).
-# "file"   — write events to .nanny/logs/log.ndjson (auto-created).
+# "stdout", stream events to the terminal in real time (default).
+# "file"  , write events to .nanny/logs/log.ndjson (auto-created).
 log = "stdout"
 
 # Uncomment to write events to a file instead:
 # log = "file"
 
-# Optional — only set this if you want a name other than the default
+# Optional, only set this if you want a name other than the default
 # ("log"). A bare name, no extension: nanny always appends .ndjson, and
 # the directory is always .nanny/logs/, owned by nanny, never
 # configurable here. file = "events" writes .nanny/logs/events.ndjson.
@@ -835,7 +835,7 @@ reads_untrused = true
         };
         assert!(
             config.resolve_log_path(&dir).is_err(),
-            "a name with an extension must be rejected — nanny always appends .ndjson itself"
+            "a name with an extension must be rejected, nanny always appends .ndjson itself"
         );
     }
 
@@ -870,7 +870,7 @@ cmd = "cargo run --release"
             r#"
 "#,
         )
-        .expect("must parse — [start] is optional");
+        .expect("must parse, [start] is optional");
 
         assert!(config.start.is_none());
     }

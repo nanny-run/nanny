@@ -72,7 +72,7 @@ fn resolve_app_id(explicit: Option<String>) -> Result<String> {
 // ── nanny run --serve (governance server start) ───────────────────────────────
 
 /// DoS protection: hard-coded 100 req/s per client IP.
-/// Not a config knob — if this is ever wrong for a real workload, bump the
+/// Not a config knob: if this is ever wrong for a real workload, bump the
 /// constant and ship a new binary.  Operator tuning of this value is not a
 /// use-case Nanny needs to support.
 const RATE_LIMIT_RPS: u32 = 100;
@@ -107,7 +107,7 @@ pub fn cmd_server_start(
 
     // Proxy mode is opt-in.
 
-    // Build BridgeComponents from config (no CLI ceiling — server uses config values).
+    // Build BridgeComponents from config (no CLI ceiling: server uses config values).
     let components = build_bridge_components(&config);
 
     // Resolve cert paths: use CLI args, else fall back to ~/.nanny/certs/.
@@ -117,7 +117,7 @@ pub fn cmd_server_start(
     let ca_path = ca.unwrap_or_else(|| certs_dir.join("ca.crt"));
 
     // Cert files are required only for non-loopback addresses (mTLS mandatory).
-    // Loopback binds use plain HTTP — OS-enforced, no TLS overhead.
+    // Loopback binds use plain HTTP: OS-enforced, no TLS overhead.
     if !addr.ip().is_loopback() {
         for (label, path) in [
             ("server cert", &cert_path),
@@ -135,7 +135,7 @@ pub fn cmd_server_start(
                      \n\
                      \x20   nanny run --serve\n\
                      \n\
-                     (default is 127.0.0.1:62669 — no certs needed)",
+                     (default is 127.0.0.1:62669, no certs needed)",
                     path.display()
                 );
             }
@@ -327,7 +327,7 @@ pub fn cmd_server_stop(app: Option<String>) -> Result<()> {
 
     let pid: u32 = raw.trim().parse().with_context(|| {
         format!(
-            "corrupted PID file at {} — expected an integer",
+            "corrupted PID file at {}, expected an integer",
             pid_file.display()
         )
     })?;
@@ -340,7 +340,7 @@ pub fn cmd_server_stop(app: Option<String>) -> Result<()> {
             .context("failed to run `kill`")?;
         if !status.success() {
             anyhow::bail!(
-                "failed to stop server (PID {pid}) — it may have already exited.\n\
+                "failed to stop server (PID {pid}), it may have already exited.\n\
                  Check with: nanny status --app={app_id}"
             );
         }
@@ -355,7 +355,7 @@ pub fn cmd_server_stop(app: Option<String>) -> Result<()> {
             .context("failed to run `taskkill`")?;
         if !status.success() {
             anyhow::bail!(
-                "failed to stop server (PID {pid}) — it may have already exited.\n\
+                "failed to stop server (PID {pid}), it may have already exited.\n\
                  Check with: nanny status --app={app_id}"
             );
         }
@@ -403,13 +403,13 @@ fn run_governor_with_app(setup: GovernorSetup, command: Vec<String>, app_id: &st
     //
     // Without this, a SIGINT from a terminal Ctrl-C has no installed handler
     // anywhere in this process, so the OS's default disposition kills `nanny`
-    // outright — before it ever reaches the post-loop cleanup below. That
+    // outright: before it ever reaches the post-loop cleanup below. That
     // leaves this run's discovery files behind under `state_dir` forever, and
     // the next `nanny run --serve` fails with "has server state but isn't
     // reachable". The governed child (e.g. uvicorn) has its own signal
     // handling and shuts down fine on its own via normal terminal job-control
     // (SIGINT goes to the whole foreground process group); this handler's job
-    // is only to make sure *this* process — the governor — also notices the
+    // is only to make sure *this* process: the governor, also notices the
     // signal, stops the child if the OS hasn't already, and cleans up.
     //
     // Registered here, before the governor thread or the child even exist, so
@@ -426,7 +426,7 @@ fn run_governor_with_app(setup: GovernorSetup, command: Vec<String>, app_id: &st
                 force_kill_pid(pid);
             }
             remove_discovery_files(&state_dir);
-            // A deliberate, immediate exit — this runs on ctrlc's dedicated
+            // A deliberate, immediate exit: this runs on ctrlc's dedicated
             // signal thread, not the thread running the poll loop below, so
             // there is no unwind path back into this function's normal
             // control flow to fall through to.

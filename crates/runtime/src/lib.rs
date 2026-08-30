@@ -1,11 +1,11 @@
-// nanny-runtime — local implementations of the nanny-core contracts.
+// nanny-runtime: local implementations of the nanny-core contracts.
 //
 // nanny-core defines the contracts (Policy, Tool traits).
 // nanny-runtime provides the concrete implementations used in local mode.
 //
 // Three implementation families live here:
-//   enforcement  — ToolPermissionPolicy, RuleEvaluator, ChainPolicy
-//   tools        — ToolRegistry, HttpGet, default_registry
+//   enforcement : ToolPermissionPolicy, RuleEvaluator, ChainPolicy
+//   tools       : ToolRegistry, HttpGet, default_registry
 
 pub mod enforcement;
 pub mod tools;

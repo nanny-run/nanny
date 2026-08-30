@@ -66,7 +66,7 @@ fn collect(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
 pub fn verify(dir: &Path, manifest: &PackManifest) -> Result<()> {
     let Some(declared) = manifest.signature.as_deref() else {
         println!(
-            "nanny: {} is unsigned — its contents are trusted only as far as you \
+            "nanny: {} is unsigned, its contents are trusted only as far as you \
              trust where you got it",
             manifest.slug()
         );

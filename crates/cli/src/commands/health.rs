@@ -1,9 +1,9 @@
-// nanny health — show the status of all active Nanny components.
+// nanny health: show the status of all active Nanny components.
 //
 // Checks three things:
-//   1. Local bridge   — is the per-run bridge socket/port accepting connections?
-//   2. Network server — is NANNY_BRIDGE_ADDR reachable? (v0.2.0)
-//   3. Certs          — do ~/.nanny/certs/ exist and when do they expire?
+//   1. Local bridge  : is the per-run bridge socket/port accepting connections?
+//   2. Network server: is NANNY_BRIDGE_ADDR reachable? (v0.2.0)
+//   3. Certs         : do ~/.nanny/certs/ exist and when do they expire?
 //
 // Exits 0 if every *active* component is healthy.
 // Exits 1 if any active component is unhealthy.
@@ -24,7 +24,7 @@ pub fn cmd_health() -> Result<()> {
     let mut all_healthy = true;
 
     // ── 1. Local bridge ───────────────────────────────────────────────────────
-    // The bridge is started by `nanny run` — it injects NANNY_BRIDGE_SOCKET
+    // The bridge is started by `nanny run`: it injects NANNY_BRIDGE_SOCKET
     // (Unix) or NANNY_BRIDGE_PORT (Windows) into the child process env.
     // Checking health from *within* a governed process makes sense; checking
     // from a separate terminal won't see these vars.
@@ -37,7 +37,7 @@ pub fn cmd_health() -> Result<()> {
             println!("local enforcement: not running");
         }
         BridgeStatus::Unreachable(detail) => {
-            println!("local enforcement: unreachable — {detail}");
+            println!("local enforcement: unreachable, {detail}");
             all_healthy = false;
         }
     }
@@ -54,7 +54,7 @@ pub fn cmd_health() -> Result<()> {
             println!("network server   : running  ({addr})  [{how}]");
         }
         ServerStatus::Unreachable(addr, detail) => {
-            println!("network server   : unreachable  ({addr}) — {detail}");
+            println!("network server   : unreachable  ({addr}), {detail}");
             all_healthy = false;
         }
     }
@@ -70,11 +70,11 @@ pub fn cmd_health() -> Result<()> {
             let formatted = expires.format(&Rfc3339).unwrap_or_else(|_| "?".to_string());
             println!("certs            : valid  (expires {formatted})");
 
-            // Warn 30 days before expiry — still healthy, but worth flagging.
+            // Warn 30 days before expiry: still healthy, but worth flagging.
             let days_left = (*expires - OffsetDateTime::now_utc()).whole_days();
             if days_left <= 30 {
                 eprintln!(
-                    "nanny health  : warning — certs expire in {days_left} day(s). \
+                    "nanny health  : warning, certs expire in {days_left} day(s). \
                      Run `nanny certs rotate` to renew."
                 );
             }
@@ -85,7 +85,7 @@ pub fn cmd_health() -> Result<()> {
             all_healthy = false;
         }
         CertStatus::Unreadable(detail) => {
-            println!("certs            : unreadable — {detail}");
+            println!("certs            : unreadable, {detail}");
             all_healthy = false;
         }
     }
@@ -147,7 +147,7 @@ fn check_network_server() -> ServerStatus {
     };
 
     // Prefer a full mTLS health check (actual HTTPS request with client cert)
-    // over a raw TCP probe — it validates the TLS handshake, CA trust, and the
+    // over a raw TCP probe: it validates the TLS handshake, CA trust, and the
     // /health response in one shot.
     let cert_dir = default_certs_dir();
     let client_cert = cert_dir.join("client.crt");
@@ -160,14 +160,14 @@ fn check_network_server() -> ServerStatus {
             MtlsResult::Stopped => ServerStatus::Reachable(addr, "mTLS ok, server stopped"),
             MtlsResult::CertError(detail) => ServerStatus::Unreachable(
                 addr,
-                format!("cert mismatch — run `nanny certs show`: {detail}"),
+                format!("cert mismatch, run `nanny certs show`: {detail}"),
             ),
             MtlsResult::ConnectError(detail) => {
                 ServerStatus::Unreachable(addr, format!("connection failed: {detail}"))
             }
         }
     } else {
-        // No local certs — fall back to TCP ping (e.g. loopback dev server).
+        // No local certs: fall back to TCP ping (e.g. loopback dev server).
         tcp_probe_status(addr)
     }
 }
@@ -262,7 +262,7 @@ fn tcp_probe_status(addr: String) -> ServerStatus {
         Some(true) => ServerStatus::Reachable(addr, "TCP ping"),
         _ => ServerStatus::Unreachable(
             addr,
-            "TCP connection refused — is `nanny run --serve` running?".to_string(),
+            "TCP connection refused, is `nanny run --serve` running?".to_string(),
         ),
     }
 }
@@ -293,7 +293,7 @@ fn check_certs(dir: &Path) -> CertStatus {
             Err(e) => CertStatus::Unreadable(format!("cannot parse expiry from meta.json: {e}")),
         },
         Err(_) => {
-            // meta.json missing — try to parse server.crt directly.
+            // meta.json missing: try to parse server.crt directly.
             let cert_path = dir.join("server.crt");
             if !cert_path.exists() {
                 return CertStatus::NotFound;

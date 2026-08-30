@@ -1,4 +1,4 @@
-//! `nanny rules` — install and inspect rule packs.
+//! `nanny rules`: install and inspect rule packs.
 //!
 //! Installing writes two things and edits no source file: a pinned entry in
 //! `[rules] extends`, and the pack itself under `.nanny/rules/`, committed like
@@ -44,7 +44,7 @@ fn split_pin(pack: &str) -> Result<(String, String)> {
             Ok((name.trim().to_string(), version.trim().to_string()))
         }
         _ => bail!(
-            "'{pack}' is not pinned — use 'name@version'. An unpinned pack lets \
+            "'{pack}' is not pinned, use 'name@version'. An unpinned pack lets \
              the rules change without anyone deciding to change them."
         ),
     }

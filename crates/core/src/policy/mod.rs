@@ -3,7 +3,7 @@
 // This module defines the shapes the policy engine works with.
 // Concrete implementations live in nanny-policy.
 //
-// The executor depends on this module — not on nanny-policy directly.
+// The executor depends on this module: not on nanny-policy directly.
 // That separation prevents a circular dependency:
 //   nanny-core defines the contract
 //   nanny-policy implements it
@@ -139,7 +139,7 @@ pub enum PolicyDecision {
 /// The policy contract.
 ///
 /// Any type that implements this trait can make execution decisions.
-/// Implementations must be pure — same context always produces same decision.
+/// Implementations must be pure: same context always produces same decision.
 /// No side effects. No network calls. No randomness.
 pub trait Policy {
     fn evaluate(&self, context: &PolicyContext) -> PolicyDecision;

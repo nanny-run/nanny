@@ -1,4 +1,4 @@
-// Nanny CLI — the only surface humans touch.
+// Nanny CLI: the only surface humans touch.
 mod cloud;
 mod commands;
 mod events;
@@ -7,8 +7,8 @@ mod runtime;
 mod sync;
 //
 // Two commands exist:
-//   nanny init                        — write a starter nanny.toml in the current directory
-//   nanny run <cmd> — run a command under nanny governance
+//   nanny init                       : write a starter nanny.toml in the current directory
+//   nanny run <cmd>: run a command under nanny governance
 //
 // No logic lives here. The CLI loads config and hands off to the runtime.
 // All enforcement happens in nanny-core, not here.
@@ -213,7 +213,7 @@ fn main() {
 // ── Guard: single nanny.toml per directory ───────────────────────────────────
 
 /// Returns all files matching `nanny*.toml` in `dir`.
-/// A project must have exactly one — this enforces that rule.
+/// A project must have exactly one: this enforces that rule.
 fn nanny_tomls_in_dir(dir: &Path) -> Result<Vec<PathBuf>> {
     let entries = std::fs::read_dir(dir)
         .with_context(|| format!("failed to read directory '{}'", dir.display()))?;
@@ -270,7 +270,7 @@ fn cmd_init() -> Result<()> {
     } else {
         std::fs::write(&dest, nanny_config::default_toml())
             .context("failed to write nanny.toml")?;
-        println!("Created nanny.toml — edit it to match your agent's requirements.");
+        println!("Created nanny.toml, edit it to match your agent's requirements.");
     }
 
     // App identity: written once, ever, per app, never regenerated. This is
@@ -314,7 +314,7 @@ fn cmd_init() -> Result<()> {
     println!("Set [start] cmd to how you normally launch your agent, then:");
     println!("    nanny run");
     println!();
-    println!("Works with any language — Python, Rust, Go, Node, or any compiled binary.");
+    println!("Works with any language, Python, Rust, Go, Node, or any compiled binary.");
 
     Ok(())
 }
@@ -324,7 +324,7 @@ fn cmd_init() -> Result<()> {
 fn cmd_uninstall() -> Result<()> {
     let exe = std::env::current_exe().context("failed to determine current binary path")?;
 
-    // Homebrew manages its own metadata — removing the binary directly leaves
+    // Homebrew manages its own metadata: removing the binary directly leaves
     // the formula in a broken state. Redirect to `brew uninstall nannyd`.
     let path_str = exe.to_string_lossy();
     if path_str.contains("/Cellar/") || path_str.contains("/homebrew/") {
@@ -336,7 +336,7 @@ fn cmd_uninstall() -> Result<()> {
     cmd_uninstall_impl(&exe)
 }
 
-// Windows locks running executables — the process cannot delete itself while running.
+// Windows locks running executables: the process cannot delete itself while running.
 // self_replace::self_delete() uses the FILE_FLAG_DELETE_ON_CLOSE + spawned-child
 // pattern (the same approach rustup uses) to reliably delete the binary after
 // the current process exits, without job object or quoting issues.
@@ -346,11 +346,11 @@ fn cmd_uninstall_impl(exe: &Path) -> Result<()> {
         .parent()
         .ok_or_else(|| anyhow::anyhow!("cannot determine install directory"))?;
 
-    // Schedule binary deletion — takes effect once this process exits.
+    // Schedule binary deletion: takes effect once this process exits.
     self_replace::self_delete().context("failed to schedule binary deletion")?;
 
     // Clean up the PATH registry entry and the install directory.
-    // This is a plain registry write — no need for a detached process.
+    // This is a plain registry write: no need for a detached process.
     let dir = install_dir.to_string_lossy();
     let _ = std::process::Command::new("powershell")
         .args([
@@ -452,7 +452,7 @@ fn detect_joined_server(app_id: &str) -> Result<NetworkServerInfo> {
 
 fn cmd_run_via_network_server(command: Vec<String>, server: NetworkServerInfo) -> Result<()> {
     println!("nanny: network server detected at {}", server.addr);
-    println!("nanny: governance enforced remotely — tool permission and rules apply");
+    println!("nanny: governance enforced remotely, tool permission and rules apply");
     println!();
 
     let (mut cmd, run_id) = build_governed_child(command, &server)?;
@@ -494,7 +494,7 @@ fn command_program(cmd: &std::process::Command) -> String {
 ///
 /// **Shared by `nanny run` and `nanny run --serve` deliberately.** It lived
 /// only in the former until 2026-08-29, which meant the fail-closed guarantee
-/// held for local development and not for `--serve` — the shape every container
+/// held for local development and not for `--serve`: the shape every container
 /// runs. An image missing its vendored pack booted and ran unguarded, silently,
 /// because nothing else checks: the SDK loads whatever is on disk and carries on
 /// when that is nothing. Same defect as `/rules` being registered on the socket
@@ -508,7 +508,7 @@ pub fn resolve_declared_packs(
     let packs = nanny_config::pack::load_declared_packs(config_dir, &pinned)?;
     if !packs.is_empty() {
         println!(
-            "nanny: rule packs — {:?}",
+            "nanny: rule packs, {:?}",
             packs.iter().map(|p| p.slug()).collect::<Vec<_>>()
         );
     }
@@ -521,7 +521,7 @@ fn build_governed_child(
 ) -> Result<(std::process::Command, String)> {
     let (program, args) = command.split_first().expect("command is non-empty");
 
-    // Cert files from ~/.nanny/certs/ — auto-injected if present.
+    // Cert files from ~/.nanny/certs/: auto-injected if present.
     // Cross-machine deployments override these via NANNY_BRIDGE_CERT/KEY/CA.
     let certs_dir = dirs::home_dir()
         .context("cannot determine home directory")?
@@ -543,7 +543,7 @@ fn build_governed_child(
     cmd.env("NANNY_SESSION_TOKEN", &server.token);
     cmd.env("NANNY_RUN_ID", &run_id);
 
-    // Only inject cert paths that actually exist — agents on remote machines
+    // Only inject cert paths that actually exist: agents on remote machines
     // may have already set these env vars themselves via their deployment config.
     let cert_file = certs_dir.join("client.crt");
     let key_file = certs_dir.join("client.key");
@@ -622,7 +622,7 @@ fn cmd_run(
         );
     }
 
-    // Load and validate config — fail immediately if anything is wrong.
+    // Load and validate config: fail immediately if anything is wrong.
     let config = nanny_config::load(config_path)
         .with_context(|| format!("failed to load config from '{}'", config_path.display()))?;
 
@@ -644,14 +644,14 @@ fn cmd_run(
     let declared_packs = resolve_declared_packs(&config, config_dir)?;
     let _ = &declared_packs;
 
-    // Require [start] — nanny run always reads the command from config.
+    // Require [start]: nanny run always reads the command from config.
     let start = config
         .start
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("no start config found in nanny.toml"))?;
 
     // Build command: parse [start].cmd with shell quoting rules, then append extra args.
-    // shlex::split handles quoted paths and escaped spaces — e.g. 'python "my agent.py"'.
+    // shlex::split handles quoted paths and escaped spaces: e.g. 'python "my agent.py"'.
     let mut command: Vec<String> = shlex::split(&start.cmd).ok_or_else(|| {
         anyhow::anyhow!(
             "invalid [start].cmd in nanny.toml: unterminated quote or invalid shell syntax: {:?}",
@@ -676,11 +676,11 @@ fn cmd_run(
     let components = runtime::build_from_config(&config);
 
     println!("nanny: config loaded from '{}'", config_path.display());
-    println!("nanny: tools allowed — {:?}", config.tools.allowed);
+    println!("nanny: tools allowed, {:?}", config.tools.allowed);
 
     let registered = components.registry.registered_names();
     println!(
-        "nanny: registry — {} tool(s) registered: {:?}",
+        "nanny: registry, {} tool(s) registered: {:?}",
         registered.len(),
         registered
     );
@@ -747,7 +747,7 @@ fn cmd_run(
     // ── Spawn child process ───────────────────────────────────────────────
     let (program, args) = command
         .split_first()
-        .expect("command is non-empty — enforced by clap");
+        .expect("command is non-empty, enforced by clap");
 
     let mut cmd = std::process::Command::new(program);
     cmd.args(args);
@@ -765,7 +765,7 @@ fn cmd_run(
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
-            // ExecutionStarted was emitted — always pair it with ExecutionStopped.
+            // ExecutionStarted was emitted: always pair it with ExecutionStopped.
             let elapsed_ms = started_at.elapsed().as_millis() as u64;
             let _ = log.write(
                 &run_id,
@@ -780,10 +780,10 @@ fn cmd_run(
     //
     // We poll every 50 ms. Coarse enough to avoid busy-spinning; fine enough
     // that a stop is noticed promptly. The bridge signals stop (allowlist,
-    // rules) independently of the child's own exit — we must check both.
+    // rules) independently of the child's own exit: we must check both.
     //
     // Bridge events (ToolAllowed, RuleDenied, ToolDenied, …) are drained on every tick
-    // so the NDJSON stream is written in near-real-time — `tail -f` on the
+    // so the NDJSON stream is written in near-real-time: `tail -f` on the
     // log file shows events as they happen, not just at execution end.
     let poll_interval = Duration::from_millis(50);
     let stop_reason: String = loop {
@@ -795,10 +795,10 @@ fn cmd_run(
             }
         }
 
-        // Check bridge first — it may have stopped execution (allowlist, rules).
+        // Check bridge first: it may have stopped execution (allowlist, rules).
         if let ExecutionState::Stopped { reason } = bridge.execution_state() {
             let _ = child.kill();
-            let _ = child.wait(); // reap — avoid zombie
+            let _ = child.wait(); // reap, avoid zombie
             break reason;
         }
 
@@ -807,7 +807,7 @@ fn cmd_run(
                 // Use exit status as the fallback reason only.
                 // The child may have called POST /stop before dying (e.g. for
                 // RuleDenied or ToolFailed), in which case the bridge already
-                // has the specific reason. bridge.stop() is idempotent — it
+                // has the specific reason. bridge.stop() is idempotent: it
                 // won't overwrite a reason the child already reported.
                 let fallback = if status.success() {
                     "AgentCompleted"
@@ -826,7 +826,7 @@ fn cmd_run(
                 std::thread::sleep(poll_interval);
             }
             Err(e) => {
-                // Polling failed — emit stopped before surfacing the error.
+                // Polling failed: emit stopped before surfacing the error.
                 let elapsed_ms = started_at.elapsed().as_millis() as u64;
                 let _ = log.write(
                     &run_id,
@@ -853,14 +853,14 @@ fn cmd_run(
     let metrics = bridge.metrics();
 
     // Warn when tools are configured but the agent never called any.
-    // This usually means the model ignored its tool definitions — a common
+    // This usually means the model ignored its tool definitions: a common
     // sign of a model that is too small or a prompt that needs improvement.
     // Suppress the warning when execution was stopped by a governance decision
-    // (rule denial, tool denial) — in that case 0 calls is expected.
+    // (rule denial, tool denial): in that case 0 calls is expected.
     let is_governance_stop = matches!(stop_reason.as_str(), "RuleDenied" | "ToolDenied");
     if metrics.allowed_tool_count > 0 && metrics.tool_call_count == 0 && !is_governance_stop {
         eprintln!(
-            "nanny: warning — execution completed with 0 tool calls \
+            "nanny: warning, execution completed with 0 tool calls \
              ({} tool(s) were allowed). \
              The model may have ignored its tool definitions.",
             metrics.allowed_tool_count
@@ -882,7 +882,7 @@ fn cmd_run(
 
     // ── Exit code ─────────────────────────────────────────────────────────
     if stop_reason != "AgentCompleted" {
-        eprintln!("nanny: stopped — {stop_reason}");
+        eprintln!("nanny: stopped, {stop_reason}");
         std::process::exit(1);
     }
 

@@ -1,15 +1,15 @@
-// nanny certs — TLS certificate management for the network server.
+// nanny certs: TLS certificate management for the network server.
 //
 // All certificates live in ~/.nanny/certs/ by default:
-//   ca.crt       — CA certificate (self-signed)
-//   ca.key       — CA private key  (kept for nanny certs rotate)
-//   server.crt   — Server certificate (signed by CA)
-//   server.key   — Server private key
-//   client.crt   — Client certificate (signed by CA, distributed to agents)
-//   client.key   — Client private key
-//   meta.json    — Expiry date + SANs (avoids re-parsing PEM for quick display)
+//   ca.crt      : CA certificate (self-signed)
+//   ca.key      : CA private key  (kept for nanny certs rotate)
+//   server.crt  : Server certificate (signed by CA)
+//   server.key  : Server private key
+//   client.crt  : Client certificate (signed by CA, distributed to agents)
+//   client.key  : Client private key
+//   meta.json   : Expiry date + SANs (avoids re-parsing PEM for quick display)
 //
-// All five certs+keys are always generated together — PKI requires a CA to sign
+// All five certs+keys are always generated together: PKI requires a CA to sign
 // server and client certs; partial generation is not supported.
 
 use anyhow::{Context, Result};
@@ -30,7 +30,7 @@ pub enum CertsCommand {
     ///
     /// Creates: ca.crt, ca.key, server.crt, server.key, client.crt, client.key
     ///
-    /// All five are always generated together — PKI requires a CA to sign the
+    /// All five are always generated together: PKI requires a CA to sign the
     /// others. Partial generation is not supported.
     ///
     /// After generating, start the server with:
@@ -63,14 +63,14 @@ pub enum CertsCommand {
         sans: Vec<String>,
     },
 
-    /// Import externally-issued certificates (BYOC — bring your own certs).
+    /// Import externally-issued certificates (BYOC: bring your own certs).
     ///
     /// Accepts key=value pairs. Values are PEM strings or @file references:
     ///
     ///     nanny certs import ca=@/vault/secrets/ca.pem cert=@/vault/secrets/tls.crt key=@/vault/secrets/tls.key
     ///     nanny certs import ca="$VAULT_CA" cert="$VAULT_CERT" key="$VAULT_KEY"
     ///
-    /// Three keys: ca, cert, key. Partial import is supported — omit a key to
+    /// Three keys: ca, cert, key. Partial import is supported: omit a key to
     /// leave the existing file unchanged. After any import Nanny validates that
     /// all three are present and that cert is signed by ca.
     ///
@@ -81,7 +81,7 @@ pub enum CertsCommand {
         pairs: Vec<String>,
     },
 
-    /// Rotate certificates — regenerate server + client certs using the existing CA.
+    /// Rotate certificates: regenerate server + client certs using the existing CA.
     ///
     /// The CA is preserved. New server and client certs are generated, signed
     /// by the existing CA, and atomically swapped in. The server hot-reloads
@@ -181,7 +181,7 @@ fn write_meta(dir: &Path, expires: OffsetDateTime, san: &[String]) -> Result<()>
 
 pub fn read_meta(dir: &Path) -> Result<CertsMeta> {
     let raw = std::fs::read_to_string(dir.join("meta.json"))
-        .context("meta.json not found — run `nanny certs generate` or `nanny certs import`")?;
+        .context("meta.json not found, run `nanny certs generate` or `nanny certs import`")?;
     serde_json::from_str(&raw).context("failed to parse meta.json")
 }
 
@@ -195,7 +195,7 @@ fn cmd_certs_generate(
 ) -> Result<()> {
     let dir = out_dir.unwrap_or_else(default_certs_dir);
 
-    // Warn if the certs dir happens to be inside a git-tracked tree — certs
+    // Warn if the certs dir happens to be inside a git-tracked tree: certs
     // should never be committed. ~/.nanny/certs/ is outside any project dir
     // by default, so this only fires for unusual --out-dir overrides.
     check_git_warning(&dir);
@@ -216,8 +216,8 @@ fn cmd_certs_generate(
                     "certificates already exist in '{}'\n\
                      \n\
                      Use --force to regenerate everything, or:\n\
-                     \tnanny certs rotate     — regenerate server + client certs, keep CA\n\
-                     \tnanny certs show       — inspect current expiry",
+                     \tnanny certs rotate    , regenerate server + client certs, keep CA\n\
+                     \tnanny certs show      , inspect current expiry",
                     dir.display()
                 );
             }
@@ -275,7 +275,7 @@ fn cmd_certs_generate(
         .context("failed to sign client cert")?;
 
     // ── Write atomically ──────────────────────────────────────────────────────
-    // Write to temp names first, then rename — leaves the dir in a consistent
+    // Write to temp names first, then rename: leaves the dir in a consistent
     // state if we're interrupted mid-write.
     let files: &[(&str, String)] = &[
         ("ca.crt", ca_cert.pem()),
@@ -311,12 +311,12 @@ fn cmd_certs_generate(
         dir.display()
     );
     println!();
-    println!("  ca.crt      — CA certificate");
-    println!("  ca.key      — CA private key    (keep secure, used for rotate)");
-    println!("  server.crt  — server certificate");
-    println!("  server.key  — server private key");
-    println!("  client.crt  — client certificate (distribute to agents)");
-    println!("  client.key  — client private key  (distribute to agents)");
+    println!("  ca.crt     , CA certificate");
+    println!("  ca.key     , CA private key    (keep secure, used for rotate)");
+    println!("  server.crt , server certificate");
+    println!("  server.key , server private key");
+    println!("  client.crt , client certificate (distribute to agents)");
+    println!("  client.key , client private key  (distribute to agents)");
     println!();
     println!(
         "  valid until: {}",
@@ -342,7 +342,7 @@ fn cmd_certs_import(pairs: Vec<String>) -> Result<()> {
     for pair in &pairs {
         let (k, v) = pair.split_once('=').ok_or_else(|| {
             anyhow::anyhow!(
-                "invalid argument '{}' — expected key=value or key=@file\n\
+                "invalid argument '{}', expected key=value or key=@file\n\
                  Valid keys: ca, cert, key",
                 pair
             )
@@ -357,7 +357,7 @@ fn cmd_certs_import(pairs: Vec<String>) -> Result<()> {
             "ca" | "cert" | "key" => {
                 map.insert(k.to_string(), value);
             }
-            other => anyhow::bail!("unknown key '{}' — valid keys are: ca, cert, key", other),
+            other => anyhow::bail!("unknown key '{}', valid keys are: ca, cert, key", other),
         }
     }
 
@@ -375,7 +375,7 @@ fn cmd_certs_import(pairs: Vec<String>) -> Result<()> {
 
     check_git_warning(&dir);
 
-    // Write only the keys that were provided — partial import leaves others intact.
+    // Write only the keys that were provided: partial import leaves others intact.
     if let Some(ca_pem) = map.get("ca") {
         validate_pem(ca_pem, "ca").context("CA certificate is not valid PEM")?;
         std::fs::write(dir.join("ca.crt"), ca_pem).context("failed to write ca.crt")?;
@@ -401,7 +401,7 @@ fn cmd_certs_import(pairs: Vec<String>) -> Result<()> {
         println!("nanny certs: wrote server.key");
     }
 
-    // After any import — validate all three are present and cert is signed by CA.
+    // After any import: validate all three are present and cert is signed by CA.
     let ca_path = dir.join("ca.crt");
     let cert_path = dir.join("server.crt");
     let key_path = dir.join("server.key");
@@ -418,7 +418,7 @@ fn cmd_certs_import(pairs: Vec<String>) -> Result<()> {
     if !missing.is_empty() {
         println!();
         println!(
-            "nanny certs: warning — the following files are still missing: {:?}",
+            "nanny certs: warning, the following files are still missing: {:?}",
             missing
         );
         println!("Run `nanny certs import` again to provide the remaining files.");
@@ -430,7 +430,7 @@ fn cmd_certs_import(pairs: Vec<String>) -> Result<()> {
     let cert_pem = std::fs::read(cert_path).context("failed to read server.crt")?;
 
     validate_chain(&ca_pem, &cert_pem)
-        .context("chain validation failed — server.crt is not signed by ca.crt")?;
+        .context("chain validation failed, server.crt is not signed by ca.crt")?;
 
     // Read expiry from server cert and update meta.json.
     let expiry =
@@ -438,7 +438,7 @@ fn cmd_certs_import(pairs: Vec<String>) -> Result<()> {
     write_meta(&dir, expiry, &["imported".to_string()])?;
 
     println!();
-    println!("nanny certs: chain valid — server.crt is signed by ca.crt");
+    println!("nanny certs: chain valid, server.crt is signed by ca.crt");
     println!(
         "nanny certs: expires {}",
         expiry.format(&Rfc3339).unwrap_or_default()
@@ -446,7 +446,7 @@ fn cmd_certs_import(pairs: Vec<String>) -> Result<()> {
 
     if nanny_server_is_running() {
         println!();
-        println!("nanny certs: server is running — certs will hot-reload automatically");
+        println!("nanny certs: server is running, certs will hot-reload automatically");
     }
 
     Ok(())
@@ -471,7 +471,7 @@ fn cmd_certs_rotate(out_dir: Option<PathBuf>, sans: &[String]) -> Result<()> {
              `nanny certs rotate` only works when `nanny certs generate` created\n\
              your CA and Nanny holds the CA private key. For certs issued by an\n\
              external PKI (Vault, cert-manager, etc.), that system is responsible\n\
-             for rotation — import the new files with `nanny certs import`.",
+             for rotation, import the new files with `nanny certs import`.",
             ca_crt_path.display()
         );
     }
@@ -485,7 +485,7 @@ fn cmd_certs_rotate(out_dir: Option<PathBuf>, sans: &[String]) -> Result<()> {
              `nanny certs generate` created the CA.\n\
              \n\
              If your certs were issued by an external PKI (Vault, AWS ACM,\n\
-             your company's CA), the CA private key never leaves that system —\n\
+             your company's CA), the CA private key never leaves that system , \n\
              that is correct and expected. To update your certs, use\n\
              `nanny certs import` instead:\n\
              \n\
@@ -500,7 +500,7 @@ fn cmd_certs_rotate(out_dir: Option<PathBuf>, sans: &[String]) -> Result<()> {
         );
     }
 
-    // Load the existing CA key — used to sign the new server + client certs.
+    // Load the existing CA key: used to sign the new server + client certs.
     let ca_key_pem = std::fs::read_to_string(&ca_key_path).context("failed to read ca.key")?;
     let ca_key =
         KeyPair::from_pem(&ca_key_pem).context("failed to load CA key pair from ca.key")?;
@@ -508,7 +508,7 @@ fn cmd_certs_rotate(out_dir: Option<PathBuf>, sans: &[String]) -> Result<()> {
     // Reconstruct a CA cert signing object using the same fixed parameters as
     // `nanny certs generate` (DN: "Nanny CA", IsCa::Ca).
     //
-    // We use the existing ca.key — same private key → same public key → same
+    // We use the existing ca.key: same private key → same public key → same
     // SubjectKeyIdentifier. Chain validation passes because:
     //   • Issuer DN in new server/client certs = "Nanny CA" = Subject DN in ca.crt
     //   • Signature on new certs verifies against the public key in ca.crt
@@ -565,7 +565,7 @@ fn cmd_certs_rotate(out_dir: Option<PathBuf>, sans: &[String]) -> Result<()> {
         .signed_by(&client_key, &ca_cert, &ca_key)
         .context("failed to sign client cert with existing CA")?;
 
-    // ── Write atomically — CA files are NOT touched ───────────────────────────
+    // ── Write atomically: CA files are NOT touched ───────────────────────────
     let files: &[(&str, String)] = &[
         ("server.crt", server_cert.pem()),
         ("server.key", server_key.serialize_pem()),
@@ -591,18 +591,18 @@ fn cmd_certs_rotate(out_dir: Option<PathBuf>, sans: &[String]) -> Result<()> {
 
     write_meta(&dir, not_after, &server_sans)?;
 
-    println!("nanny certs: rotated — server + client certs regenerated, CA preserved");
+    println!("nanny certs: rotated, server + client certs regenerated, CA preserved");
     println!(
         "  valid until: {}",
         not_after.format(&Rfc3339).unwrap_or_default()
     );
     println!();
-    println!("  CA unchanged — existing agents retain their trust anchor");
+    println!("  CA unchanged, existing agents retain their trust anchor");
     println!("  Redistribute client.crt + client.key to agents on other machines");
 
     if nanny_server_is_running() {
         println!();
-        println!("nanny certs: server is running — certs will hot-reload automatically");
+        println!("nanny certs: server is running, certs will hot-reload automatically");
     }
 
     Ok(())
@@ -615,7 +615,7 @@ fn cmd_certs_remove() -> Result<()> {
 
     if !dir.exists() {
         println!(
-            "nanny certs: nothing to remove — '{}' does not exist",
+            "nanny certs: nothing to remove, '{}' does not exist",
             dir.display()
         );
         return Ok(());
@@ -665,7 +665,7 @@ fn cmd_certs_show() -> Result<()> {
     let dir = default_certs_dir();
 
     if !dir.exists() {
-        println!("nanny certs: no certificates found — run `nanny certs generate`");
+        println!("nanny certs: no certificates found, run `nanny certs generate`");
         return Ok(());
     }
 
@@ -694,7 +694,7 @@ fn cmd_certs_show() -> Result<()> {
                 expiry.format(&Rfc3339).unwrap_or_default()
             );
             println!(
-                "  san     : (unavailable — re-run `nanny certs generate` to rebuild meta.json)"
+                "  san     : (unavailable, re-run `nanny certs generate` to rebuild meta.json)"
             );
         }
     }
@@ -731,7 +731,7 @@ fn cmd_certs_show() -> Result<()> {
 ///
 /// New connections use the new cert immediately; existing connections
 /// finish on the old cert until they disconnect.
-#[allow(dead_code)] // consumed by nanny run --serve (Day 3 — NetworkListener hot-reload)
+#[allow(dead_code)] // consumed by nanny run --serve (Day 3, NetworkListener hot-reload)
 pub fn watch_certs_dir(
     dir: &Path,
 ) -> Result<std::sync::mpsc::Receiver<notify::Result<notify::Event>>> {
@@ -755,7 +755,7 @@ pub fn watch_certs_dir(
 
 /// Warn if the certs directory is inside a git-tracked tree.
 /// Certs should never be committed. ~/.nanny/certs/ is outside any project
-/// directory by default — this only fires for unusual --out-dir overrides.
+/// directory by default: this only fires for unusual --out-dir overrides.
 fn check_git_warning(dir: &Path) {
     let inside_git = std::process::Command::new("git")
         .args([
@@ -770,7 +770,7 @@ fn check_git_warning(dir: &Path) {
 
     if inside_git {
         eprintln!(
-            "nanny certs: warning — '{}' is inside a git repository.\n\
+            "nanny certs: warning, '{}' is inside a git repository.\n\
              Certificate private keys must never be committed. Add to .gitignore:\n\
              \n\
              \techo '{}' >> .gitignore",
@@ -1043,7 +1043,7 @@ mod tests {
         cmd_certs_rotate(Some(dir.clone()), &[]).unwrap();
 
         let new_server = fs::read(dir.join("server.crt")).unwrap();
-        // Certs are regenerated — the PEM bytes differ (a fresh key each rotate).
+        // Certs are regenerated: the PEM bytes differ (a fresh key each rotate).
         assert_ne!(
             original_server, new_server,
             "rotated server.crt must differ from original"
@@ -1057,7 +1057,7 @@ mod tests {
         let dir = tmp_dir();
         cmd_certs_generate(Some(dir.clone()), false, 365, &[]).unwrap();
 
-        // Import using @file syntax — re-import the same certs.
+        // Import using @file syntax: re-import the same certs.
         let ca_path = dir.join("ca.crt");
         let cert_path = dir.join("server.crt");
         let _key_path = dir.join("server.key");
@@ -1110,7 +1110,7 @@ mod tests {
         let pem = fs::read(dir.join("server.crt")).unwrap();
         let expiry = cert_expiry_from_pem(&pem).expect("expiry must parse");
 
-        // cert valid for 30 days — expiry should be in the future
+        // cert valid for 30 days: expiry should be in the future
         assert!(
             expiry > OffsetDateTime::now_utc(),
             "expiry must be in the future"

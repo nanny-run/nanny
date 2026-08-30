@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 /// Every possible reason execution was stopped.
 ///
 /// This enum is exhaustive by design. Adding a new stop condition requires
-/// adding a variant here first — the compiler will then force every match
+/// adding a variant here first: the compiler will then force every match
 /// site to handle it. That is the point.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -20,7 +20,7 @@ pub enum StopReason {
     ManualStop,
 
     /// The agent declared itself complete.
-    /// This is a successful, normal termination — not a constraint violation.
+    /// This is a successful, normal termination: not a constraint violation.
     AgentCompleted,
 }
 
@@ -46,7 +46,7 @@ pub enum ExecutionState {
     Stopped { reason: StopReason },
 
     /// Execution ended due to an unrecoverable internal error.
-    /// Distinct from Stopped — this is abnormal termination.
+    /// Distinct from Stopped: this is abnormal termination.
     Failed { error: String },
 }
 
