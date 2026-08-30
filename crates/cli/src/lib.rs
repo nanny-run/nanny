@@ -4,8 +4,11 @@
 //!
 //! ```toml
 //! [dependencies]
-//! nanny = "0.3"
+//! nannyd = "0.6"
 //! ```
+//!
+//! The package is `nannyd`; the library it exposes is `nanny`, which is why the
+//! import below does not match the dependency name.
 //!
 //! ```rust,ignore
 //! use nanny::{tool, rule, agent, PolicyContext};
