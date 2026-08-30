@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.6.0] - 2026-08-19
+## [0.6.0] - 2026-08-30
 
 ### Added
 
@@ -102,9 +102,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   two-command shell-launcher pattern this previously required: `nanny` is
   PID 1, receives SIGTERM/SIGINT directly, and owns the child so it's
   reaped instead of orphaned if either side dies.
-- **`[proxy] allowed_hosts` now refuses to start if the bridge can't
-  actually enforce it** (breaking change), a fail-closed default in place
-  of silently not enforcing an allowlist the config claimed was active.
+- **`fresh_run` is replaced by `run_scope` in the Rust SDK** (breaking
+  change), matching the Python SDK. `fresh_run` wrote a process-global run
+  id, which is correct for one run per process and wrong for a host serving
+  several at once.
 - **Token files are created owner-only from the start**, not `chmod`'d
   after creation, closing the brief window where they were readable more
   broadly right after creation.
