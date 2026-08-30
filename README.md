@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <strong>Open-source enforcement primitive for autonomous systems.</strong><br/>
+  <strong>Open-source authorization and audit layer for AI agents that take real-world actions.</strong><br/>
   Bounded authority. Deterministic stops. Provable audit trail.
 </p>
 

@@ -3,13 +3,13 @@ title: Introduction
 description: What Nanny is, what it is not, and when to use it.
 ---
 
-You deploy a multi-agent system on Friday. Monday morning your CFO sends a Slack: "Why did we spend $4,000 over the weekend?" One agent got stuck in a loop. Nobody stopped it. No audit trail. Nothing.
+You deploy a multi-agent system on Friday. Monday morning a customer forwards you an email your agent sent them. Nobody approved it, nobody knew it could send email, and there is no record of what the agent was allowed to do or why it decided to.
 
 This is happening right now at hundreds of companies.
 
-**Nanny is the enforcement primitive that prevents it.**
+**Nanny is the authorization and audit layer that prevents it.**
 
-Nanny is an open-source authorization and audit layer for AI agents that take real-world actions. You declare what each agent is allowed to do, which tools it may call and under what rules, and the moment it tries something outside that, Nanny stops the run and records exactly what happened.
+Your agent may only do what it is authorized to do, and you can prove it. Nanny is open source, and governs AI agents that take real-world actions. You declare what each agent is allowed to do, which tools it may call and under what rules, and the moment it tries something outside that, Nanny stops the run and records exactly what happened.
 
 No grace period. No soft warnings. No recovery logic. No negotiation.
 
