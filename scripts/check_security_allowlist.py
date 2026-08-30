@@ -3,7 +3,7 @@
 
 Fails if an entry looks unreviewed: missing/placeholder notes, no expiry, or
 an already-expired entry left active. The allowlist is a reviewed baseline,
-not a place to silently suppress a new finding — this catches the case
+not a place to silently suppress a new finding, this catches the case
 where someone adds an alert number with a lazy or copy-pasted note just to
 make the gate pass.
 
@@ -91,14 +91,14 @@ def validate(allowlist: list[dict]) -> list[str]:
                 offenses.append(f"{label}: \"expiry\" ({expiry_raw!r}) is not a parseable ISO date (YYYY-MM-DD)")
             elif entry.get("active", True) is not False and expiry < today:
                 offenses.append(
-                    f"{label}: expiry ({expiry_raw}) has passed and the entry is still active — "
+                    f"{label}: expiry ({expiry_raw}) has passed and the entry is still active, "
                     "resolve the finding or extend the expiry with a reason"
                 )
 
         notes = (entry.get("notes") or "").strip()
         if len(notes) < MIN_NOTES_LENGTH:
             offenses.append(
-                f"{label}: \"notes\" is missing or too short ({len(notes)} chars, need {MIN_NOTES_LENGTH}+) — "
+                f"{label}: \"notes\" is missing or too short ({len(notes)} chars, need {MIN_NOTES_LENGTH}+), "
                 "trace the actual reason, don't just name the package"
             )
         elif any(p.match(notes) for p in PLACEHOLDER_PATTERNS):

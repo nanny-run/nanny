@@ -26,7 +26,7 @@ def no_identical_repeat_call(ctx: PolicyContext) -> bool:
     *pending* call, so the previous call's arguments are not available to
     compare against. An earlier version of this rule claimed to make that
     comparison and, having no arguments to compare, denied every consecutive
-    call that had any arguments at all — which refuses an ordinary research loop
+    call that had any arguments at all, which refuses an ordinary research loop
     on its second search. Narrow and true beats broad and wrong, especially in a
     pack that installs unread.
     """
