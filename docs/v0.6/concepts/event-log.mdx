@@ -5,7 +5,7 @@ description: Every Nanny execution emits a structured NDJSON event log. Here's w
 
 ## Format
 
-The event log is **NDJSON** — one JSON object per line, emitted in chronological order.
+The event log is **NDJSON**, one JSON object per line, emitted in chronological order.
 Every object has an `"event"` field identifying its type and a `"ts"` field with a Unix
 timestamp in milliseconds.
 
@@ -21,7 +21,7 @@ log = "file"
 
 This writes to `.nanny/logs/log.ndjson`, a location Nanny always owns and auto-creates,
 never something you point at a path yourself. Only set `file` if you want a different
-name — a bare name, no extension, Nanny always appends `.ndjson` itself:
+name: a bare name, no extension. Nanny always appends `.ndjson` itself:
 
 ```toml
 [observability]
@@ -100,7 +100,7 @@ When the Rust SDK macros or Python SDK decorators are active, additional events 
 | `AgentScopeExited` | When a `#[nanny::agent("name")]` function returns |
 | `RulesDeclared` | Once, when the agent declares which rules it registered |
 
-`ToolDenied` and `RuleDenied` are distinct denial events — `ToolDenied` means the tool was not permitted at all; `RuleDenied` means the tool was permitted but a rule blocked this specific call.
+`ToolDenied` and `RuleDenied` are distinct denial events. `ToolDenied` means the tool was not permitted at all; `RuleDenied` means the tool was permitted but a rule blocked this specific call.
 `ToolFailed` is different from both: the tool was allowed and called, but hit a runtime error. No tokens are recorded for a failure.
 
 ## Using the log

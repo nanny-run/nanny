@@ -16,17 +16,17 @@ pip install nanny-sdk
 When running outside `nanny run`, every decorator is a no-op. The function executes normally with no enforcement overhead:
 
 ```bash
-# Governed — enforcement active (reads [start].cmd from nanny.toml)
+# Governed: enforcement active (reads [start].cmd from nanny.toml)
 nanny run
 
-# Not governed — decorators silent, agent runs normally
+# Not governed: decorators silent, agent runs normally
 python agent.py
 uv run agent.py
 ```
 
 ---
 
-## `@tool` — declare a governed tool
+## `@tool`: declare a governed tool
 
 Mark a function as a tool that Nanny should govern:
 
@@ -44,7 +44,7 @@ When the agent calls `fetch_page`:
 1. Nanny checks: is `fetch_page` in the `[tools] allowed` list?
 2. Nanny checks: has `fetch_page` exceeded `[tools.fetch_page] max_calls`?
 3. Nanny records 10 tokens for attribution.
-4. If any check fails, a `NannyStop` exception is raised — the function body never runs.
+4. If any check fails, a `NannyStop` exception is raised, the function body never runs.
 
 Works identically for async functions:
 
@@ -81,7 +81,7 @@ max_calls = 10   # most calls to this tool in one run
 
 ---
 
-## `instrument` — automatic LLM token tracking
+## `instrument`: automatic LLM token tracking
 
 Call `nanny_sdk.instrument(client)` once at startup to report LLM token usage automatically. Every completion response is intercepted and its counts recorded.
 
@@ -92,7 +92,7 @@ import openai
 import nanny_sdk
 
 client = openai.OpenAI()
-nanny_sdk.instrument(client)   # one line — done
+nanny_sdk.instrument(client)   # one line, done
 
 # From here on, every response's token usage is reported to Nanny.
 response = client.chat.completions.create(
@@ -101,21 +101,21 @@ response = client.chat.completions.create(
 )
 ```
 
-Supported clients (detected by duck-typing — no provider package is imported):
+Supported clients (detected by duck-typing, no provider package is imported):
 
-- **OpenAI, Groq, Together AI, Azure OpenAI, LiteLLM** — any client with a `chat.completions.create` method
-- **Anthropic** — `client.messages.create`
-- **Mistral** — `client.chat.complete`
-- **Google Gemini** (`google-genai` SDK) — `client.models.generate_content`
-- **Cohere v2** — `cohere.ClientV2`
+- **OpenAI, Groq, Together AI, Azure OpenAI, LiteLLM**: any client with a `chat.completions.create` method
+- **Anthropic**: `client.messages.create`
+- **Mistral**: `client.chat.complete`
+- **Google Gemini** (`google-genai` SDK), `client.models.generate_content`
+- **Cohere v2**: `cohere.ClientV2`
 
-`instrument` returns the same client unchanged — it patches the method in-place. In passthrough mode (outside `nanny run`), it is a no-op: no wrapping, no overhead.
+`instrument` returns the same client unchanged, it patches the method in-place. In passthrough mode (outside `nanny run`), it is a no-op: no wrapping, no overhead.
 
-For providers that report prompt-caching usage (OpenAI, Anthropic, DeepSeek, Gemini), `instrument` also captures it and reports it as `cache_read`/`cache_write` — a finer split of `input`, never additional tokens beyond it, and never used for enforcement (Nanny still debits `input + output` exactly as before). Every provider names and shapes this data differently, so `instrument` normalizes each one's own vocabulary into these two generic fields; absent, not zero, for a provider/response that doesn't report cache usage at all. Exists purely so a downstream cost calculator can price cache-hit tokens at their real, much cheaper rate — see [`LlmUsageRecorded`](/v0.6/reference/events#llmusagerecorded) for the full field reference.
+For providers that report prompt-caching usage (OpenAI, Anthropic, DeepSeek, Gemini), `instrument` also captures it and reports it as `cache_read`/`cache_write`, a finer split of `input`, never additional tokens beyond it, and never used for enforcement (Nanny still debits `input + output` exactly as before). Every provider names and shapes this data differently, so `instrument` normalizes each one's own vocabulary into these two generic fields; absent, not zero, for a provider/response that doesn't report cache usage at all. Exists purely so a downstream cost calculator can price cache-hit tokens at their real, much cheaper rate, see [`LlmUsageRecorded`](/v0.6/reference/events#llmusagerecorded) for the full field reference.
 
 ---
 
-## `@rule` — declare an enforcement rule
+## `@rule`: declare an enforcement rule
 
 A rule is a function that returns a verdict on whether execution should continue.
 Return `True` to allow, `False` to deny:
@@ -153,7 +153,7 @@ The `ctx` parameter gives you a snapshot of the current execution state:
 | `elapsed_ms`        | `int`                  | Wall-clock time since the run started |
 | `now_ms`            | `int`                  | Wall-clock at evaluation, milliseconds since the epoch |
 
-Rules are evaluated **before** the tool runs — `requested_tool` is set to the tool name being checked. Use `last_tool_args` for content-based enforcement:
+Rules are evaluated **before** the tool runs, `requested_tool` is set to the tool name being checked. Use `last_tool_args` for content-based enforcement:
 
 ```python
 @rule("no_sensitive_files")
@@ -203,7 +203,7 @@ Works identically for async functions. A scope does not change what the agent ma
 
 ---
 
-## `run_scope` — an independent run inside one process
+## `run_scope`: an independent run inside one process
 
 A **run** is Nanny's unit of governance: one rule set, one stop state, final
 once stopped. A long-lived server wants each request to be its own run, so a
@@ -228,7 +228,7 @@ mode does not need to branch.
 
 ---
 
-## `get_run_events` — read a run's events from your own code
+## `get_run_events`: read a run's events from your own code
 
 Returns the events a governance server has buffered for one run:
 
@@ -252,7 +252,7 @@ closed.
 
 ---
 
-## `set_app` — declare which app this process is
+## `set_app`: declare which app this process is
 
 ```python
 from nanny_sdk import set_app
@@ -296,7 +296,7 @@ except NannyStop as e:
     print(f"Stopped: {type(e).__name__}")
 ```
 
-`BridgeUnavailable` is raised when Nanny’s enforcement layer is active but unreachable during rule evaluation or a tool call. Nanny fails closed — the agent does not continue ungoverned. Like all `NannyStop` subclasses it extends `BaseException`, so it propagates through broad `except Exception` handlers in agent frameworks without being swallowed.
+`BridgeUnavailable` is raised when Nanny’s enforcement layer is active but unreachable during rule evaluation or a tool call. Nanny fails closed, the agent does not continue ungoverned. Like all `NannyStop` subclasses it extends `BaseException`, so it propagates through broad `except Exception` handlers in agent frameworks without being swallowed.
 
 Under plain `nanny run` (single process, no `--serve`), you do not need to handle stop reasons in most agent code. They propagate up the call stack and terminate the process, since `nanny run` is watching that process and exits it for you. Catching them there is useful mainly in test code and at the CLI entry point.
 
@@ -434,8 +434,8 @@ Stack `@lc_tool` (outer) and `@nanny_tool` (inner). LangChain registers the func
 from langchain_core.tools import tool as lc_tool
 from nanny_sdk import tool as nanny_tool
 
-@lc_tool                    # outer — LangChain registers for tool dispatch
-@nanny_tool(tokens=5)         # inner — Nanny intercepts before file is opened
+@lc_tool                    # outer: LangChain registers for tool dispatch
+@nanny_tool(tokens=5)         # inner: Nanny intercepts before file is opened
 def read_file(path: str) -> str:
     """Read a source file from disk."""
     with open(path) as f:
@@ -446,14 +446,14 @@ Execution order: your code calls `tool.run(args)` → LangChain validates args �
 
 ### CrewAI
 
-Same stacking pattern. CrewAI's `@tool` decorator and Nanny's `@tool` decorator both wrap the function — Nanny's wrapper fires on every `tool.run()` call inside the crew:
+Same stacking pattern. CrewAI's `@tool` decorator and Nanny's `@tool` decorator both wrap the function. Nanny's wrapper fires on every `tool.run()` call inside the crew:
 
 ```python
 from crewai.tools import tool as crew_tool
 from nanny_sdk import tool as nanny_tool
 
-@crew_tool                  # outer — CrewAI registers for agent dispatch
-@nanny_tool(tokens=15)        # inner — Nanny intercepts before function runs
+@crew_tool                  # outer: CrewAI registers for agent dispatch
+@nanny_tool(tokens=15)        # inner: Nanny intercepts before function runs
 def generate_chart(metric: str, output_dir: str) -> str:
     """Generate an interactive Plotly chart for a metric."""
     # ... chart generation ...

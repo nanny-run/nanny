@@ -14,7 +14,7 @@ flowchart TD
 
     CMD --> NANNY
 
-    subgraph NANNY["Nanny — parent process"]
+    subgraph NANNY["Nanny, parent process"]
         direction LR
 
         subgraph CHILD["Child process"]
@@ -45,17 +45,17 @@ Nanny exits non-zero.
 
 ## Multi-agent governance
 
-When multiple agents run in the same process — as in CrewAI, LangGraph, AutoGen, or any framework that orchestrates agents within a single Python or Rust runtime — the enforcement model above applies to all of them simultaneously. A single `nanny run` governs the entire fleet.
+When multiple agents run in the same process, as in CrewAI, LangGraph, AutoGen, or any framework that orchestrates agents within a single Python or Rust runtime, the enforcement model above applies to all of them simultaneously. A single `nanny run` governs the entire fleet.
 
 ```mermaid
 flowchart TD
     CMD(["$ nanny run"])
     CMD --> NANNY
 
-    subgraph NANNY["Nanny — parent process"]
+    subgraph NANNY["Nanny, parent process"]
         direction TB
 
-        subgraph CHILD["Child process — crew.kickoff()"]
+        subgraph CHILD["Child process, crew.kickoff()"]
             direction LR
             A1["@agent('ingestion')"]
             A2["@agent('analysis')"]
@@ -115,4 +115,4 @@ fn search(query: &str) -> String {
 }
 ```
 
-This means you can ship instrumented code and run it in development, CI, and production without Nanny — until you explicitly wrap it with `nanny run`. The behaviour is identical either way.
+This means you can ship instrumented code and run it in development, CI, and production without Nanny, until you explicitly wrap it with `nanny run`. The behaviour is identical either way.

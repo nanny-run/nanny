@@ -13,7 +13,7 @@ Use the governance server when agents run in **separate processes or on separate
 - **CI workers:** a coordinator spins up workers on different machines; you want every worker held to the same rules
 - **Development clusters:** a Kubernetes pod runs the server; a local dev agent connects to it while you iterate
 
-If your agents all run inside a single `nanny run` — even a complex CrewAI or LangGraph pipeline with many agents — you do not need the governance server.
+If your agents all run inside a single `nanny run`, even a complex CrewAI or LangGraph pipeline with many agents, you do not need the governance server.
 
 ---
 
@@ -21,11 +21,11 @@ If your agents all run inside a single `nanny run` — even a complex CrewAI or 
 
 | Mode | Command | Transport | When to use |
 |------|---------|-----------|-------------|
-| Local inline | `nanny run` | Unix socket / TCP loopback (OS-enforced) | Single process, single machine — the default |
-| Local governance server | `nanny run --serve` | Plain HTTP on loopback — no certs needed | Multiple processes on one machine |
-| Cross-machine governance server | `nanny run --serve --addr 0.0.0.0:62669` | mTLS — mandatory, certs required | Docker, Kubernetes, remote agents |
+| Local inline | `nanny run` | Unix socket / TCP loopback (OS-enforced) | Single process, single machine, the default |
+| Local governance server | `nanny run --serve` | Plain HTTP on loopback, no certs needed | Multiple processes on one machine |
+| Cross-machine governance server | `nanny run --serve --addr 0.0.0.0:62669` | mTLS, mandatory, certs required | Docker, Kubernetes, remote agents |
 
-The bind address determines the security posture. The default (`127.0.0.1:62669`) is loopback — plain HTTP, no cert setup required. Binding to a non-loopback address enables network access and makes mTLS mandatory; the server refuses to start without cert files.
+The bind address determines the security posture. The default (`127.0.0.1:62669`) is loopback, plain HTTP, no cert setup required. Binding to a non-loopback address enables network access and makes mTLS mandatory; the server refuses to start without cert files.
 
 ---
 
@@ -53,14 +53,14 @@ A confirmation message appears before your agent starts:
 
 ```
 nanny: network server detected at 127.0.0.1:62669
-nanny: governance enforced remotely — limits and rules apply
+nanny: governance enforced remotely, limits and rules apply
 ```
 
 ---
 
 ## Setup: cross-machine (mTLS required)
 
-When your agents run on different machines, the server must verify that only your agents can connect — not anyone else on the network.
+When your agents run on different machines, the server must verify that only your agents can connect, not anyone else on the network.
 
 ### Step 1: Generate certificates
 
@@ -71,12 +71,12 @@ nanny certs generate
 This creates five files in `~/.nanny/certs/`:
 
 ```
-ca.crt      — CA certificate (the trust anchor — share with all agents)
-ca.key      — CA private key (keep this on the server machine only)
-server.crt  — server certificate (used by nanny run --serve)
-server.key  — server private key (keep this on the server machine only)
-client.crt  — client certificate (copy to each agent machine)
-client.key  — client private key (copy to each agent machine)
+ca.crt      CA certificate (the trust anchor, share with all agents)
+ca.key      CA private key (keep this on the server machine only)
+server.crt  server certificate (used by nanny run --serve)
+server.key  server private key (keep this on the server machine only)
+client.crt  client certificate (copy to each agent machine)
+client.key  client private key (copy to each agent machine)
 ```
 
 Default validity: 365 days. To see expiry dates at any time:
@@ -117,7 +117,7 @@ cat ~/.nanny/servers/<appId>/server.token
 On each agent machine, create a `.env` file with the token value you just copied and the cert paths from Step 3:
 
 ```ini
-# .env (never commit this file — add it to .gitignore)
+# .env (never commit this file: add it to .gitignore)
 NANNY_BRIDGE_ADDR=server.example.com:62669
 NANNY_SESSION_TOKEN=<paste value from ~/.nanny/servers/<appId>/server.token>
 NANNY_BRIDGE_CERT=/path/to/client.crt
@@ -205,7 +205,7 @@ nanny certs rotate
 # Show expiry dates and SAN list
 nanny certs show
 
-# Import externally-issued certs (BYOC — HashiCorp Vault, AWS ACM, etc.)
+# Import externally-issued certs (BYOC: HashiCorp Vault, AWS ACM, etc.)
 nanny certs import ca=@/path/to/ca.crt cert=@/path/to/server.crt key=@/path/to/server.key
 
 # Remove all certs from ~/.nanny/certs/ (asks for confirmation)
@@ -214,9 +214,9 @@ nanny certs remove
 
 ### Certificate hot-reload
 
-The server watches `~/.nanny/certs/` for file changes. When any cert file is replaced — by `nanny certs rotate`, `nanny certs import`, or a PKI automation system writing to the directory — the server reloads the cert into memory without restarting. New connections use the new cert immediately; existing connections finish on the old cert.
+The server watches `~/.nanny/certs/` for file changes. When any cert file is replaced, by `nanny certs rotate`, `nanny certs import`, or a PKI automation system writing to the directory, the server reloads the cert into memory without restarting. New connections use the new cert immediately; existing connections finish on the old cert.
 
-This matters for short-lived PKI certs (for example, 8-hour Vault-issued certs renewed by Vault Agent) — you do not need to restart the governance server when certs are rotated.
+This matters for short-lived PKI certs (for example, 8-hour Vault-issued certs renewed by Vault Agent), you do not need to restart the governance server when certs are rotated.
 
 ### Externally-issued certificates (BYOC)
 
@@ -235,13 +235,13 @@ nanny certs import \
   cert="$VAULT_CERT" \
   key="$VAULT_KEY"
 
-# Partial import — update only the cert and key, keep the existing CA
+# Partial import: update only the cert and key, keep the existing CA
 nanny certs import cert=@new-server.crt key=@new-server.key
 ```
 
 Partial imports are supported: omit any key to leave the existing file unchanged. After any import, Nanny validates that the imported cert is signed by the imported (or existing) CA and fails loudly on a mismatch.
 
-`nanny certs rotate` works only when `nanny certs generate` created the CA — because it needs the CA private key (`ca.key`) on disk to sign new certs. For externally-issued certs, the CA private key never leaves your PKI system. Use `nanny certs import` instead for rotation.
+`nanny certs rotate` works only when `nanny certs generate` created the CA, because it needs the CA private key (`ca.key`) on disk to sign new certs. For externally-issued certs, the CA private key never leaves your PKI system. Use `nanny certs import` instead for rotation.
 
 ---
 

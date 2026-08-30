@@ -67,7 +67,7 @@ nanny: governance server running
 
 ## When the cloud is unreachable
 
-Nothing is lost and nothing blocks. A batch that cannot be delivered is retried with backoff, and if it still cannot be sent it is written to a durable outbox under `.nanny/spool/live/` or `.nanny/spool/sandbox/` (whichever your key is — see [Live and sandbox](/v0.6/guides/environments)) and delivered on the next run, oldest first.
+Nothing is lost and nothing blocks. A batch that cannot be delivered is retried with backoff, and if it still cannot be sent it is written to a durable outbox under `.nanny/spool/live/` or `.nanny/spool/sandbox/` (whichever your key is, see [Live and sandbox](/v0.6/guides/environments)) and delivered on the next run, oldest first.
 
 Each held batch carries the session it belongs to, so replayed events land under the run that actually produced them rather than being merged into whichever run happens to deliver them. Cloud de-duplicates on content, so an overlapping replay is a no-op.
 

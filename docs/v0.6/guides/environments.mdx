@@ -1,6 +1,6 @@
 ---
 title: Live and sandbox
-description: Two environments, one host, chosen entirely by which API key you use — never a flag, never a config field.
+description: Two environments, one host, chosen entirely by which API key you use, never a flag, never a config field.
 ---
 
 ## There is one host
@@ -18,7 +18,7 @@ nny_sdbx_...   # sandbox: same enforcement, nothing counted
 ```
 
 Create either kind from the dashboard under **Settings → API Keys**. Enforcement
-is identical either way — the same rules, the same limits, the same stop
+is identical either way, the same rules, the same limits, the same stop
 behavior. Only what happens to the data differs.
 
 ## What sandbox is for
@@ -26,7 +26,7 @@ behavior. Only what happens to the data differs.
 Point a real deployment at a sandbox key while you're building or testing a
 new rule set, without any chance of a test run polluting your live dashboard,
 your live compliance evidence, or your live retention window. Confirming your
-own events actually arrive is the whole point — sandbox is the real ingest
+own events actually arrive is the whole point, sandbox is the real ingest
 path, not a mock, so what you see there is what production will see too.
 
 ## What sandbox does not have
@@ -45,7 +45,7 @@ disposable.
 ## Switching keys is safe
 
 Enforcement never depends on the network, so a batch the cloud could not take
-yet is held locally under `.nanny/spool/` until it can be delivered — see
+yet is held locally under `.nanny/spool/` until it can be delivered, see
 [Connect to Nanny Cloud](/v0.6/guides/managed-mode#when-the-cloud-is-unreachable).
 That outbox is partitioned by environment (`.nanny/spool/live/`,
 `.nanny/spool/sandbox/`), so switching from a sandbox key back to a live one
@@ -56,4 +56,4 @@ credential. If the other side is holding anything, the next run says so:
 nanny: sync: 12 batch(es) held for sandbox, not sent: this run is live
 ```
 
-Nothing is sent, and nothing is lost — switch back and it delivers.
+Nothing is sent, and nothing is lost, switch back and it delivers.
