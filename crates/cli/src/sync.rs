@@ -855,10 +855,10 @@ mod tests {
             endpoint: CloudEnv::Prod.ingest_url(),
             api_key: "nny_k".into(),
         };
-        let line = sync_status_line(Ok(&t), Some("gotm-nanny"));
+        let line = sync_status_line(Ok(&t), Some("acme-agent"));
         assert!(line.contains("managed"), "{line}");
         assert!(line.contains("https://api.nanny.run"), "{line}");
-        assert!(line.contains("gotm-nanny"), "{line}");
+        assert!(line.contains("acme-agent"), "{line}");
         assert!(
             !line.contains("/v1/ingest"),
             "show the host, not the route: {line}"

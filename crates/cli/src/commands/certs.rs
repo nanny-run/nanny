@@ -55,10 +55,10 @@ pub enum CertsCommand {
         ///
         /// Required whenever anything joins over a name other than localhost:
         /// a client verifies the hostname it dialled against this list, so a
-        /// governor reached at `gotm-server:62669` needs `--san gotm-server`
+        /// governor reached at `agents-host:62669` needs `--san agents-host`
         /// or the handshake fails before any request is made.
         ///
-        ///     nanny certs generate --san gotm-server --san 10.0.1.4
+        ///     nanny certs generate --san agents-host --san 10.0.1.4
         #[arg(long = "san", value_name = "HOST")]
         sans: Vec<String>,
     },
@@ -964,10 +964,10 @@ mod tests {
         // `nanny run --serve` on loopback, `nanny status` and every test dial
         // 127.0.0.1, and a cert that stopped covering it would turn a working
         // machine into a handshake failure.
-        let sans = server_sans(&["gotm-server".to_string(), "10.0.1.4".to_string()]);
+        let sans = server_sans(&["agents-host".to_string(), "10.0.1.4".to_string()]);
         assert_eq!(
             sans,
-            vec!["localhost", "127.0.0.1", "gotm-server", "10.0.1.4"]
+            vec!["localhost", "127.0.0.1", "agents-host", "10.0.1.4"]
         );
     }
 
@@ -976,19 +976,19 @@ mod tests {
         let sans = server_sans(&[
             "localhost".to_string(),
             "  ".to_string(),
-            "gotm-server".to_string(),
-            "gotm-server".to_string(),
+            "agents-host".to_string(),
+            "agents-host".to_string(),
         ]);
-        assert_eq!(sans, vec!["localhost", "127.0.0.1", "gotm-server"]);
+        assert_eq!(sans, vec!["localhost", "127.0.0.1", "agents-host"]);
     }
 
     #[test]
     fn a_generated_cert_carries_the_requested_hostname() {
         let dir = tmp_dir();
-        cmd_certs_generate(Some(dir.clone()), false, 365, &["gotm-server".to_string()]).unwrap();
+        cmd_certs_generate(Some(dir.clone()), false, 365, &["agents-host".to_string()]).unwrap();
         let meta = read_meta(&dir).unwrap();
         assert!(
-            meta.san.contains(&"gotm-server".to_string()),
+            meta.san.contains(&"agents-host".to_string()),
             "the hostname a client will dial must be on the cert: {:?}",
             meta.san
         );
@@ -1006,12 +1006,12 @@ mod tests {
         // starts failing its handshake hours later, with nothing in the
         // rotation output to suggest why.
         let dir = tmp_dir();
-        cmd_certs_generate(Some(dir.clone()), false, 365, &["gotm-server".to_string()]).unwrap();
+        cmd_certs_generate(Some(dir.clone()), false, 365, &["agents-host".to_string()]).unwrap();
 
         cmd_certs_rotate(Some(dir.clone()), &[]).unwrap();
         let kept = read_meta(&dir).unwrap();
         assert!(
-            kept.san.contains(&"gotm-server".to_string()),
+            kept.san.contains(&"agents-host".to_string()),
             "rotation must carry the names forward: {:?}",
             kept.san
         );
@@ -1026,7 +1026,7 @@ mod tests {
             replaced.san
         );
         assert!(
-            !replaced.san.contains(&"gotm-server".to_string()),
+            !replaced.san.contains(&"agents-host".to_string()),
             "{:?}",
             replaced.san
         );

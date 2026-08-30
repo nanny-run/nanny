@@ -28,9 +28,9 @@ def _expect_app(bridge: HTTPServer) -> None:
 
 def test_declares_app_id_and_name(mock_bridge: HTTPServer) -> None:
     _expect_app(mock_bridge)
-    set_app("app_70c74914f3694d03a18c70dbca8fb8d8", "gotm-nanny")
+    set_app("app_70c74914f3694d03a18c70dbca8fb8d8", "acme-agent")
     assert _app_posts(mock_bridge) == [
-        {"app_id": "app_70c74914f3694d03a18c70dbca8fb8d8", "name": "gotm-nanny"}
+        {"app_id": "app_70c74914f3694d03a18c70dbca8fb8d8", "name": "acme-agent"}
     ]
 
 
@@ -64,13 +64,13 @@ def test_noop_in_passthrough(monkeypatch: pytest.MonkeyPatch) -> None:
     # decorators and `instrument` behave. No bridge fixture here on purpose.
     for var in ("NANNY_BRIDGE_SOCKET", "NANNY_BRIDGE_PORT", "NANNY_BRIDGE_ADDR"):
         monkeypatch.delenv(var, raising=False)
-    set_app("app_abc", "gotm-nanny")  # must not raise or hang
+    set_app("app_abc", "acme-agent")  # must not raise or hang
 
 
 def test_a_failing_bridge_never_interrupts_the_agent(mock_bridge: HTTPServer) -> None:
     # Fire and forget: attribution is never worth failing a run over.
     mock_bridge.expect_request("/app", method="POST").respond_with_data("nope", status=500)
-    set_app("app_abc", "gotm-nanny")  # must not raise
+    set_app("app_abc", "acme-agent")  # must not raise
 
 
 def test_redeclaring_is_safe(mock_bridge: HTTPServer) -> None:
@@ -78,9 +78,9 @@ def test_redeclaring_is_safe(mock_bridge: HTTPServer) -> None:
     # may safely re-declare; what matters here is that repeated calls neither
     # raise nor mangle the body.
     _expect_app(mock_bridge)
-    set_app("app_abc", "gotm-nanny")
-    set_app("app_abc", "gotm-nanny")
+    set_app("app_abc", "acme-agent")
+    set_app("app_abc", "acme-agent")
     assert _app_posts(mock_bridge) == [
-        {"app_id": "app_abc", "name": "gotm-nanny"},
-        {"app_id": "app_abc", "name": "gotm-nanny"},
+        {"app_id": "app_abc", "name": "acme-agent"},
+        {"app_id": "app_abc", "name": "acme-agent"},
     ]

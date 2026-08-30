@@ -2243,13 +2243,13 @@ mod tests {
     #[test]
     fn app_records_identity_and_dedups() {
         let b = started(1000);
-        let (s, body) = post(&b, "/app", r#"{"app_id":"app_abc","name":"gotm-nanny"}"#);
+        let (s, body) = post(&b, "/app", r#"{"app_id":"app_abc","name":"acme-agent"}"#);
         assert_eq!(s, 200);
         assert!(body.contains("\"ok\""));
 
         // Re-declaring the same identity must not append a second event: a
         // caller is allowed to (re)declare on every request.
-        post(&b, "/app", r#"{"app_id":"app_abc","name":"gotm-nanny"}"#);
+        post(&b, "/app", r#"{"app_id":"app_abc","name":"acme-agent"}"#);
 
         let (_, events) = get(&b, "/events");
         let identified: Vec<_> = events
@@ -2259,7 +2259,7 @@ mod tests {
             .collect();
         assert_eq!(identified.len(), 1, "identical app must be deduped");
         assert_eq!(identified[0]["app_id"], "app_abc");
-        assert_eq!(identified[0]["name"], "gotm-nanny");
+        assert_eq!(identified[0]["name"], "acme-agent");
     }
 
     #[test]
@@ -2321,7 +2321,7 @@ mod tests {
         // Attribution only: declaring an app must not consume tokens or calls.
         let b = started(1000);
         let before = b.metrics();
-        post(&b, "/app", r#"{"app_id":"app_abc","name":"gotm-nanny"}"#);
+        post(&b, "/app", r#"{"app_id":"app_abc","name":"acme-agent"}"#);
         let after = b.metrics();
         assert_eq!(
             before.tokens_spent, after.tokens_spent,
