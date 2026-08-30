@@ -62,6 +62,55 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   after creation, closing the brief window where they were readable more
   broadly right after creation.
 
+### Removed
+
+Nanny sold four primitives: token budget, step ceiling, wall-clock timeout,
+and tool permission. Building a real integration showed that three of the
+four do not survive contact with an application, so this release deletes
+them rather than carrying them forward.
+
+A token ceiling cannot be set. You do not know an agent's normal
+consumption until it has run in production, so you set the number high
+enough never to false-trip, at which point it protects nothing. It also
+caps the wrong unit: nobody wants to limit tokens, they want to limit
+dollars, and tokens do not map to dollars across models, cache reads, or
+the input and output split. A step ceiling is redundant, since its one
+non-overlapping job, catching a loop that burns many iterations and few
+tokens, is covered more precisely by per-tool `max_calls`. A timeout is
+table stakes, already provided by every process supervisor, liveness probe
+and HTTP client in the stack.
+
+Only tool permission answers a question anyone is accountable for.
+Liability attaches to authority, meaning what an agent is allowed to do,
+not to consumption, meaning how much it used.
+
+- **`[limits]` is gone entirely** (breaking change), including `steps`,
+  `tokens`, `timeout`, and every named scope such as `[limits.writer]`.
+- **`[proxy]` is gone entirely** (breaking change), including
+  `allowed_hosts`, the CONNECT proxy, the `proxy` and `proxy_token` state
+  files, and the four `HTTPS_PROXY` family variables that were injected
+  into every governed child. The allowlist protected the wrong thing: an
+  agent calling a search API connects only to that API's host, and hostile
+  content arrives in the response body through the host you allowed. It
+  also forced integrators to allowlist payments, email and package
+  installs, none of which Nanny has any business governing.
+- **`tokens_per_call` is gone from tool configuration** (breaking change).
+  It existed only to debit a budget that no longer exists.
+- **`BudgetExhausted`, `MaxStepsReached` and `TimeoutExpired` are gone**
+  (breaking change). `ToolDenied` and `RuleDenied` are the only stop
+  reasons, and both are policy decisions. An `except BudgetExhausted` in
+  an integration now fails at import rather than silently never matching.
+- **The ledger subsystem is gone**, along with the accounting that only
+  the deleted ceilings consumed.
+- **The Python SDK mirrors all of it** (breaking change): the removed stop
+  reasons are no longer exported, and `instrument()` measures tokens for
+  attribution without enforcing anything.
+
+`instrument()` and the usage events it produces are unaffected. Measuring
+what a run costs is still the runtime's job; deciding that the number is
+too high is not.
+
+
 ### Fixed
 
 - **No signal handler existed for `nanny run --serve` at all.** A plain
