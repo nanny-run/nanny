@@ -110,6 +110,22 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   after creation, closing the brief window where they were readable more
   broadly right after creation.
 
+### Fixed
+
+- **No signal handler existed for `nanny run --serve` at all.** A plain
+  Ctrl-C (or a container's SIGTERM) left every one of the six
+  `~/.nanny/servers/<app_id>/` discovery files stale forever (the
+  existing post-loop cleanup only ever handled three of them), breaking
+  the next `--serve` in the same directory with "has server state but
+  isn't reachable". This happened on every normal Ctrl-C, not an edge
+  case: nothing intercepted the signal before the OS's default
+  disposition killed the process outright, mid-loop, before it ever
+  reached the cleanup code. A real `ctrlc`-based handler now force-kills
+  the governed child and removes every discovery file immediately on
+  SIGINT/SIGTERM.
+- **Test ports allocated from the OS** instead of hardcoded, closing a
+  source of flaky test collisions.
+
 ### Removed
 
 Nanny sold four primitives: token budget, step ceiling, wall-clock timeout,
@@ -157,23 +173,6 @@ not to consumption, meaning how much it used.
 `instrument()` and the usage events it produces are unaffected. Measuring
 what a run costs is still the runtime's job; deciding that the number is
 too high is not.
-
-
-### Fixed
-
-- **No signal handler existed for `nanny run --serve` at all.** A plain
-  Ctrl-C (or a container's SIGTERM) left every one of the six
-  `~/.nanny/servers/<app_id>/` discovery files stale forever (the
-  existing post-loop cleanup only ever handled three of them), breaking
-  the next `--serve` in the same directory with "has server state but
-  isn't reachable". This happened on every normal Ctrl-C, not an edge
-  case: nothing intercepted the signal before the OS's default
-  disposition killed the process outright, mid-loop, before it ever
-  reached the cleanup code. A real `ctrlc`-based handler now force-kills
-  the governed child and removes every discovery file immediately on
-  SIGINT/SIGTERM.
-- **Test ports allocated from the OS** instead of hardcoded, closing a
-  source of flaky test collisions.
 
 ## [0.5.0] - 2026-08-08
 
