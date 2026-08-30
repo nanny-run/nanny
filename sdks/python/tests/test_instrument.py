@@ -1,8 +1,8 @@
-"""Tests for ``nanny_sdk.instrument`` — LLM token measurement via client wrapping.
+"""Tests for ``nanny_sdk.instrument``, LLM token measurement via client wrapping.
 
 Uses the ``mock_bridge`` fixture: ``instrument`` patches a fake client, and each
 wrapped call POSTs token usage to the fake bridge's ``/llm/usage``. Tests assert
-on the JSON bodies the bridge received — the exact end-to-end contract.
+on the JSON bodies the bridge received, the exact end-to-end contract.
 
 Covers: each provider shape (OpenAI/Anthropic/Mistral/Gemini/Cohere), the four
 usage-extraction patterns, sync + async, streaming (sync + async), passthrough
@@ -231,7 +231,7 @@ def test_extract_usage_cache_patterns() -> None:
     ) == (10, 5, None, 4, None)
 
     # Anthropic: top-level, both read and write are real, and its own
-    # input_tokens is exclusive of both — real total input is 8+2+6=16, not
+    # input_tokens is exclusive of both: real total input is 8+2+6=16, not
     # the raw 8, since Nanny's `input` must stay the true total with
     # cache_read/cache_write as a genuine subset, matching every other
     # provider's semantics (Anthropic's own wire format is the one that's
@@ -270,7 +270,7 @@ def test_extract_usage_cache_patterns() -> None:
     ) == (6, 4, None, 3, None)
 
 
-# ── Passthrough — no bridge means no wrapping ─────────────────────────────────
+# ── Passthrough: no bridge means no wrapping ─────────────────────────────────
 
 
 def test_passthrough_returns_client_unwrapped(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -294,7 +294,7 @@ def test_openai_reports_usage(mock_bridge: HTTPServer) -> None:
 
 def test_deepseek_reports_cache_usage(mock_bridge: HTTPServer) -> None:
     """DeepSeek's own hit/miss fields end up on the wire as generic cache_read
-    — the whole point of the generic field design: no Nanny-side knowledge of
+   , the whole point of the generic field design: no Nanny-side knowledge of
     DeepSeek's specific vocabulary, just the two neutral fields every
     provider's extraction converges on."""
     _expect_usage(mock_bridge)

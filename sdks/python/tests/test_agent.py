@@ -1,4 +1,4 @@
-"""Day 4 — @agent decorator tests."""
+"""Day 4, @agent decorator tests."""
 
 import pytest
 from pytest_httpserver import HTTPServer
@@ -19,7 +19,7 @@ def _exit_ok() -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Sync — happy path
+# Sync: happy path
 # ---------------------------------------------------------------------------
 
 
@@ -49,7 +49,7 @@ def test_agent_result_preserved(mock_bridge: HTTPServer) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Sync — exit always fires
+# Sync: exit always fires
 # ---------------------------------------------------------------------------
 
 
@@ -68,7 +68,7 @@ def test_agent_exit_called_on_exception(mock_bridge: HTTPServer) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Sync — any scope name is valid
+# Sync: any scope name is valid
 # ---------------------------------------------------------------------------
 
 
@@ -91,7 +91,7 @@ def test_any_scope_name_is_accepted(mock_bridge: HTTPServer) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Sync — bridge unreachable
+# Sync: bridge unreachable
 # ---------------------------------------------------------------------------
 
 
@@ -114,7 +114,7 @@ def test_agent_bridge_unreachable_raises_bridge_unavailable(
 
 
 # ---------------------------------------------------------------------------
-# Sync — passthrough
+# Sync: passthrough
 # ---------------------------------------------------------------------------
 
 
@@ -130,7 +130,7 @@ def test_agent_passthrough_runs_directly(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 # ---------------------------------------------------------------------------
-# Async — happy path
+# Async: happy path
 # ---------------------------------------------------------------------------
 
 
@@ -160,7 +160,7 @@ async def test_agent_async_result_preserved(mock_bridge: HTTPServer) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Async — exit always fires
+# Async: exit always fires
 # ---------------------------------------------------------------------------
 
 
@@ -179,7 +179,7 @@ async def test_agent_async_exit_called_on_exception(mock_bridge: HTTPServer) -> 
 
 
 # ---------------------------------------------------------------------------
-# Async — passthrough
+# Async: passthrough
 # ---------------------------------------------------------------------------
 
 

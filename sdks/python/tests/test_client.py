@@ -1,4 +1,4 @@
-"""Day 1 — connectivity smoke tests for _client."""
+"""Day 1, connectivity smoke tests for _client."""
 
 import pytest
 from pytest_httpserver import HTTPServer
@@ -75,7 +75,7 @@ def test_report_stop_rule_posts_correct_payload(mock_bridge: HTTPServer) -> None
 
 
 def test_report_stop_rule_ignores_bridge_errors(monkeypatch: pytest.MonkeyPatch) -> None:
-    """report_stop_rule is fire-and-forget — bridge unreachable must not raise."""
+    """report_stop_rule is fire-and-forget, bridge unreachable must not raise."""
     monkeypatch.setenv("NANNY_BRIDGE_PORT", "19999")  # nothing listening here
     monkeypatch.setenv("NANNY_SESSION_TOKEN", "test-token")
 
@@ -127,7 +127,7 @@ def test_get_status_raises_bridge_unavailable_when_unreachable(
 
 
 # ---------------------------------------------------------------------------
-# G7 — a 410 (this run already stopped) becomes a typed stop, not a raw HTTP error
+# G7: a 410 (this run already stopped) becomes a typed stop, not a raw HTTP error
 # ---------------------------------------------------------------------------
 
 
@@ -178,7 +178,7 @@ def test_call_tool_410_from_earlier_denial_raises_execution_stopped(
 
 
 # ---------------------------------------------------------------------------
-# G3 — the run id (NANNY_RUN_ID) travels on every request as X-Nanny-Run-Id
+# G3: the run id (NANNY_RUN_ID) travels on every request as X-Nanny-Run-Id
 # ---------------------------------------------------------------------------
 
 

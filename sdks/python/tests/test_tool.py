@@ -1,4 +1,4 @@
-"""Day 2 — @tool decorator tests."""
+"""Day 2, @tool decorator tests."""
 
 from typing import Any
 
@@ -141,7 +141,7 @@ def test_function_body_never_runs_on_deny(mock_bridge: HTTPServer) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Passthrough — no bridge
+# Passthrough: no bridge
 # ---------------------------------------------------------------------------
 
 

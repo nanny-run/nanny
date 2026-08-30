@@ -387,7 +387,7 @@ def get_run_events(run_id: str) -> list[dict[str, Any]]:
     run" of its own to read a contextvar for, it needs one specific run's
     events on demand. Returns the run's full buffered event list every
     call (the bridge only clears it via the separate cloud-forwarding
-    hook, ``take_run_events``, never on a plain GET) — the caller is
+    hook, ``take_run_events``, never on a plain GET), the caller is
     expected to track how many it has already consumed, e.g. by index or
     by best-effort recorded ``ts``.
 

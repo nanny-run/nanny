@@ -1,10 +1,10 @@
 """Shared pytest fixtures.
 
-``mock_bridge`` — spins up a fake Nanny bridge via pytest-httpserver and
+``mock_bridge``, spins up a fake Nanny bridge via pytest-httpserver and
 sets ``NANNY_BRIDGE_PORT`` so _client routes to it. Because _client reads
 env vars lazily (at call time), monkeypatch works without reloading modules.
 
-``_reset_rules`` — clears the global rule registry before and after every
+``_reset_rules``, clears the global rule registry before and after every
 test so rules registered in one test don't bleed into the next.
 """
 
@@ -43,14 +43,14 @@ def mock_bridge(httpserver: HTTPServer, monkeypatch: pytest.MonkeyPatch) -> HTTP
     """
     monkeypatch.setenv("NANNY_BRIDGE_PORT", str(httpserver.port))
     monkeypatch.setenv("NANNY_SESSION_TOKEN", "test-token")
-    # Permanent catch-all for POST /stop — report_stop() calls this on every denial.
+    # Permanent catch-all for POST /stop: report_stop() calls this on every denial.
     # Using expect_request (not expect_oneshot_request) so it handles any number of calls
     # and is NOT checked by check_assertions(), avoiding noise in allow-path tests.
     httpserver.expect_request("/stop", method="POST").respond_with_json({"status": "ok"})
-    # Permanent catch-all for POST /rules — the first governed call declares
+    # Permanent catch-all for POST /rules: the first governed call declares
     # what could have refused. Not checked by check_assertions().
     httpserver.expect_request("/rules", method="POST").respond_with_json({"status": "ok"})
-    # Permanent catch-all for GET /status — the @tool decorator fetches live counters
+    # Permanent catch-all for GET /status: the @tool decorator fetches live counters
     # before running rules. Tests that need specific counter values register a oneshot
     # handler before calling the tool (oneshot handlers take priority over persistent ones).
     httpserver.expect_request("/status", method="GET").respond_with_json(
