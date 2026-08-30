@@ -87,27 +87,27 @@ impl Tool for HttpGet {
         //
         // The agent is created per-call intentionally: no connection pooling,
         // no shared state between tool executions. Each call is independent.
-        let agent = ureq::AgentBuilder::new()
-            .timeout(Duration::from_millis(self.timeout_ms))
-            .build();
+        //
+        // `timeout_global` bounds the whole operation, not each socket read, so
+        // a server that trickles bytes forever still cannot outlive the budget.
+        let agent = ureq::Agent::new_with_config(
+            ureq::Agent::config_builder()
+                .timeout_global(Some(Duration::from_millis(self.timeout_ms)))
+                .build(),
+        );
 
         // ── Step 4: Make the request ──────────────────────────────────────────
         let response = agent.get(url).call().map_err(|e| match e {
             // Non-2xx HTTP status: the server replied but with an error.
-            ureq::Error::Status(code, _) => ToolError::ExecutionFailed(format!("HTTP {code}")),
-            // Transport-level error: timeout, DNS failure, connection refused.
-            ureq::Error::Transport(ref t) => {
-                // ureq surfaces timeouts as transport errors.
-                // We detect them by message content: not ideal but correct for v0.1.
-                let msg = t.to_string();
-                if msg.contains("timed out") || msg.contains("deadline") {
-                    ToolError::Timeout {
-                        timeout_ms: self.timeout_ms,
-                    }
-                } else {
-                    ToolError::ExecutionFailed(msg)
-                }
-            }
+            ureq::Error::StatusCode(code) => ToolError::ExecutionFailed(format!("HTTP {code}")),
+            // A timeout is its own variant, so the budget is reported as a
+            // timeout rather than guessed at from an error message.
+            ureq::Error::Timeout(_) => ToolError::Timeout {
+                timeout_ms: self.timeout_ms,
+            },
+            // Everything else is a transport failure: DNS, refused connection,
+            // TLS, or a malformed response.
+            other => ToolError::ExecutionFailed(other.to_string()),
         })?;
 
         // ── Step 5: Read the body with a hard size cap ────────────────────────
@@ -117,6 +117,7 @@ impl Tool for HttpGet {
         // This is intentional: fail closed on large payloads.
         let mut body = String::new();
         response
+            .into_body()
             .into_reader()
             .take(MAX_BODY_BYTES)
             .read_to_string(&mut body)
@@ -196,6 +197,35 @@ mod tests {
         let result = tool().execute(&args);
 
         assert!(!matches!(result, Err(ToolError::InvalidArgument { .. })));
+    }
+
+    /// A server that accepts the connection and then says nothing must be
+    /// reported as a timeout, not as a generic execution failure. Before ureq 3
+    /// this was inferred by matching on the text of a transport error, so the
+    /// mapping is worth pinning to behaviour rather than to a message.
+    #[test]
+    fn a_server_that_never_replies_is_reported_as_a_timeout() {
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a local port");
+        let port = listener.local_addr().unwrap().port();
+
+        // Hold the accepted connection open without writing a response.
+        std::thread::spawn(move || {
+            let held: Vec<_> = listener.incoming().take(1).filter_map(Result::ok).collect();
+            std::thread::sleep(Duration::from_secs(5));
+            drop(held);
+        });
+
+        let mut args = ToolArgs::new();
+        args.insert("url".to_string(), format!("http://127.0.0.1:{port}/"));
+
+        let result = HttpGet::with_timeout(250).execute(&args);
+
+        assert!(
+            matches!(result, Err(ToolError::Timeout { timeout_ms: 250 })),
+            "expected a timeout, got {result:?}"
+        );
     }
 
     #[test]
