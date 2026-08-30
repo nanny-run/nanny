@@ -740,6 +740,14 @@ fn worker(
 
 #[cfg(test)]
 mod tests {
+    /// How long a test waits for its mock ingest server to see a request.
+    ///
+    /// Generous on purpose, for the reason the bridge's own client timeout is:
+    /// the suite runs on every core, so a forwarder thread competes with the
+    /// rest of the workspace. Five seconds passed alone and intermittently
+    /// failed together, which reads as flakiness and is really a deadline.
+    const INGEST_WAIT: Duration = Duration::from_secs(30);
+
     use super::*;
     use crate::cloud::CloudEnv;
     use std::io::{Read, Write};
@@ -979,7 +987,7 @@ mod tests {
         sender.flush_and_join();
 
         let req = rx
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(INGEST_WAIT)
             .expect("server received a request");
         let lower = req.to_ascii_lowercase();
         assert!(
@@ -1083,7 +1091,7 @@ mod tests {
 
         assert_eq!(delivered, 1);
         let req = rx_srv
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(INGEST_WAIT)
             .expect("server received it");
         assert!(
             req.to_ascii_lowercase()
@@ -1240,7 +1248,7 @@ mod tests {
         );
         assert_eq!(delivered, 1);
         let req = rx_srv
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(INGEST_WAIT)
             .expect("the live batch was sent");
         assert!(req.contains("live-run"), "wrong batch sent:\n{req}");
 
@@ -1332,7 +1340,7 @@ mod tests {
         sender.flush_and_join();
 
         let req = rx_srv
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(INGEST_WAIT)
             .expect("the live run's own batch was sent");
         assert!(
             !req.contains("Sandbox"),
@@ -1402,7 +1410,7 @@ mod tests {
         sender.flush_and_join();
 
         let req = rx_srv
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(INGEST_WAIT)
             .expect("backfill was sent");
         assert!(
             req.contains("FromEarlierRun"),
@@ -1432,7 +1440,7 @@ mod tests {
         drop(tx);
 
         let req = rx_srv
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(INGEST_WAIT)
             .expect("server received a request");
         let lower = req.to_ascii_lowercase();
         assert!(lower.contains("post /v1/ingest"), "wrong path:\n{req}");

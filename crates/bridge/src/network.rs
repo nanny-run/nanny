@@ -1405,6 +1405,7 @@ mod tests {
         gen_certs_for_test(&dir);
 
         let port = next_port();
+        let state_dir = test_state_dir();
         let addr: SocketAddr = format!("0.0.0.0:{port}").parse().unwrap();
         let cert = dir.join("server.crt");
         let key = dir.join("server.key");
@@ -1418,6 +1419,7 @@ mod tests {
         let key2 = key.clone();
         let ca2 = ca.clone();
         let token2 = token.clone();
+        let server_state_dir = state_dir.clone();
         std::thread::spawn(move || {
             NetworkServer::start_blocking(
                 addr,
@@ -1427,13 +1429,13 @@ mod tests {
                 test_components(),
                 Some(token2),
                 100,
-                test_state_dir(),
+                server_state_dir,
             )
             .ok();
         });
 
         // Wait for the server to bind (poll instead of fixed sleep).
-        wait_for_port(port);
+        let port = wait_for_bound_port(&state_dir);
 
         // Connect with valid client cert
         let ca_pem = std::fs::read(&ca).unwrap();
@@ -1447,7 +1449,7 @@ mod tests {
             .identity(identity)
             .use_rustls_tls() // Identity::from_pem = rustls identity
             .danger_accept_invalid_hostnames(true) // test certs use "localhost"
-            .timeout(std::time::Duration::from_secs(5))
+            .timeout(CLIENT_TIMEOUT)
             .build()
             .unwrap();
 
@@ -1474,6 +1476,7 @@ mod tests {
         gen_certs_for_test(&dir);
 
         let port = next_port();
+        let state_dir = test_state_dir();
         // Non-loopback: loopback serves plain HTTP, and this test needs mTLS
         // to exercise the real `start_blocking` path.
         let addr: SocketAddr = format!("0.0.0.0:{port}").parse().unwrap();
@@ -1488,6 +1491,7 @@ mod tests {
         let key2 = key.clone();
         let ca2 = ca.clone();
         let token2 = token.clone();
+        let server_state_dir = state_dir.clone();
         std::thread::spawn(move || {
             NetworkServer::start_blocking(
                 addr,
@@ -1497,11 +1501,11 @@ mod tests {
                 test_components(),
                 Some(token2),
                 100,
-                test_state_dir(),
+                server_state_dir,
             )
             .ok();
         });
-        wait_for_port(port);
+        let port = wait_for_bound_port(&state_dir);
 
         let ca_pem = std::fs::read(&ca).unwrap();
         let ca_cert = reqwest::Certificate::from_pem(&ca_pem).unwrap();
@@ -1513,7 +1517,7 @@ mod tests {
             .identity(identity)
             .use_rustls_tls()
             .danger_accept_invalid_hostnames(true)
-            .timeout(Duration::from_secs(5))
+            .timeout(CLIENT_TIMEOUT)
             .build()
             .unwrap();
 
@@ -1554,6 +1558,7 @@ mod tests {
         gen_certs_for_test(&dir);
 
         let port = next_port();
+        let state_dir = test_state_dir();
         let addr: SocketAddr = format!("0.0.0.0:{port}").parse().unwrap();
         let token = "test-server-token-401".to_string();
 
@@ -1567,6 +1572,7 @@ mod tests {
         let key2 = key.clone();
         let ca2 = ca.clone();
         let tok2 = token.clone();
+        let server_state_dir = state_dir.clone();
         std::thread::spawn(move || {
             NetworkServer::start_blocking(
                 addr,
@@ -1576,11 +1582,11 @@ mod tests {
                 test_components(),
                 Some(tok2),
                 100,
-                test_state_dir(),
+                server_state_dir,
             )
             .ok();
         });
-        wait_for_port(port);
+        let port = wait_for_bound_port(&state_dir);
 
         let ca_pem = std::fs::read(&ca).unwrap();
         let ca_cert = reqwest::Certificate::from_pem(&ca_pem).unwrap();
@@ -1593,7 +1599,7 @@ mod tests {
             .identity(identity)
             .use_rustls_tls()
             .danger_accept_invalid_hostnames(true)
-            .timeout(std::time::Duration::from_secs(5))
+            .timeout(CLIENT_TIMEOUT)
             .build()
             .unwrap();
 
@@ -1618,6 +1624,35 @@ mod tests {
     /// when something is actually wrong, so a slow CI box is not reported as a
     /// broken server. The old 3 s budget was tight enough to lose a race
     /// against TLS setup on a loaded machine.
+    /// The port the server actually bound, read from the address it recorded.
+    ///
+    /// Not the port the test asked for. `bind_with_fallforward` moves to the
+    /// next free port when the requested one is taken, and under a parallel
+    /// suite that is routine: `next_port` releases its listener before the
+    /// server binds, so two tests can be handed the same port microseconds
+    /// apart. Probing the requested port then succeeds against *another*
+    /// test's server, and every assertion after it is made against the wrong
+    /// one, which is why these failed only when run together.
+    /// How long a test client waits for a response.
+    ///
+    /// Generous on purpose. Each of these tests stands up a real TLS server,
+    /// and the suite runs them in parallel on every core, so a handshake
+    /// competes with a hundred others for CPU. Five seconds was enough alone
+    /// and not enough together, which is the whole reason three of these
+    /// looked flaky: the failure was `TimedOut`, never a refused connection.
+    const CLIENT_TIMEOUT: Duration = Duration::from_secs(30);
+
+    fn wait_for_bound_port(state_dir: &Path) -> u16 {
+        let addr_file = state_dir.join("server.addr");
+        wait_for_file(&addr_file);
+        let addr = std::fs::read_to_string(&addr_file).expect("server.addr must be readable");
+        addr.trim()
+            .rsplit(':')
+            .next()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or_else(|| panic!("server.addr must end in a port, got {addr:?}"))
+    }
+
     fn wait_for_port(port: u16) {
         for _ in 0..200 {
             if std::net::TcpStream::connect(format!("127.0.0.1:{port}")).is_ok() {
@@ -1736,6 +1771,7 @@ mod tests {
         gen_certs_for_test(&dir);
 
         let port = next_port();
+        let state_dir = test_state_dir();
         let addr: SocketAddr = format!("0.0.0.0:{port}").parse().unwrap();
         let token = "test-server-token-nocert".to_string();
 
@@ -1747,6 +1783,7 @@ mod tests {
         let key2 = key.clone();
         let ca2 = ca.clone();
         let tok2 = token.clone();
+        let server_state_dir = state_dir.clone();
         std::thread::spawn(move || {
             NetworkServer::start_blocking(
                 addr,
@@ -1756,11 +1793,11 @@ mod tests {
                 test_components(),
                 Some(tok2),
                 100,
-                test_state_dir(),
+                server_state_dir,
             )
             .ok();
         });
-        wait_for_port(port);
+        let port = wait_for_bound_port(&state_dir);
 
         // Connect WITHOUT a client cert: TLS handshake must fail
         let ca_pem = std::fs::read(&ca).unwrap();
@@ -1770,7 +1807,7 @@ mod tests {
             .add_root_certificate(ca_cert)
             .use_rustls_tls()
             .danger_accept_invalid_hostnames(true)
-            .timeout(std::time::Duration::from_secs(5))
+            .timeout(CLIENT_TIMEOUT)
             // No .identity(...): no client cert
             .build()
             .unwrap();
@@ -1804,7 +1841,7 @@ mod tests {
             .identity(identity)
             .use_rustls_tls()
             .danger_accept_invalid_hostnames(true)
-            .timeout(Duration::from_secs(5))
+            .timeout(CLIENT_TIMEOUT)
             .build()
             .unwrap()
     }
@@ -2228,6 +2265,7 @@ mod tests {
         gen_certs_for_test(&dir_b);
 
         let port = next_port();
+        let state_dir = test_state_dir();
         let addr: SocketAddr = format!("0.0.0.0:{port}").parse().unwrap();
         let token = format!("wrong-ca-{port}");
 
@@ -2236,6 +2274,7 @@ mod tests {
         let key = dir_a.join("server.key");
         let ca = dir_a.join("ca.crt");
         let tok2 = token.clone();
+        let server_state_dir = state_dir.clone();
         std::thread::spawn(move || {
             NetworkServer::start_blocking(
                 addr,
@@ -2245,11 +2284,11 @@ mod tests {
                 test_components(),
                 Some(tok2),
                 100,
-                test_state_dir(),
+                server_state_dir,
             )
             .ok();
         });
-        wait_for_port(port);
+        let port = wait_for_bound_port(&state_dir);
 
         // Build a client that trusts CA-A but presents a cert signed by CA-B.
         let ca_pem_a = std::fs::read(dir_a.join("ca.crt")).unwrap();
@@ -2263,7 +2302,7 @@ mod tests {
             .identity(bad_identity)
             .use_rustls_tls()
             .danger_accept_invalid_hostnames(true)
-            .timeout(std::time::Duration::from_secs(5))
+            .timeout(CLIENT_TIMEOUT)
             .build()
             .unwrap();
 
@@ -2292,6 +2331,7 @@ mod tests {
         let dir = test_certs_dir();
         gen_certs_for_test(&dir);
         let port = next_port();
+        let state_dir = test_state_dir();
         let addr: SocketAddr = format!("0.0.0.0:{port}").parse().unwrap();
         let correct_token = format!("correct-{port}");
 
@@ -2299,6 +2339,7 @@ mod tests {
         let key = dir.join("server.key");
         let ca = dir.join("ca.crt");
         let tok2 = correct_token.clone();
+        let server_state_dir = state_dir.clone();
         std::thread::spawn(move || {
             NetworkServer::start_blocking(
                 addr,
@@ -2308,11 +2349,11 @@ mod tests {
                 test_components(),
                 Some(tok2),
                 100,
-                test_state_dir(),
+                server_state_dir,
             )
             .ok();
         });
-        wait_for_port(port);
+        let port = wait_for_bound_port(&state_dir);
 
         // Valid client cert: TLS succeeds.
         let client = make_mtls_client(&dir, port);
@@ -2377,7 +2418,7 @@ mod tests {
     /// Plain HTTP client: no TLS, no certs.
     fn plain_http_client() -> reqwest::blocking::Client {
         reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(5))
+            .timeout(CLIENT_TIMEOUT)
             .build()
             .unwrap()
     }
