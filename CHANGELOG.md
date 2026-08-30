@@ -40,6 +40,28 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   be the only place it appeared.
 - **`nanny run --serve` falls forward to another port** when the default
   is already taken, instead of failing to start.
+- **Tool classification labels.** A tool can be declared
+  `reads_untrusted`, `external_effect`, `destructive`, `moves_money` or
+  `reads_sensitive` in `[tools.<name>]`, and the labels are carried through
+  to `PolicyContext` and the `/status` response so a rule can reason about
+  them. A rule that hardcodes a tool name only ever works in the
+  application it was written for; a rule that asks whether a call has
+  external effect works anywhere. The rule holds the logic and the config
+  holds the facts about this application, which is the separation SELinux,
+  Kubernetes and AWS all arrived at independently.
+- **Declared authority is emitted as an event.** What the config permitted
+  is now recorded alongside what happened, so an audit answers "what was
+  this agent allowed to do" and not only "what did it do".
+- **Rule packs.** `[rules] extends` installs a curated set by name, packs
+  resolve from `.nanny/rules`, and `nanny rules add`, `nanny rules list`
+  and `nanny rules remove` manage them. Two ship: `nanny:recommended`,
+  which is universal and applies to any agent, and `nanny:owasp`. A pack
+  named in `extends` and missing from disk refuses to start, under both
+  `nanny run` and `nanny run --serve`, because an operator who believes
+  controls are active deserves a failure rather than a quiet run without
+  them.
+- **Rule declarations carry their version and pack**, so an audit entry
+  names which revision of which pack made a decision.
 
 ### Changed
 
