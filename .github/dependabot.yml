@@ -17,38 +17,6 @@ updates:
     open-pull-requests-limit: 10
     labels: ["dependencies", "python", "sdk"]
 
-  # Demo apps, not installed by any real user. Grouped and capped lower,
-  # these matter for security-audit.yml's non-blocking report, not for
-  # release gating, so they don't need the same update cadence as shipped
-  # code and shouldn't compete with it for review attention.
-  - package-ecosystem: pip
-    directory: /examples/python/metrics_crew
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 3
-    labels: ["dependencies", "python", "examples"]
-
-  - package-ecosystem: pip
-    directory: /examples/python/dev_assist
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 3
-    labels: ["dependencies", "python", "examples"]
-
-  - package-ecosystem: cargo
-    directory: /examples/rust/qabud
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 3
-    labels: ["dependencies", "rust", "examples"]
-
-  - package-ecosystem: cargo
-    directory: /examples/rust/webdingo
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 3
-    labels: ["dependencies", "rust", "examples"]
-
   - package-ecosystem: github-actions
     directory: /
     schedule:
