@@ -21,12 +21,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   can't cover: a process embedded somewhere `nanny run` didn't launch.
 - **`nanny_sdk.run_scope()`.** Scopes a run id to a Python `contextvar`
   instead of the process-global `NANNY_RUN_ID` environment variable, which
-  a threaded host serving several concurrent runs in one process (GoTM's
-  hosted port is the first real case) would otherwise silently share
-  across every run, billing one org's tokens to another's budget and
-  landing stops on the wrong run entirely. `contextvars` propagate into a
-  thread pool correctly, which is what makes this safe under FastAPI's
-  own threaded request handling.
+  a threaded host serving several concurrent runs in one process would
+  otherwise silently share across every run, billing one tenant's tokens
+  to another's usage and landing stops on the wrong run entirely.
+  `contextvars` propagate into a thread pool correctly, which is what
+  makes this safe under a threaded request handler.
 - **`nanny_sdk.get_run_events(run_id)`.** Lets a host serving many
   concurrent runs under `--serve` build its own per-tenant usage ledger
   from one run's buffered events, without parsing the CLI's flat NDJSON
