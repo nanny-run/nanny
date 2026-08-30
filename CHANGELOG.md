@@ -62,6 +62,31 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   them.
 - **Rule declarations carry their version and pack**, so an audit entry
   names which revision of which pack made a decision.
+- **Every run records the config that governed it.** `ExecutionStarted`
+  carries a canonical hash of the resolved configuration and the runtime
+  version that produced it, so a stored audit can be checked against the
+  policy in force at the time rather than the policy in force now.
+- **Bookend events are stamped**, giving a run a definite start and end
+  rather than a start and an inference.
+- **The governor identifies itself**, so events from a fleet say which
+  governor cleared them.
+- **The bridge records which rules cleared a call**, and the Python SDK
+  reports them, so an allowed call is as auditable as a denied one. Only
+  denials left a trace before this.
+- **Wall-clock time is exposed on `PolicyContext`**, for rules that need to
+  reason about when a call is being made rather than how many have been.
+- **Run ids are typed**, with a `run_` prefix, so a run id is recognisable
+  in a log rather than being an anonymous UUID.
+- **The outbox is partitioned by environment**, so events spooled while
+  offline cannot be delivered to the wrong side after a key change.
+- **`nanny certs` accepts `--san`**, putting real hostnames in the server
+  certificate so a governor can be reached across containers and machines
+  rather than only on loopback.
+- **The governance server's session token can be configured** via
+  `NANNY_SESSION_TOKEN`. A minted token lives on the governor's filesystem,
+  which processes joining from other containers cannot read, and changes on
+  every restart; setting it is what lets a fleet deployment hold still
+  across redeploys.
 
 ### Changed
 
