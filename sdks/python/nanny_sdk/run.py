@@ -1,58 +1,90 @@
-"""nanny_sdk.fresh_run — start a new governed run within the current process.
+"""nanny_sdk.run_scope: scope a governed run to the current thread or task.
 
 Usage::
 
     import nanny_sdk
 
-    nanny_sdk.fresh_run()   # everything governed after this point is a fresh run
+    with nanny_sdk.run_scope() as run_id:
+        ...  # every governed call in this thread/task belongs to run_id
 
-Why this exists: a run is Nanny's real unit of governance — one cumulative
-token/step counter, one stop state, "a stop is final." A named ``@agent(...)``
-scope does *not* give you a second one of these: it only changes which
-ceiling that same, single, ever-growing counter is compared against while
-active (confirmed directly against ``crates/bridge/src/lib.rs``: entering a
-scope swaps ``current_limits``, it never resets ``tokens_spent``). If your
-process does several logically independent phases back to back — a research
-phase handing off to a drafting phase, one HTTP request finishing before the
-next one starts — and you want each phase to get its own clean budget rather
-than inheriting whatever the previous phase already spent, this is how you
-say that.
+Why this exists: a run is Nanny's real unit of governance, one stop state,
+one tool call history, "a stop is final." A named ``@agent(...)`` scope does
+*not* give you a second one of these; it labels a phase within the current
+one so the audit log can attribute each verdict. If your process runs several
+logically independent runs, one long-lived server giving each incoming
+request its own clean slate, this is how you say that.
 
-This used to only be possible by setting the ``NANNY_RUN_ID`` environment
-variable directly, an internal implementation detail (the client reads it
-fresh on every call, never documented as a public integration point). This
-function exists so that pattern has a real, discoverable, public name
-instead of every integrator needing to read the SDK's own source to find it,
-exactly what happened before this existed.
+The scope is a ``ContextVar``, isolated per thread and per asyncio task, so
+two runs in flight at once never clobber each other. That matters more than
+it used to: rules read ``tool_call_history``, so a leaked run id means one
+tenant's untrusted read poisons another tenant's history. Under the authority
+reframe that is a wrong security verdict, not a wrong number.
+
+This replaces ``fresh_run()``, which wrote ``NANNY_RUN_ID`` into
+``os.environ``, a process-global write that raced under any threaded host.
+Mirrors ``nanny::run_scope`` on the Rust side.
 """
 
 from __future__ import annotations
 
-import os
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 
-__all__ = ["fresh_run"]
+__all__ = ["new_run_id", "run_scope"]
+
+_SCOPED_RUN_ID: ContextVar[str | None] = ContextVar("nanny_scoped_run_id", default=None)
 
 
-def fresh_run() -> str:
-    """Start a new governed run in this process. Returns the new run id.
+def _scoped_run_id() -> str | None:
+    """The active `run_scope()` id, if any. Used by `_client._run_id()`."""
+    return _SCOPED_RUN_ID.get()
 
-    Only meaningful when governed through a network server (``nanny run
-    --serve`` / ``--join``): the server keys independent state per run id,
-    so a stop or budget exhaustion in the run you just left has zero effect
-    on the one you're starting. Under local ``nanny run`` (no ``--serve``),
-    this is a no-op as far as governance is concerned — one local process is
-    always exactly one run, the local bridge has no per-run-id state to
-    switch between (confirmed directly: ``crates/bridge/src/lib.rs``'s local
-    ``Bridge`` holds one shared, unkeyed state for its whole process
-    lifetime) — but it's always safe to call regardless of mode, so code
-    that might run under either doesn't need to branch on which one it's in.
 
-    Without a bridge active at all (no ``NANNY_BRIDGE_ADDR``/``NANNY_BRIDGE_PORT``
-    set — running the process directly, not under ``nanny run``), this still
-    returns a fresh id and sets it, harmlessly: there's nothing governed to
-    scope it to yet, so it has no observable effect either way.
+#: Prefix on every run id, so an id is recognisable as one on sight. Matches the
+#: shape ``app_`` already uses: a type prefix, then 32 hex characters, no dashes.
+RUN_ID_PREFIX = "run_"
+
+
+def new_run_id() -> str:
+    """Mint a run id: ``run_`` plus 32 hex characters, 128 random bits.
+
+    Mirrors ``nanny_config::new_run_id`` on the Rust side, and the two must not
+    drift: a governor and the SDKs joining it write ids into the same log.
+
+    Uniformly random on purpose, not time-ordered. A leading timestamp would
+    make every short prefix identical for runs in the same millisecond, and a
+    short id exists precisely so it can be read, typed and looked up, the way a
+    short commit hash is.
     """
-    run_id = str(uuid.uuid4())
-    os.environ["NANNY_RUN_ID"] = run_id
-    return run_id
+    return f"{RUN_ID_PREFIX}{uuid.uuid4().hex}"
+
+
+@contextmanager
+def run_scope(run_id: str | None = None) -> Iterator[str]:
+    """Scope a governed run to the current thread or asyncio task, not the
+    whole process.
+
+    Each call's run id is isolated via a `ContextVar`, so two runs in flight
+    at once never clobber each other's stop state or history. A threaded or
+    async host serving several independent conversations gets one run each.
+
+    Usage::
+
+        with nanny_sdk.run_scope() as run_id:
+            ...  # every governed call in this thread/task uses this run_id
+
+    Pass an explicit `run_id` to resume a specific run; omit it to mint a
+    fresh one. On exit, the previous scope (or the env-var fallback, if none)
+    is restored, so nesting is safe.
+
+    With no scope ever entered, `_client._run_id()` falls through to
+    `NANNY_RUN_ID` exactly as before this existed.
+    """
+    rid = run_id or new_run_id()
+    token = _SCOPED_RUN_ID.set(rid)
+    try:
+        yield rid
+    finally:
+        _SCOPED_RUN_ID.reset(token)

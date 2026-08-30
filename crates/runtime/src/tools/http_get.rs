@@ -60,7 +60,7 @@ impl Tool for HttpGet {
     }
 
     /// Cost charged on success only.
-    /// The ledger is never debited for a failed request.
+    /// Tokens are never charged for a failed request.
     fn declared_cost(&self) -> u64 {
         HTTP_GET_COST
     }
@@ -79,9 +79,7 @@ impl Tool for HttpGet {
         if !url.starts_with("http://") && !url.starts_with("https://") {
             return Err(ToolError::InvalidArgument {
                 arg: "url".to_string(),
-                reason: format!(
-                    "must start with http:// or https://, got: {url}"
-                ),
+                reason: format!("must start with http:// or https://, got: {url}"),
             });
         }
 
@@ -96,9 +94,7 @@ impl Tool for HttpGet {
         // ── Step 4: Make the request ──────────────────────────────────────────
         let response = agent.get(url).call().map_err(|e| match e {
             // Non-2xx HTTP status — the server replied but with an error.
-            ureq::Error::Status(code, _) => {
-                ToolError::ExecutionFailed(format!("HTTP {code}"))
-            }
+            ureq::Error::Status(code, _) => ToolError::ExecutionFailed(format!("HTTP {code}")),
             // Transport-level error — timeout, DNS failure, connection refused.
             ureq::Error::Transport(ref t) => {
                 // ureq surfaces timeouts as transport errors.

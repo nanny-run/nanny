@@ -3,15 +3,15 @@
 import pytest
 from pytest_httpserver import HTTPServer
 
-from nanny_sdk import AgentNotFound, BridgeUnavailable, agent
+from nanny_sdk import BridgeUnavailable, agent
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _enter_ok() -> dict[str, object]:
-    return {"status": "ok", "limits": {"steps": 10, "tokens": 100, "timeout": 5000}}
+def _enter_ok() -> dict[str, str]:
+    return {"status": "ok"}
 
 
 def _exit_ok() -> dict[str, str]:
@@ -68,45 +68,26 @@ def test_agent_exit_called_on_exception(mock_bridge: HTTPServer) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Sync — scope not found
+# Sync — any scope name is valid
 # ---------------------------------------------------------------------------
 
 
-def test_agent_not_found_raises(mock_bridge: HTTPServer) -> None:
-    """404 from /agent/enter raises AgentNotFound."""
-    mock_bridge.expect_request("/agent/enter", method="POST").respond_with_data(
-        '{"error":"named limits set \'researcher\' not found"}',
-        status=404,
-        content_type="application/json",
-    )
+def test_any_scope_name_is_accepted(mock_bridge: HTTPServer) -> None:
+    """A scope names a phase; there is nothing to look up, so nothing to miss.
 
-    @agent("researcher")
+    Named limit sets are gone, so /agent/enter no longer 404s on an unknown
+    name and AgentNotFound no longer exists. A scope now records which phase
+    of the run an event belongs to, which is true of any name the caller picks.
+    """
+    mock_bridge.expect_request("/agent/enter", method="POST").respond_with_json(_enter_ok())
+    mock_bridge.expect_request("/agent/exit", method="POST").respond_with_json(_exit_ok())
+
+    @agent("a-name-that-appears-in-no-config")
     def my_func() -> str:
         return "done"
 
-    with pytest.raises(AgentNotFound):
-        my_func()
+    assert my_func() == "done"
     mock_bridge.check_assertions()
-
-
-def test_agent_not_found_body_never_runs(mock_bridge: HTTPServer) -> None:
-    """When AgentNotFound is raised, the function body must not execute."""
-    executed = False
-    mock_bridge.expect_request("/agent/enter", method="POST").respond_with_data(
-        '{"error":"named limits set \'x\' not found"}',
-        status=404,
-        content_type="application/json",
-    )
-
-    @agent("x")
-    def my_func() -> str:
-        nonlocal executed
-        executed = True
-        return "done"
-
-    with pytest.raises(AgentNotFound):
-        my_func()
-    assert not executed
 
 
 # ---------------------------------------------------------------------------

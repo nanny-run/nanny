@@ -1,4 +1,4 @@
-//! Which Nanny Cloud environment `nanny auth` talks to.
+//! Which Nanny Cloud deployment the runtime forwards to.
 //!
 //! The backend host is the tool's business, not the user's: the API base URL is a
 //! compile-time constant and can only ever be one of OUR OWN hosts. There is no
@@ -11,6 +11,12 @@
 //! the build profile (that would repeat the "NODE_ENV for staging" anti-pattern,
 //! and staging's host runs as production anyway). A named selector can only
 //! resolve to a compiled host, so there is no exfiltration surface.
+//!
+//! **`--env` exists for people building Nanny, not people building apps with it.**
+//! It is hidden from `--help` and documented only in CONTRIBUTING.md. A customer
+//! has exactly one cloud and never chooses: `Prod` is the default and is the only
+//! value anything outside this repo will ever resolve to. `Dev` and `Staging`
+//! point at our own local and QA deployments.
 
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
@@ -67,23 +73,41 @@ mod tests {
     #[test]
     fn api_bases_are_our_hosts_and_have_no_trailing_slash() {
         assert_eq!(CloudEnv::Dev.api_base(), "http://localhost:3000");
-        assert_eq!(CloudEnv::Staging.api_base(), "https://sandbox-api.nanny.run");
+        assert_eq!(
+            CloudEnv::Staging.api_base(),
+            "https://sandbox-api.nanny.run"
+        );
         assert_eq!(CloudEnv::Prod.api_base(), "https://api.nanny.run");
         for e in [CloudEnv::Dev, CloudEnv::Staging, CloudEnv::Prod] {
-            assert!(!e.api_base().ends_with('/'), "callers append /v1/... to the base");
+            assert!(
+                !e.api_base().ends_with('/'),
+                "callers append /v1/... to the base"
+            );
         }
     }
 
     #[test]
     fn ingest_url_is_the_api_host_plus_route() {
-        assert_eq!(CloudEnv::Prod.ingest_url(), "https://api.nanny.run/v1/ingest");
-        assert_eq!(CloudEnv::Staging.ingest_url(), "https://sandbox-api.nanny.run/v1/ingest");
-        assert_eq!(CloudEnv::Dev.ingest_url(), "http://localhost:3000/v1/ingest");
+        assert_eq!(
+            CloudEnv::Prod.ingest_url(),
+            "https://api.nanny.run/v1/ingest"
+        );
+        assert_eq!(
+            CloudEnv::Staging.ingest_url(),
+            "https://sandbox-api.nanny.run/v1/ingest"
+        );
+        assert_eq!(
+            CloudEnv::Dev.ingest_url(),
+            "http://localhost:3000/v1/ingest"
+        );
     }
 
     #[test]
     fn serializes_lowercase_for_the_credential_file() {
-        assert_eq!(serde_json::to_string(&CloudEnv::Staging).unwrap(), "\"staging\"");
+        assert_eq!(
+            serde_json::to_string(&CloudEnv::Staging).unwrap(),
+            "\"staging\""
+        );
         let back: CloudEnv = serde_json::from_str("\"prod\"").unwrap();
         assert_eq!(back, CloudEnv::Prod);
     }
@@ -91,7 +115,10 @@ mod tests {
     #[test]
     fn parses_lowercase_names_and_rejects_others() {
         assert_eq!(CloudEnv::from_str("dev", true).unwrap(), CloudEnv::Dev);
-        assert_eq!(CloudEnv::from_str("staging", true).unwrap(), CloudEnv::Staging);
+        assert_eq!(
+            CloudEnv::from_str("staging", true).unwrap(),
+            CloudEnv::Staging
+        );
         assert_eq!(CloudEnv::from_str("prod", true).unwrap(), CloudEnv::Prod);
         assert!(CloudEnv::from_str("production", true).is_err());
         assert!(CloudEnv::from_str("", true).is_err());

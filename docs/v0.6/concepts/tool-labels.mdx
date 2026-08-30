@@ -1,0 +1,87 @@
+---
+title: Tool labels
+description: Declare what a tool is, so a rule can govern it without knowing its name.
+---
+
+A rule that names `send_outreach` governs one application. A rule that reads
+`external_effect` governs every application whose operator has labelled their
+tools. Labels are what make a rule portable.
+
+The rule holds the logic. The config holds the facts about your app.
+
+## The five labels
+
+Declare them in `nanny.toml`, per tool:
+
+```toml
+[tools]
+allowed = ["web_search", "send_outreach", "delete_record", "pay_invoice", "read_vault"]
+
+[tools.web_search]
+reads_untrusted = true
+
+[tools.send_outreach]
+external_effect = true
+
+[tools.delete_record]
+destructive = true
+
+[tools.pay_invoice]
+moves_money = true
+
+[tools.read_vault]
+reads_sensitive = true
+```
+
+| Label | Meaning |
+| --- | --- |
+| `reads_untrusted` | Ingests content you do not control |
+| `external_effect` | Acts on the outside world |
+| `destructive` | Irreversible |
+| `moves_money` | Financial transaction |
+| `reads_sensitive` | Touches secrets or personal data |
+
+A tool can carry several. `send_payment_confirmation` is plausibly
+`external_effect` and `moves_money` at once.
+
+## Reading labels in a rule
+
+```python
+@rule("no_send_after_read")
+def taint(ctx) -> bool:
+    pending = ctx.requested_tool
+    if pending is None or not ctx.tool_has(pending, "external_effect"):
+        return True
+    return not any(ctx.tool_has(t, "reads_untrusted") for t in ctx.tool_call_history)
+```
+
+That rule is nine lines and it governs the dominant agent failure mode: an
+instruction hidden in fetched content turning into an action the operator never
+intended. It never reads the content, so it cannot be fooled by what the content
+says. It governs the **ordering of authority** instead.
+
+`ctx.tool_labels` carries labels for every allowed tool, not just the pending
+one, because rules routinely need to ask what an *already-called* tool was.
+
+## Two helpers
+
+```python
+ctx.tool_has("web_search", "reads_untrusted")   # -> bool
+ctx.tools_with("external_effect")                # -> sorted list of tool names
+```
+
+`tool_has` returns `False` for an unknown tool and for an unknown label. That is
+the safe answer in both directions: a rule asking about a tool the operator
+never declared should not fire, and a misspelled label must not silently match
+everything.
+
+## Labelling is the operator's job, not the rule author's
+
+Only you know that your `fetch_ticket` pulls in customer-written text. A rule
+author cannot know that, which is exactly why the split exists. An unlabelled
+tool is invisible to every label-based rule, so it is governed by the allowlist
+and by nothing else.
+
+"Declared with no labels" and "never declared" are different answers, and Nanny
+keeps them distinct: an allowed tool always appears in `tool_labels`, with an
+empty list if it carries none.

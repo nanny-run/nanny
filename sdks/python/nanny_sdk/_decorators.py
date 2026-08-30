@@ -20,21 +20,39 @@ from nanny_sdk.exceptions import BridgeUnavailable, RuleDenied
 F = TypeVar("F", bound=Callable[..., Any])
 
 # ---------------------------------------------------------------------------
-# Rule registry — populated at decoration time, evaluated before each tool call
+# Rule registry: populated at decoration time, evaluated before each tool call
 # ---------------------------------------------------------------------------
 
 # Ordered dict so rules are evaluated in registration order.
 _RULES: dict[str, Callable[[PolicyContext], bool]] = {}
 
+_declared = False
+
+
+def _declare_rules_once() -> None:
+    """Declare registered rules on the first governed call.
+
+    Deferred to first use rather than done at import, because packs and local
+    rules are still registering while the module graph loads. Declaring early
+    would record a set smaller than the one that actually runs.
+    """
+    global _declared
+    if _declared:
+        return
+    _declared = True
+    from nanny_sdk.packs import declare_all
+
+    _client.declare_rules(declare_all())
+
 
 def tool(*, tokens: int = 0) -> Callable[[F], F]:
     """Declare a Nanny-governed tool.
 
-    Contacts the bridge before each call to enforce step, budget, timeout,
-    allowlist, and rule limits. Charges ``tokens`` on each allowed call.
+    Contacts the bridge before each call to enforce the tool allowlist,
+    per-tool call caps, and rules. Records ``tokens`` on each allowed call.
 
     In passthrough mode (no ``NANNY_BRIDGE_PORT``) the decorated function
-    is returned unchanged — zero overhead, zero import errors.
+    is returned unchanged, zero overhead, zero import errors.
     """
 
     def decorator(fn: F) -> F:
@@ -50,13 +68,13 @@ def tool(*, tokens: int = 0) -> Callable[[F], F]:
             bound.apply_defaults()
             return {k: str(v) for k, v in bound.arguments.items()}
 
-        def _check_rules(str_args: dict[str, str]) -> None:
+        def _check_rules(str_args: dict[str, str]) -> list[str]:
             """Evaluate all registered rules in registration order.
 
             Fetches live counters from ``GET /status`` first so rules have
-            access to ``step_count``, ``tool_call_history``, etc.
+            access to ``tool_call_history``, ``tool_labels``, etc.
 
-            If the bridge is unreachable, raises ``BridgeUnavailable`` —
+            If the bridge is unreachable, raises ``BridgeUnavailable``:
             silently continuing with zeroed counters would let the agent run
             ungoverned, violating the manifesto guarantee that Nanny fails
             closed.
@@ -64,6 +82,7 @@ def tool(*, tokens: int = 0) -> Callable[[F], F]:
             Raises ``RuleDenied`` on the first rule that returns ``False``.
             ``/tool/call`` is never reached if a rule denies.
             """
+            _declare_rules_once()
             try:
                 ctx = _client.get_status()
             except Exception:
@@ -71,18 +90,21 @@ def tool(*, tokens: int = 0) -> Callable[[F], F]:
                 raise BridgeUnavailable()
             ctx.last_tool_args = str_args
             ctx.requested_tool = tool_name
+            cleared: list[str] = []
             for rule_name, rule_fn in _RULES.items():
                 if not rule_fn(ctx):
-                    _client.report_stop_rule(tool_name, rule_name)
+                    _client.report_stop_rule(tool_name, rule_name, cleared)
                     raise RuleDenied(rule_name)
+                cleared.append(rule_name)
+            return cleared
 
         if inspect.iscoroutinefunction(fn):
 
             @functools.wraps(fn)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                 str_args = _str_args(args, kwargs)
-                _check_rules(str_args)
-                _client.call_tool(tool_name, tokens, str_args)
+                cleared = _check_rules(str_args)
+                _client.call_tool(tool_name, tokens, str_args, cleared)
                 return await fn(*args, **kwargs)
 
             return async_wrapper  # type: ignore[return-value]
@@ -90,8 +112,8 @@ def tool(*, tokens: int = 0) -> Callable[[F], F]:
         @functools.wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             str_args = _str_args(args, kwargs)
-            _check_rules(str_args)
-            _client.call_tool(tool_name, tokens, str_args)
+            cleared = _check_rules(str_args)
+            _client.call_tool(tool_name, tokens, str_args, cleared)
             return fn(*args, **kwargs)
 
         return wrapper  # type: ignore[return-value]
@@ -103,14 +125,14 @@ def rule(name: str) -> Callable[[F], F]:
     """Register a policy rule function.
 
     The decorated function receives a ``PolicyContext`` and returns ``bool``.
-    ``False`` → ``RuleDenied(name)`` raised at the pending tool call site,
+    ``False`` raises ``RuleDenied(name)`` at the pending tool call site,
     before the bridge is ever contacted.
 
     Rules are evaluated in registration order. The first rule that returns
-    ``False`` stops evaluation — remaining rules are not called.
+    ``False`` stops evaluation, remaining rules are not called.
 
     ``ctx.last_tool_args`` and ``ctx.requested_tool`` are always populated.
-    ``ctx.step_count``, ``ctx.tokens_spent``, and ``ctx.tool_call_history``
+    ``ctx.tool_labels``, ``ctx.tokens_spent``, and ``ctx.tool_call_history``
     reflect bridge-tracked state and are available via full context in v0.1.5+.
     """
 
@@ -122,15 +144,16 @@ def rule(name: str) -> Callable[[F], F]:
 
 
 def agent(name: str) -> Callable[[F], F]:
-    """Activate a named limit scope for the duration of the decorated function.
+    """Name a phase of the run for the duration of the decorated function.
 
-    Calls ``/agent/enter`` on entry and ``/agent/exit`` in a ``finally``
-    block so the scope always exits even on exception. Supports both sync
-    and async functions.
+    A scope does not change what the agent may do; it labels which phase each
+    verdict belongs to, so the audit log can attribute one. Calls
+    ``/agent/enter`` on entry and ``/agent/exit`` in a ``finally`` block so the
+    scope always exits even on exception. Supports both sync and async
+    functions.
 
-    ``/agent/enter`` is called **before** the ``try`` block — if the scope
-    is not found (bridge returns 404), ``AgentNotFound`` propagates immediately
-    and ``/agent/exit`` is never called (the scope was never activated).
+    ``/agent/enter`` is called **before** the ``try`` block, so a transport
+    failure there leaves no unmatched ``/agent/exit`` behind.
     """
 
     def decorator(fn: F) -> F:

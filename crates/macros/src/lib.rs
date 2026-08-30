@@ -11,9 +11,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{
-    parse_macro_input, FnArg, ItemFn, LitInt, LitStr, Meta, Pat,
-};
+use syn::{parse_macro_input, FnArg, ItemFn, LitInt, LitStr, Meta, Pat};
 
 // ── #[nanny::tool(tokens = N)] ───────────────────────────────────────────────
 
@@ -71,16 +69,16 @@ fn parse_tokens(attr: TokenStream2) -> u64 {
 }
 
 fn expand_tool(input: ItemFn, tokens: u64) -> syn::Result<TokenStream2> {
-    let vis      = &input.vis;
-    let sig      = &input.sig;
-    let attrs    = &input.attrs;
-    let body     = &input.block;
+    let vis = &input.vis;
+    let sig = &input.sig;
+    let attrs = &input.attrs;
+    let body = &input.block;
     let generics = &sig.generics;
-    let inputs   = &sig.inputs;
-    let output   = &sig.output;
+    let inputs = &sig.inputs;
+    let output = &sig.output;
     let where_cl = &sig.generics.where_clause;
-    let fn_name  = &sig.ident;
-    let fn_str   = fn_name.to_string();
+    let fn_name = &sig.ident;
+    let fn_str = fn_name.to_string();
 
     // Check: method receivers are not supported.
     if inputs.iter().any(|a| matches!(a, FnArg::Receiver(_))) {
@@ -96,12 +94,15 @@ fn expand_tool(input: ItemFn, tokens: u64) -> syn::Result<TokenStream2> {
 
     // Build (key, value) pairs for last_tool_args: key is param name as &str,
     // value uses Display so String args don't get extra quotes.
-    let arg_entries: Vec<TokenStream2> = forward_args.iter().map(|name| {
-        let key = name.to_string();
-        quote! {
-            __nanny_tool_args.insert(#key.to_string(), format!("{}", &#name));
-        }
-    }).collect();
+    let arg_entries: Vec<TokenStream2> = forward_args
+        .iter()
+        .map(|name| {
+            let key = name.to_string();
+            quote! {
+                __nanny_tool_args.insert(#key.to_string(), format!("{}", &#name));
+            }
+        })
+        .collect();
 
     Ok(quote! {
         #(#attrs)*
@@ -160,17 +161,17 @@ fn expand_tool(input: ItemFn, tokens: u64) -> syn::Result<TokenStream2> {
 #[proc_macro_attribute]
 pub fn rule(attr: TokenStream, item: TokenStream) -> TokenStream {
     let name_lit = parse_macro_input!(attr as LitStr);
-    let input    = parse_macro_input!(item as ItemFn);
+    let input = parse_macro_input!(item as ItemFn);
     expand_rule(input, name_lit)
         .unwrap_or_else(|e| e.into_compile_error())
         .into()
 }
 
 fn expand_rule(input: ItemFn, name_lit: LitStr) -> syn::Result<TokenStream2> {
-    let vis   = &input.vis;
-    let sig   = &input.sig;
+    let vis = &input.vis;
+    let sig = &input.sig;
     let attrs = &input.attrs;
-    let body  = &input.block;
+    let body = &input.block;
     let fn_name = &sig.ident;
 
     // The function must have signature `fn(ctx: &PolicyContext) -> bool`.
@@ -215,20 +216,20 @@ fn expand_rule(input: ItemFn, name_lit: LitStr) -> syn::Result<TokenStream2> {
 #[proc_macro_attribute]
 pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
     let name_lit = parse_macro_input!(attr as LitStr);
-    let input    = parse_macro_input!(item as ItemFn);
+    let input = parse_macro_input!(item as ItemFn);
     expand_agent(input, name_lit)
         .unwrap_or_else(|e| e.into_compile_error())
         .into()
 }
 
 fn expand_agent(input: ItemFn, name_lit: LitStr) -> syn::Result<TokenStream2> {
-    let vis      = &input.vis;
-    let sig      = &input.sig;
-    let attrs    = &input.attrs;
-    let body     = &input.block;
+    let vis = &input.vis;
+    let sig = &input.sig;
+    let attrs = &input.attrs;
+    let body = &input.block;
     let generics = &sig.generics;
-    let inputs   = &sig.inputs;
-    let output   = &sig.output;
+    let inputs = &sig.inputs;
+    let output = &sig.output;
     let where_cl = &sig.generics.where_clause;
     let is_async = sig.asyncness.is_some();
 
@@ -244,7 +245,7 @@ fn expand_agent(input: ItemFn, name_lit: LitStr) -> syn::Result<TokenStream2> {
     let forward_args = forward_arg_names(inputs)?;
 
     // For async functions the inner impl and its call sites must also be async.
-    let async_kw  = if is_async { quote!(async) } else { quote!() };
+    let async_kw = if is_async { quote!(async) } else { quote!() };
     let call_impl = if is_async {
         quote!(__nanny_impl(#(#forward_args),*).await)
     } else {
@@ -284,9 +285,9 @@ fn expand_agent(input: ItemFn, name_lit: LitStr) -> syn::Result<TokenStream2> {
 
 /// Extract simple identifier patterns from a function's parameter list.
 /// Returns them in the same order, ready to be used as forwarding arguments.
-fn forward_arg_names(inputs: &syn::punctuated::Punctuated<FnArg, syn::token::Comma>)
-    -> syn::Result<Vec<TokenStream2>>
-{
+fn forward_arg_names(
+    inputs: &syn::punctuated::Punctuated<FnArg, syn::token::Comma>,
+) -> syn::Result<Vec<TokenStream2>> {
     let mut names = Vec::new();
     for arg in inputs {
         match arg {

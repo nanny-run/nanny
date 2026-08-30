@@ -1,9 +1,9 @@
 // Integration tests for `nanny run` process lifecycle.
 //
 // These tests build and invoke the real `nanny` binary.
-// They verify the two core guarantees of v0.1.0:
-//   1. A process that exits cleanly produces exit code 0.
-//   2. A process that exceeds timeout_ms is killed and exits non-zero.
+// They verify that a process exiting cleanly produces exit code 0, that a
+// crash surfaces as a typed stop reason, and that the NDJSON stream is
+// well-formed and correctly bookended.
 //
 // `CARGO_BIN_EXE_nanny` is injected by Cargo automatically for integration tests.
 
@@ -36,21 +36,33 @@ fn temp_dir() -> PathBuf {
     dir
 }
 
-fn write_config(dir: &Path, timeout_ms: u64, cmd: &str) {
+fn write_config(dir: &Path, cmd: &str) {
     let toml = format!(
         r#"[start]
 cmd = "{cmd}"
-
-[limits]
-steps   = 100
-tokens  = 1000
-timeout = {timeout_ms}
 
 [tools]
 allowed = ["http_get"]
 
 [observability]
 log = "stdout"
+"#
+    );
+    fs::write(dir.join("nanny.toml"), toml).unwrap();
+}
+
+/// Config that logs to a file rather than stdout, so a test can read the
+/// append-only log back off disk the way an operator would.
+fn write_config_logging_to_file(dir: &Path, cmd: &str) {
+    let toml = format!(
+        r#"[start]
+cmd = "{cmd}"
+
+[tools]
+allowed = ["http_get"]
+
+[observability]
+log = "file"
 "#
     );
     fs::write(dir.join("nanny.toml"), toml).unwrap();
@@ -64,7 +76,10 @@ fn config_arg(dir: &Path) -> String {
 /// to write nanny.toml, tests that need an app id but already have their own
 /// nanny.toml call this instead). Returns the id.
 fn write_app_identity(dir: &Path) -> String {
-    let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
     let id = format!("app_test_{ts}_{seq}");
     let dot_nanny = dir.join(".nanny");
@@ -77,13 +92,66 @@ fn write_app_identity(dir: &Path) -> String {
     id
 }
 
+/// Ask the OS for a port that is genuinely free right now.
+///
+/// Binding to port 0 makes the kernel pick one, then we release it and hand
+/// the number to the server the test is about to spawn.
+///
+/// Hardcoded port numbers do not work here. These tests run in parallel, so a
+/// reused number makes a test that passes alone fail in a suite; and across
+/// back-to-back `cargo test` runs the previous run's sockets linger in
+/// TIME_WAIT on those exact numbers. Both failure modes look like a broken
+/// server rather than a broken test, which is the worst kind of flake.
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .expect("the OS must be able to hand out an ephemeral port")
+        .local_addr()
+        .expect("a bound listener always has a local address")
+        .port()
+}
+
+/// Polls a loopback port until something accepts a connection, `attempts`
+/// times at 100 ms apart.
+///
+/// `connect_timeout`, not plain `connect`: on Windows a connect to a closed
+/// loopback port blocks for roughly two seconds on SYN retries instead of
+/// failing immediately, which stretches the poll interval from 100 ms to ~2 s
+/// and turns a short readiness window into a false negative.
+/// Polls until `path` exists, or `attempts` × 100 ms elapse.
+///
+/// Used where "the port is listening" is not the property under test. The
+/// governor binds its listener before it spawns `[start].cmd`, so a test that
+/// asserts the app ran has to wait for the app, not for the socket.
+fn wait_for_file(path: &Path, attempts: u32) -> bool {
+    for _ in 0..attempts {
+        if path.exists() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    false
+}
+
+fn wait_for_port(port: u16, attempts: u32) -> bool {
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    for _ in 0..attempts {
+        if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(200))
+            .is_ok()
+        {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    false
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 /// A process that exits on its own completes cleanly — exit code 0.
 #[test]
 fn fast_exit_completes_cleanly() {
     let dir = temp_dir();
-    write_config(&dir, 30_000, "echo hello");
+    write_config(&dir, "echo hello");
 
     let output = Command::new(nanny_bin())
         .args(["--config", &config_arg(&dir), "run"])
@@ -101,112 +169,17 @@ fn fast_exit_completes_cleanly() {
 
     // stdout must contain ExecutionStarted and ExecutionStopped NDJSON lines.
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("ExecutionStarted"), "stdout must have ExecutionStarted event");
-    assert!(stdout.contains("ExecutionStopped"), "stdout must have ExecutionStopped event");
-    assert!(stdout.contains("AgentCompleted"), "stop reason must be AgentCompleted");
-}
-
-/// A process that runs past timeout_ms is killed — exit code non-zero,
-/// stderr carries the stop reason.
-///
-/// Uses a platform-specific long-running command so the test exercises
-/// the real kill path on every OS:
-/// - Unix:    `sleep 60`  — standard POSIX utility
-/// - Windows: `ping -n 65 127.0.0.1` — always available, native PE exe,
-///   ~64 s runtime (1-second intervals × 65 probes); `TerminateProcess()`
-///   kills it cleanly as a direct child.
-///
-/// On Windows this test requires T7 (server_start_loopback_does_not_require_cert_files)
-/// to be skipped. T7 writes `~/.nanny/server.addr` to the real home dir (because
-/// `dirs::home_dir()` ignores the HOME override), which would cause nanny to
-/// route through `cmd_run_via_network_server` — a path with no timeout kill.
-#[test]
-fn timeout_kills_process_and_exits_nonzero() {
-    let dir = temp_dir();
-    // 300 ms timeout — well below either slow command.
-    #[cfg(windows)]
-    write_config(&dir, 300, "ping -n 65 127.0.0.1");
-    #[cfg(not(windows))]
-    write_config(&dir, 300, "sleep 60");
-
-    let output = Command::new(nanny_bin())
-        .args(["--config", &config_arg(&dir), "run"])
-        .output()
-        .expect("failed to run nanny");
-
-    let _ = fs::remove_dir_all(&dir);
-
     assert!(
-        !output.status.success(),
-        "nanny must exit non-zero when timeout fires"
+        stdout.contains("ExecutionStarted"),
+        "stdout must have ExecutionStarted event"
     );
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("TimeoutExpired"),
-        "stderr must contain 'TimeoutExpired'\ngot: {stderr}"
+        stdout.contains("ExecutionStopped"),
+        "stdout must have ExecutionStopped event"
     );
-
-    // stdout must still have both bookend events.
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("ExecutionStarted"), "stdout must have ExecutionStarted even on timeout");
-    assert!(stdout.contains("TimeoutExpired"), "ExecutionStopped reason must be TimeoutExpired");
-}
-
-/// Named limits are resolved and enforced — timeout from [limits.fast].
-#[test]
-fn named_limits_timeout_is_enforced() {
-    let dir = temp_dir();
-
-    // Use a platform-specific long-running command (same reasoning as
-    // `timeout_kills_process_and_exits_nonzero`).
-    #[cfg(windows)]
-    let slow_cmd = "ping -n 65 127.0.0.1";
-    #[cfg(not(windows))]
-    let slow_cmd = "sleep 60";
-
-    // Global limits have a generous timeout; the named set is tight.
-    let toml = format!(
-        "\
-[start]
-cmd = \"{slow_cmd}\"
-
-[limits]
-steps   = 100
-tokens  = 1000
-timeout = 30000
-
-[limits.fast]
-timeout = 300
-
-[tools]
-allowed = [\"http_get\"]
-
-[observability]
-log = \"stdout\"
-"
-    );
-    fs::write(dir.join("nanny.toml"), toml).unwrap();
-
-    let output = Command::new(nanny_bin())
-        .args([
-            "--config", &config_arg(&dir),
-            "run", "--limits=fast",
-        ])
-        .output()
-        .expect("failed to run nanny");
-
-    let _ = fs::remove_dir_all(&dir);
-
     assert!(
-        !output.status.success(),
-        "nanny must exit non-zero when named limits timeout fires"
-    );
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("TimeoutExpired"),
-        "stderr must contain 'TimeoutExpired' for named limits timeout\ngot: {stderr}"
+        stdout.contains("AgentCompleted"),
+        "stop reason must be AgentCompleted"
     );
 }
 
@@ -219,7 +192,7 @@ log = \"stdout\"
 #[test]
 fn execution_stopped_is_always_last_line() {
     let dir = temp_dir();
-    write_config(&dir, 30_000, "echo nanny-test");
+    write_config(&dir, "echo nanny-test");
 
     let output = Command::new(nanny_bin())
         .args(["--config", &config_arg(&dir), "run"])
@@ -229,11 +202,15 @@ fn execution_stopped_is_always_last_line() {
     let _ = fs::remove_dir_all(&dir);
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let lines: Vec<&str> = stdout.lines()
+    let lines: Vec<&str> = stdout
+        .lines()
         .filter(|l| l.trim_start().starts_with('{'))
         .collect();
 
-    assert!(!lines.is_empty(), "stdout must contain at least one NDJSON line");
+    assert!(
+        !lines.is_empty(),
+        "stdout must contain at least one NDJSON line"
+    );
 
     // Every line must be valid JSON.
     for line in &lines {
@@ -259,7 +236,7 @@ fn execution_stopped_is_always_last_line() {
 #[test]
 fn execution_stopped_has_accounting_fields() {
     let dir = temp_dir();
-    write_config(&dir, 30_000, "echo nanny-accounting-test");
+    write_config(&dir, "echo nanny-accounting-test");
 
     let output = Command::new(nanny_bin())
         .args(["--config", &config_arg(&dir), "run"])
@@ -279,10 +256,6 @@ fn execution_stopped_has_accounting_fields() {
         serde_json::from_str(stopped_line).expect("ExecutionStopped must be valid JSON");
 
     assert!(
-        v["steps"].is_number(),
-        "ExecutionStopped must have a numeric `steps` field; got: {v}"
-    );
-    assert!(
         v["tokens_spent"].is_number(),
         "ExecutionStopped must have a numeric `tokens_spent` field; got: {v}"
     );
@@ -300,7 +273,7 @@ fn execution_stopped_has_accounting_fields() {
 fn process_crash_emits_process_crashed_stop_reason() {
     let dir = temp_dir();
     // `false` is the POSIX command that always exits with code 1.
-    write_config(&dir, 30_000, "false");
+    write_config(&dir, "false");
 
     let output = Command::new(nanny_bin())
         .args(["--config", &config_arg(&dir), "run"])
@@ -333,12 +306,7 @@ fn missing_start_section_exits_nonzero_with_message() {
     let dir = temp_dir();
     fs::write(
         dir.join("nanny.toml"),
-        r#"[limits]
-steps   = 10
-tokens  = 100
-timeout = 5000
-
-[observability]
+        r#"[observability]
 log = "stdout"
 "#,
     )
@@ -370,8 +338,8 @@ log = "stdout"
 
 #[test]
 fn server_start_nonloopback_without_certs_exits_with_message() {
-    let dir   = temp_dir();
-    let home  = temp_dir(); // override HOME so no ~/.nanny/certs/ exists
+    let dir = temp_dir();
+    let home = temp_dir(); // override HOME so no ~/.nanny/certs/ exists
 
     // Write a minimal nanny.toml so the config load succeeds, plus an app
     // identity, `--serve` requires one to key its state.
@@ -379,11 +347,6 @@ fn server_start_nonloopback_without_certs_exits_with_message() {
         dir.join("nanny.toml"),
         r#"[start]
 cmd = "echo hello"
-
-[limits]
-steps   = 10
-tokens  = 100
-timeout = 5000
 
 [observability]
 log = "stdout"
@@ -409,7 +372,9 @@ log = "stdout"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("mTLS") || stderr.contains("certs generate") || stderr.contains("not found"),
+        stderr.contains("mTLS")
+            || stderr.contains("certs generate")
+            || stderr.contains("not found"),
         "stderr must mention cert requirement; got: {stderr}"
     );
 }
@@ -421,6 +386,13 @@ log = "stdout"
 // Regression guard: if the cert check accidentally runs for loopback, the
 // server would fail to start and this test would catch it.
 //
+// Deliberately no [start]: `--serve` runs [start] under the governor and tears
+// the governor down the moment that app exits, so a fixture like
+// `cmd = "echo hello"` leaves the listener open for only a few milliseconds.
+// This test is about the bind, not about running an app, so it keeps the
+// governor headless and therefore alive until the test kills it. T8c covers
+// the serve-plus-app path.
+//
 // Sandboxed via NANNY_HOME, not HOME: `dirs::home_dir()` ignores the `HOME`
 // env override on Windows, so `nanny_server_state_dir` reads `NANNY_HOME`
 // first (see `commands::server::nanny_home_dir`), which works identically on
@@ -428,20 +400,12 @@ log = "stdout"
 
 #[test]
 fn server_start_loopback_does_not_require_cert_files() {
-    let dir  = temp_dir();
+    let dir = temp_dir();
     let home = temp_dir(); // fresh NANNY_HOME — no certs directory
 
     fs::write(
         dir.join("nanny.toml"),
-        r#"[start]
-cmd = "echo hello"
-
-[limits]
-steps   = 10
-tokens  = 100
-timeout = 5000
-
-[observability]
+        r#"[observability]
 log = "stdout"
 "#,
     )
@@ -449,7 +413,7 @@ log = "stdout"
     write_app_identity(&dir);
 
     // Pick a port for the server. We'll probe it then kill the process.
-    let port = 15900u16; // static, unlikely to be in use during tests
+    let port = free_port();
 
     let mut child = Command::new(nanny_bin())
         .current_dir(&dir)
@@ -459,14 +423,7 @@ log = "stdout"
         .expect("nanny run --serve must spawn");
 
     // Poll until the port accepts connections (up to 5s).
-    let mut ready = false;
-    for _ in 0..50 {
-        if std::net::TcpStream::connect(format!("127.0.0.1:{port}")).is_ok() {
-            ready = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
+    let ready = wait_for_port(port, 50);
 
     // Kill the server process.
     let _ = child.kill();
@@ -491,7 +448,7 @@ log = "stdout"
 
 #[test]
 fn nanny_run_joins_explicit_server_and_prints_message() {
-    let dir  = temp_dir();
+    let dir = temp_dir();
     let home = temp_dir();
 
     // Write nanny.toml for the joining client, deliberately different from
@@ -501,11 +458,6 @@ fn nanny_run_joins_explicit_server_and_prints_message() {
         r#"[start]
 cmd = "echo nanny-detection-test"
 
-[limits]
-steps   = 10
-tokens  = 100
-timeout = 10000
-
 [observability]
 log = "stdout"
 "#,
@@ -514,19 +466,14 @@ log = "stdout"
 
     // Start a plain-HTTP governance server on a loopback port, with its own
     // app identity, `--serve` requires one to key its state.
-    let server_port = 15901u16;
+    let server_port = free_port();
     let server_toml_dir = temp_dir();
     fs::write(
         server_toml_dir.join("nanny.toml"),
-        r#"[start]
-cmd = "echo unused"
-
-[limits]
-steps   = 100
-tokens  = 1000
-timeout = 60000
-
-[observability]
+        // No [start]: these tests want a headless governor. `--serve` runs
+        // [start].cmd when nanny.toml declares one, so a dummy command here
+        // would launch, exit instantly, and take the governor down with it.
+        r#"[observability]
 log = "stdout"
 "#,
     )
@@ -536,26 +483,29 @@ log = "stdout"
     let mut server = Command::new(nanny_bin())
         .current_dir(&server_toml_dir)
         .env("NANNY_HOME", &home)
-        .args(["run", "--serve", "--addr", &format!("127.0.0.1:{server_port}")])
+        .args([
+            "run",
+            "--serve",
+            "--addr",
+            &format!("127.0.0.1:{server_port}"),
+        ])
         .spawn()
         .expect("governance server must spawn");
 
     // Wait for the server to be ready.
-    let mut ready = false;
-    for _ in 0..50 {
-        if std::net::TcpStream::connect(format!("127.0.0.1:{server_port}")).is_ok() {
-            ready = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
+    let ready = wait_for_port(server_port, 50);
     assert!(ready, "governance server must become ready within 5 s");
 
     // Join it explicitly by id.
     let output = Command::new(nanny_bin())
         .current_dir(&dir)
         .env("NANNY_HOME", &home)
-        .args(["--config", &config_arg(&dir), "run", &format!("--join={app_id}")])
+        .args([
+            "--config",
+            &config_arg(&dir),
+            "run",
+            &format!("--join={app_id}"),
+        ])
         .output()
         .expect("nanny run --join must complete");
 
@@ -579,6 +529,110 @@ log = "stdout"
     );
 }
 
+// ── T8b: a joined app is attributed to ITSELF, not to the governor ───────────
+//
+// The load-bearing property of the whole app-identity design: one governor
+// holds one credential and serves many apps, and each must still land under its
+// own name. If a joined app inherited the governor's identity, a fleet would
+// collapse into one row on the dashboard and per-app cost would be a fiction.
+//
+// Sandboxed via NANNY_HOME, not HOME (see T7's comment for why).
+
+#[test]
+fn joined_app_is_attributed_to_its_own_identity() {
+    let home = temp_dir();
+
+    // The governor, with its own identity and a file event log to read back.
+    let server_dir = temp_dir();
+    fs::write(
+        server_dir.join("nanny.toml"),
+        // No [start]: these tests want a headless governor. `--serve` runs
+        // [start].cmd when nanny.toml declares one, so a dummy command here
+        // would launch, exit instantly, and take the governor down with it.
+        r#"[observability]
+log = "file"
+"#,
+    )
+    .unwrap();
+    let governor_id = write_app_identity(&server_dir);
+
+    // The joining app, with a DIFFERENT identity.
+    let client_dir = temp_dir();
+    fs::write(
+        client_dir.join("nanny.toml"),
+        r#"[start]
+cmd = "echo joined-work"
+
+"#,
+    )
+    .unwrap();
+    let joiner_id = write_app_identity(&client_dir);
+    assert_ne!(
+        governor_id, joiner_id,
+        "the two apps must be distinct for this test to mean anything"
+    );
+
+    let server_port = free_port();
+    let mut server = Command::new(nanny_bin())
+        .current_dir(&server_dir)
+        .env("NANNY_HOME", &home)
+        .args([
+            "run",
+            "--serve",
+            "--addr",
+            &format!("127.0.0.1:{server_port}"),
+        ])
+        .spawn()
+        .expect("governance server must spawn");
+
+    let ready = wait_for_port(server_port, 50);
+    assert!(ready, "governance server must become ready within 5 s");
+
+    let output = Command::new(nanny_bin())
+        .current_dir(&client_dir)
+        .env("NANNY_HOME", &home)
+        .args([
+            "--config",
+            &config_arg(&client_dir),
+            "run",
+            &format!("--join={governor_id}"),
+        ])
+        .output()
+        .expect("nanny run --join must complete");
+
+    // The governor drains events on a 250 ms tick, so give it room to flush.
+    let log_path = server_dir.join(".nanny").join("logs").join("log.ndjson");
+    let mut events = String::new();
+    for _ in 0..40 {
+        events = fs::read_to_string(&log_path).unwrap_or_default();
+        if events.contains("AppIdentified") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    let _ = server.kill();
+    let _ = server.wait();
+    let _ = fs::remove_dir_all(&client_dir);
+    let _ = fs::remove_dir_all(&server_dir);
+    let _ = fs::remove_dir_all(&home);
+
+    assert!(
+        output.status.success(),
+        "nanny run --join must exit 0\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        events.contains(&joiner_id),
+        "the governor's log must attribute the run to the JOINING app ({joiner_id})\ngot: {events}"
+    );
+    assert!(
+        !events.contains(&governor_id),
+        "the joined run must not be filed under the governor's own id ({governor_id})\ngot: {events}"
+    );
+}
+
 // ── T9: nanny run --join=<id> fails loudly when that server isn't reachable ──
 //
 // An explicit `--join` that doesn't find its target is a mistake worth
@@ -591,18 +645,13 @@ log = "stdout"
 
 #[test]
 fn join_to_unreachable_server_fails_loudly() {
-    let dir  = temp_dir();
+    let dir = temp_dir();
     let home = temp_dir();
 
     fs::write(
         dir.join("nanny.toml"),
         r#"[start]
 cmd = "echo nanny-stale-test"
-
-[limits]
-steps   = 10
-tokens  = 100
-timeout = 10000
 
 [observability]
 log = "stdout"
@@ -621,7 +670,12 @@ log = "stdout"
     let output = Command::new(nanny_bin())
         .current_dir(&dir)
         .env("NANNY_HOME", &home)
-        .args(["--config", &config_arg(&dir), "run", &format!("--join={app_id}")])
+        .args([
+            "--config",
+            &config_arg(&dir),
+            "run",
+            &format!("--join={app_id}"),
+        ])
         .output()
         .expect("nanny run --join must complete");
 
@@ -639,237 +693,625 @@ log = "stdout"
     );
 }
 
-// ── T10: proxy env vars are auto-injected when the SERVER has [proxy] configured ─
+// ── T8c: `--serve` runs [start] under the governor, and stays joinable ───────
 //
-// The server's own nanny.toml (not the client's) decides whether [proxy]
-// allowed_hosts is active. When it is, cmd_run_via_network_server must set
-// HTTPS_PROXY / HTTP_PROXY (and lowercase) on the child pointing at the
-// governor, plus NO_PROXY for the loopback address — without the dev setting
-// anything by hand. Uses a different directory/nanny.toml for the server vs.
-// the client on purpose, matching how these are used in practice.
+// The whole point of letting --serve launch the app: one command, no launcher
+// script. A script has to poll for readiness, runs `sh` as PID 1 so SIGTERM
+// never reaches the governor, and orphans one half if the other dies. Doing it
+// in-process removes all three.
 //
-// Sandboxed via NANNY_HOME, not HOME (see T7's comment for why).
+// Also pins that launching an app of its own does NOT make the governor
+// exclusive: it is still a server, and other processes can still join it.
 
 #[test]
-fn proxy_env_vars_injected_when_server_has_proxy_configured() {
-    let dir  = temp_dir();
+fn serve_runs_the_start_command_and_remains_joinable() {
     let home = temp_dir();
 
-    // Client nanny.toml — deliberately has NO [proxy] section, to prove the
-    // decision comes from the server's config, not this one. [start].cmd is
-    // spawned directly (no shell), so "sh -c ..." only works where a real
-    // `sh` is on PATH — use cmd.exe's own syntax on Windows instead.
-    #[cfg(not(windows))]
-    let print_cmd = "sh -c 'echo GOT:HTTPS_PROXY=$HTTPS_PROXY:HTTP_PROXY=$HTTP_PROXY:NO_PROXY=$NO_PROXY'";
-    #[cfg(windows)]
-    let print_cmd = "cmd /c 'echo GOT:HTTPS_PROXY=%HTTPS_PROXY%:HTTP_PROXY=%HTTP_PROXY%:NO_PROXY=%NO_PROXY%'";
-
+    let server_dir = temp_dir();
+    // The app touches a marker before sleeping, so the test can wait for the
+    // app itself rather than for the governor's socket.
+    let app_marker = server_dir.join("app-started");
+    // `sh -c "..."` is itself embedded in a TOML double-quoted string, so the
+    // marker path must survive both TOML and shell escaping. Windows paths
+    // contain backslashes, which TOML treats as escape characters (e.g. `\U`
+    // is a unicode escape) and would corrupt the file. Forward slashes are
+    // accepted as path separators on Windows too, so normalize to those
+    // instead of escaping backslashes twice over.
+    let app_marker_display = app_marker.display().to_string().replace('\\', "/");
     fs::write(
-        dir.join("nanny.toml"),
+        server_dir.join("nanny.toml"),
         format!(
             r#"[start]
-cmd = "{print_cmd}"
-
-[limits]
-steps   = 10
-tokens  = 100
-timeout = 10000
+cmd = "sh -c \"echo SERVE-RAN-THE-APP; touch {}; sleep 5\""
 
 [observability]
-log = "stdout"
-"#
+log = "file"
+"#,
+            app_marker_display
         ),
     )
     .unwrap();
+    let governor_id = write_app_identity(&server_dir);
 
-    // Server nanny.toml — [proxy] allowed_hosts is what should drive injection.
-    let server_toml_dir = temp_dir();
+    let server_port = free_port();
+    let mut server = Command::new(nanny_bin())
+        .current_dir(&server_dir)
+        .env("NANNY_HOME", &home)
+        .args([
+            "run",
+            "--serve",
+            "--addr",
+            &format!("127.0.0.1:{server_port}"),
+        ])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("governor must spawn");
+
+    let ready = wait_for_port(server_port, 100);
+    assert!(ready, "governor must become ready within 10 s");
+
+    // Binding the listener and launching [start].cmd are separate steps, and
+    // this test is about the second one. Waiting only on the port kills the
+    // governor in the gap between them.
+    //
+    // Recorded, not asserted here: a panic before `server.kill()` below leaks
+    // a live governor that outlives the test run and holds its port, which
+    // then breaks unrelated tests. Assert after the process is reaped.
+    let app_started = wait_for_file(&app_marker, 100);
+
+    // While the governor's own app is still running, a separate process must
+    // still be able to join. Launching an app does not close the door.
+    let client_dir = temp_dir();
     fs::write(
-        server_toml_dir.join("nanny.toml"),
+        client_dir.join("nanny.toml"),
         r#"[start]
-cmd = "echo unused"
+cmd = "echo JOINED-WHILE-SERVING"
 
-[limits]
-steps   = 100
-tokens  = 1000
-timeout = 60000
-
-[proxy]
-allowed_hosts = ["api.openai.com"]
-
-[observability]
-log = "stdout"
 "#,
     )
     .unwrap();
-    let app_id = write_app_identity(&server_toml_dir);
+    write_app_identity(&client_dir);
 
-    let server_port = 15902u16;
-    let mut server = Command::new(nanny_bin())
-        .current_dir(&server_toml_dir)
+    let joined = Command::new(nanny_bin())
+        .current_dir(&client_dir)
         .env("NANNY_HOME", &home)
-        .args(["run", "--serve", "--addr", &format!("127.0.0.1:{server_port}")])
-        .spawn()
-        .expect("governance server must spawn");
-
-    let mut ready = false;
-    for _ in 0..50 {
-        if std::net::TcpStream::connect(format!("127.0.0.1:{server_port}")).is_ok() {
-            ready = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-    assert!(ready, "governance server must become ready within 5 s");
-
-    // proxy_token, a separate CONNECT-only credential from the session token,
-    // is embedded as userinfo in the injected proxy URL (so the child's HTTP
-    // client sends it as Proxy-Authorization on CONNECT). Read the real value
-    // the server wrote so the assertion below matches exactly.
-    let token = fs::read_to_string(
-        home.join(".nanny").join("servers").join(&app_id).join("server.proxy_token"),
-    )
-    .expect("server.proxy_token must exist")
-    .trim()
-    .to_string();
-
-    let output = Command::new(nanny_bin())
-        .current_dir(&dir)
-        .env("NANNY_HOME", &home)
-        .args(["--config", &config_arg(&dir), "run", &format!("--join={app_id}")])
+        .args([
+            "--config",
+            &config_arg(&client_dir),
+            "run",
+            &format!("--join={governor_id}"),
+        ])
         .output()
-        .expect("nanny run must complete");
+        .expect("join must complete");
 
     let _ = server.kill();
-    let _ = server.wait();
-    let _ = fs::remove_dir_all(&dir);
+    let server_out = server.wait_with_output().expect("governor must be reaped");
+
+    let _ = fs::remove_dir_all(&client_dir);
+    let _ = fs::remove_dir_all(&server_dir);
     let _ = fs::remove_dir_all(&home);
-    let _ = fs::remove_dir_all(&server_toml_dir);
 
     assert!(
-        output.status.success(),
-        "nanny run must exit 0\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
+        app_started,
+        "--serve must launch [start].cmd within 10 s of becoming ready"
     );
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let expected = format!(
-        "GOT:HTTPS_PROXY=http://{token}:@127.0.0.1:{server_port}:HTTP_PROXY=http://{token}:@127.0.0.1:{server_port}:NO_PROXY=127.0.0.1,localhost"
+    let server_stdout = String::from_utf8_lossy(&server_out.stdout);
+    assert!(
+        server_stdout.contains("SERVE-RAN-THE-APP"),
+        "--serve must run [start].cmd, not ignore it\ngot: {server_stdout}"
     );
     assert!(
-        stdout.contains(&expected),
-        "child must see HTTPS_PROXY/HTTP_PROXY/NO_PROXY pointed at the governor, \
-         with the session token embedded as Proxy-Authorization userinfo\n\
-         expected to find: {expected}\ngot stdout: {stdout}"
+        server_stdout.contains("running [start] under this governor"),
+        "--serve must say it is launching the app\ngot: {server_stdout}"
+    );
+
+    let joined_stdout = String::from_utf8_lossy(&joined.stdout);
+    assert!(
+        joined.status.success() && joined_stdout.contains("JOINED-WHILE-SERVING"),
+        "a governor running its own app must still accept joins\nstdout: {joined_stdout}\nstderr: {}",
+        String::from_utf8_lossy(&joined.stderr),
     );
 }
 
-// ── T11: proxy env vars are NOT injected when the server has no [proxy] ──────
-//
-// Regression guard for the opposite case: a server with no [proxy] section
-// (or an empty allowed_hosts) must not cause the child to get HTTPS_PROXY/
-// HTTP_PROXY pointed at it — that would route all outbound traffic into a
-// proxy that immediately 404s every CONNECT ("proxy not configured"),
-// breaking legitimate calls.
-//
-// Sandboxed via NANNY_HOME, not HOME (see T7's comment for why).
+// ── T8d: `--serve` with no [start] stays headless ────────────────────────────
 
 #[test]
-fn proxy_env_vars_not_injected_when_server_has_no_proxy_configured() {
-    let dir  = temp_dir();
+fn serve_without_a_start_section_stays_headless() {
     let home = temp_dir();
+    let server_dir = temp_dir();
+    fs::write(server_dir.join("nanny.toml"), r#""#).unwrap();
+    write_app_identity(&server_dir);
 
-    // cmd.exe and sh disagree on how an UNSET variable prints: sh's $VAR
-    // expands to empty, cmd.exe's %VAR% is left as the literal text when the
-    // variable doesn't exist. The expected assertion below accounts for that.
-    #[cfg(not(windows))]
-    let print_cmd = "sh -c 'echo GOT:HTTPS_PROXY=[$HTTPS_PROXY]'";
-    #[cfg(windows)]
-    let print_cmd = "cmd /c 'echo GOT:HTTPS_PROXY=[%HTTPS_PROXY%]'";
+    let server_port = free_port();
+    let mut server = Command::new(nanny_bin())
+        .current_dir(&server_dir)
+        .env("NANNY_HOME", &home)
+        .args([
+            "run",
+            "--serve",
+            "--addr",
+            &format!("127.0.0.1:{server_port}"),
+        ])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("governor must spawn");
 
+    let ready = wait_for_port(server_port, 100);
+
+    let _ = server.kill();
+    let out = server.wait_with_output().expect("governor must be reaped");
+    let _ = fs::remove_dir_all(&server_dir);
+    let _ = fs::remove_dir_all(&home);
+
+    assert!(ready, "a headless governor must still come up");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("running headless"),
+        "no [start] must mean headless, and say so\ngot: {stdout}"
+    );
+}
+
+// ── Run attribution ───────────────────────────────────────────────────────────
+
+/// Two runs of the same project append to the same log file. Every line must
+/// say which run it belongs to.
+///
+/// This is the shape `nanny run --serve` produces by default, where one
+/// governor drains many concurrent runs into one file. It cannot be recovered
+/// after the fact: draining is per-run and batched, so sorting by `ts` does not
+/// reconstruct the interleaving, and pairing `ExecutionStarted` with
+/// `ExecutionStopped` fails on exactly the runs worth investigating, because a
+/// missing stop is a documented outcome (the process crashed) rather than a
+/// parse error.
+#[test]
+fn two_runs_sharing_one_log_stay_attributable() {
+    let dir = temp_dir();
+    write_config_logging_to_file(&dir, "echo hello");
+
+    for _ in 0..2 {
+        let status = Command::new(nanny_bin())
+            .args(["run", "--config", &config_arg(&dir)])
+            .current_dir(&dir)
+            .status()
+            .expect("nanny run must execute");
+        assert!(status.success(), "run must exit cleanly");
+    }
+
+    let log = fs::read_to_string(dir.join(".nanny/logs/log.ndjson"))
+        .expect("file logging must produce a log");
+    let lines: Vec<serde_json::Value> = log
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).expect("every line is JSON"))
+        .collect();
+
+    assert!(
+        lines.len() >= 4,
+        "two runs produce at least two bookends each"
+    );
+
+    let mut runs: std::collections::BTreeMap<String, Vec<u64>> = Default::default();
+    for line in &lines {
+        let run_id = line["run_id"]
+            .as_str()
+            .expect("every line carries a run id");
+        assert!(!run_id.is_empty(), "run id must not be blank");
+        runs.entry(run_id.to_string())
+            .or_default()
+            .push(line["seq"].as_u64().expect("every line carries a seq"));
+    }
+
+    assert_eq!(
+        runs.len(),
+        2,
+        "two invocations are two runs, not one stream"
+    );
+
+    for (run_id, seqs) in runs {
+        let mut sorted = seqs.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            seqs.len(),
+            "run {run_id} must not reuse a seq"
+        );
+        assert_eq!(sorted[0], 0, "run {run_id} must start at seq 0");
+    }
+}
+
+/// A run that never writes `ExecutionStopped` is still fully segmentable.
+///
+/// The event enum documents a missing stop as an auditable fact: the process
+/// crashed. Any scheme that recovers attribution by pairing the bookends fails
+/// here, which is why attribution rides on every line instead.
+#[test]
+fn a_run_without_a_stop_event_is_still_attributable() {
+    let dir = temp_dir();
+    write_config_logging_to_file(&dir, "echo hello");
+
+    let status = Command::new(nanny_bin())
+        .args(["run", "--config", &config_arg(&dir)])
+        .current_dir(&dir)
+        .status()
+        .expect("nanny run must execute");
+    assert!(status.success());
+
+    let path = dir.join(".nanny/logs/log.ndjson");
+    let log = fs::read_to_string(&path).expect("log exists");
+
+    // Drop the trailing ExecutionStopped, simulating a crashed run.
+    let kept: Vec<&str> = log.lines().filter(|l| !l.trim().is_empty()).collect();
+    let truncated: Vec<&str> = kept[..kept.len() - 1].to_vec();
+    assert!(!truncated.is_empty());
+
+    for line in truncated {
+        let v: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert!(
+            v["run_id"].as_str().is_some_and(|s| !s.is_empty()),
+            "attribution must not depend on the stop event"
+        );
+    }
+}
+
+/// `ExecutionStarted` carries the fingerprint of the config that governed the
+/// run, and two runs under an unchanged config report the same one.
+#[test]
+fn execution_started_carries_a_stable_config_hash() {
+    let dir = temp_dir();
+    write_config_logging_to_file(&dir, "echo hello");
+
+    for _ in 0..2 {
+        Command::new(nanny_bin())
+            .args(["run", "--config", &config_arg(&dir)])
+            .current_dir(&dir)
+            .status()
+            .expect("nanny run must execute");
+    }
+
+    let log = fs::read_to_string(dir.join(".nanny/logs/log.ndjson")).unwrap();
+    let hashes: Vec<String> = log
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .filter(|v| v["event"] == "ExecutionStarted")
+        .map(|v| {
+            v["config_hash"]
+                .as_str()
+                .expect("a hash is always present")
+                .to_string()
+        })
+        .collect();
+
+    assert_eq!(hashes.len(), 2, "each run bookends with its own grant");
+    assert_eq!(hashes[0], hashes[1], "an unchanged config is one policy");
+    assert_eq!(hashes[0].len(), 64, "sha256 hex");
+}
+
+/// Gap G5: `ExecutionStarted` carries the runtime's own version, so a fleet
+/// operator can answer "which of my machines are on an old runtime" from the
+/// log alone, without cross-referencing which binary happened to be deployed
+/// where.
+#[test]
+fn execution_started_carries_the_runtime_version() {
+    let dir = temp_dir();
+    write_config_logging_to_file(&dir, "echo hello");
+
+    Command::new(nanny_bin())
+        .args(["run", "--config", &config_arg(&dir)])
+        .current_dir(&dir)
+        .status()
+        .expect("nanny run must execute");
+
+    let log = fs::read_to_string(dir.join(".nanny/logs/log.ndjson")).unwrap();
+    let started = log
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .find(|v| v["event"] == "ExecutionStarted")
+        .expect("ExecutionStarted is always the first event");
+
+    assert_eq!(
+        started["runtime_version"],
+        env!("CARGO_PKG_VERSION"),
+        "must match the binary that actually produced this run"
+    );
+}
+
+// ── Rule packs ────────────────────────────────────────────────────────────────
+
+/// A pack declared in config but absent from disk stops the run before it
+/// starts.
+///
+/// Fail-closed applies to what Nanny was asked to govern. The operator asked
+/// for these controls; running without them would be an agent that is less
+/// governed than its own config claims, which is the one failure a governance
+/// tool cannot have.
+#[test]
+fn a_missing_rule_pack_refuses_to_start() {
+    let dir = temp_dir();
     fs::write(
         dir.join("nanny.toml"),
-        format!(
-            r#"[start]
-cmd = "{print_cmd}"
-
-[limits]
-steps   = 10
-tokens  = 100
-timeout = 10000
-
-[observability]
-log = "stdout"
-"#
-        ),
-    )
-    .unwrap();
-
-    // Server nanny.toml — no [proxy] section at all.
-    let server_toml_dir = temp_dir();
-    fs::write(
-        server_toml_dir.join("nanny.toml"),
         r#"[start]
-cmd = "echo unused"
+cmd = "echo hello"
 
-[limits]
-steps   = 100
-tokens  = 1000
-timeout = 60000
+[tools]
+allowed = ["http_get"]
+
+[rules]
+extends = ["nanny:owasp@2.1.0"]
 
 [observability]
 log = "stdout"
 "#,
     )
     .unwrap();
-    let app_id = write_app_identity(&server_toml_dir);
 
-    let server_port = 15903u16;
-    let mut server = Command::new(nanny_bin())
-        .current_dir(&server_toml_dir)
-        .env("NANNY_HOME", &home)
-        .args(["run", "--serve", "--addr", &format!("127.0.0.1:{server_port}")])
-        .spawn()
-        .expect("governance server must spawn");
-
-    let mut ready = false;
-    for _ in 0..50 {
-        if std::net::TcpStream::connect(format!("127.0.0.1:{server_port}")).is_ok() {
-            ready = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-    assert!(ready, "governance server must become ready within 5 s");
-
-    let output = Command::new(nanny_bin())
+    let out = Command::new(nanny_bin())
+        .args(["run", "--config", &config_arg(&dir)])
         .current_dir(&dir)
-        .env("NANNY_HOME", &home)
-        .args(["--config", &config_arg(&dir), "run", &format!("--join={app_id}")])
         .output()
-        .expect("nanny run must complete");
+        .expect("nanny run must execute");
 
-    let _ = server.kill();
-    let _ = server.wait();
-    let _ = fs::remove_dir_all(&dir);
-    let _ = fs::remove_dir_all(&home);
-    let _ = fs::remove_dir_all(&server_toml_dir);
+    assert!(!out.status.success(), "a missing control must not start");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("nanny rules add nanny:owasp@2.1.0"),
+        "the error must say how to fix it, got: {stderr}"
+    );
+}
+
+/// An unpinned pack is a config error, not a resolution guess.
+#[test]
+fn an_unpinned_rule_pack_refuses_to_start() {
+    let dir = temp_dir();
+    fs::write(
+        dir.join("nanny.toml"),
+        r#"[start]
+cmd = "echo hello"
+
+[tools]
+allowed = ["http_get"]
+
+[rules]
+extends = ["nanny:owasp"]
+
+[observability]
+log = "stdout"
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(nanny_bin())
+        .args(["run", "--config", &config_arg(&dir)])
+        .current_dir(&dir)
+        .output()
+        .expect("nanny run must execute");
+
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("has no version"), "got: {stderr}");
+}
+
+/// An installed pack loads and the run proceeds.
+#[test]
+fn an_installed_rule_pack_starts_normally() {
+    let dir = temp_dir();
+    fs::write(
+        dir.join("nanny.toml"),
+        r#"[start]
+cmd = "echo hello"
+
+[tools]
+allowed = ["http_get"]
+
+[rules]
+extends = ["nanny:recommended@1.0.0"]
+
+[observability]
+log = "stdout"
+"#,
+    )
+    .unwrap();
+
+    let pack = dir.join(".nanny/rules/nanny-recommended@1.0.0");
+    fs::create_dir_all(&pack).unwrap();
+    fs::write(
+        pack.join("pack.toml"),
+        "name = \"nanny:recommended\"\nversion = \"1.0.0\"\nrules = [\"no_send_after_read\"]\n",
+    )
+    .unwrap();
+
+    let out = Command::new(nanny_bin())
+        .args(["run", "--config", &config_arg(&dir)])
+        .current_dir(&dir)
+        .output()
+        .expect("nanny run must execute");
 
     assert!(
-        output.status.success(),
-        "nanny run must exit 0\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("nanny:recommended@1.0.0"),
+        "the run must name its packs"
+    );
+}
+
+/// `nanny rules add` vendors the pack and declares it, and never touches source.
+#[test]
+fn rules_add_vendors_the_pack_and_declares_it() {
+    let dir = temp_dir();
+    fs::write(
+        dir.join("nanny.toml"),
+        "# governs the outreach agent\n[start]\ncmd = \"echo hello\"\n\n[tools]\nallowed = [\"http_get\"]\n",
+    )
+    .unwrap();
+    fs::write(dir.join("agent.py"), "# untouched\n").unwrap();
+
+    let src = temp_dir();
+    fs::write(
+        src.join("pack.toml"),
+        "name = \"nanny:owasp\"\nversion = \"2.1.0\"\nrules = [\"no_send_after_read\"]\n",
+    )
+    .unwrap();
+    fs::write(
+        src.join("rules.py"),
+        "def no_send_after_read(ctx): return True\n",
+    )
+    .unwrap();
+
+    let out = Command::new(nanny_bin())
+        .args([
+            "rules",
+            "add",
+            "nanny:owasp@2.1.0",
+            "--from",
+            &src.to_string_lossy(),
+        ])
+        .current_dir(&dir)
+        .output()
+        .expect("nanny rules add must execute");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
     );
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    #[cfg(not(windows))]
-    let expected = "GOT:HTTPS_PROXY=[]";
-    #[cfg(windows)]
-    let expected = "GOT:HTTPS_PROXY=[%HTTPS_PROXY%]";
+    // Vendored, so the same controls run on every machine.
+    assert!(dir.join(".nanny/rules/nanny-owasp@2.1.0/rules.py").exists());
+
+    // Declared, pinned, and the operator's comment survives.
+    let toml = fs::read_to_string(dir.join("nanny.toml")).unwrap();
+    assert!(toml.contains("nanny:owasp@2.1.0"), "got: {toml}");
     assert!(
-        stdout.contains(expected),
-        "HTTPS_PROXY must be unset when the server has no [proxy] configured\ngot stdout: {stdout}"
+        toml.contains("# governs the outreach agent"),
+        "comments must survive"
     );
+
+    // Source untouched: an installed rule is never pasted into user code.
+    assert_eq!(
+        fs::read_to_string(dir.join("agent.py")).unwrap(),
+        "# untouched\n"
+    );
+
+    // The run now starts, because the declared pack is present.
+    let run = Command::new(nanny_bin())
+        .args(["run", "--config", &config_arg(&dir)])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // And removing it undeclares it again.
+    let rm = Command::new(nanny_bin())
+        .args(["rules", "remove", "nanny:owasp@2.1.0"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(rm.status.success());
+    assert!(!fs::read_to_string(dir.join("nanny.toml"))
+        .unwrap()
+        .contains("nanny:owasp@2.1.0"));
+}
+
+/// A pack whose contents do not match its declared digest is refused.
+#[test]
+fn rules_add_refuses_a_tampered_pack() {
+    let dir = temp_dir();
+    fs::write(
+        dir.join("nanny.toml"),
+        "[start]\ncmd = \"echo hi\"\n\n[tools]\nallowed = []\n",
+    )
+    .unwrap();
+
+    let src = temp_dir();
+    fs::write(src.join("rules.py"), "def r(ctx): return True\n").unwrap();
+    fs::write(
+        src.join("pack.toml"),
+        "name = \"acme:pack\"\nversion = \"1.0.0\"\nsignature = \"0000000000000000000000000000000000000000000000000000000000000000\"\n",
+    )
+    .unwrap();
+
+    let out = Command::new(nanny_bin())
+        .args([
+            "rules",
+            "add",
+            "acme:pack@1.0.0",
+            "--from",
+            &src.to_string_lossy(),
+        ])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+
+    assert!(!out.status.success(), "a tampered pack must not install");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("failed integrity check"), "got: {stderr}");
+    assert!(
+        !dir.join(".nanny/rules").exists(),
+        "nothing may be written on failure"
+    );
+}
+
+// ── Fail-closed on a missing rule pack, on both start paths ──────────────────
+
+/// A config declaring a pack that is not on disk, plus an app identity so
+/// `--serve` gets far enough to reach the pack check.
+fn write_config_declaring_a_missing_pack(dir: &Path) {
+    fs::write(
+        dir.join("nanny.toml"),
+        "[start]\ncmd = \"true\"\n\n[tools]\nallowed = [\"a\"]\n\n\
+         [rules]\nextends = [\"nanny:owasp@1.0.0\"]\n",
+    )
+    .unwrap();
+    fs::create_dir_all(dir.join(".nanny")).unwrap();
+    fs::write(
+        dir.join(".nanny/app.json"),
+        "{\"app_id\":\"app_packcheck00000000000000000000\",\"name\":\"packcheck\"}",
+    )
+    .unwrap();
+}
+
+/// Both start paths must refuse, and this is asserted as a pair on purpose.
+///
+/// The guarantee is that a pack named in `[rules] extends` and missing from
+/// disk stops the run: the operator believes controls are in force that are
+/// not. It was implemented in `cmd_run` only, so it held for local development
+/// and not for `--serve`, which is the shape every container runs — an image
+/// missing its vendored pack booted and ran unguarded, silently, because
+/// nothing else checks. Testing one path would have passed throughout.
+#[test]
+fn a_missing_rule_pack_refuses_to_start_on_both_paths() {
+    for args in [vec!["run"], vec!["run", "--serve"]] {
+        let dir = temp_dir();
+        write_config_declaring_a_missing_pack(&dir);
+
+        let out = Command::new(nanny_bin())
+            .args(&args)
+            .current_dir(&dir)
+            .output()
+            .expect("nanny runs");
+
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !out.status.success(),
+            "`nanny {}` started with a declared pack missing from disk; \
+             stdout: {} stderr: {stderr}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stdout),
+        );
+        assert!(
+            stderr.contains("nanny:owasp"),
+            "`nanny {}` must name the pack it could not find: {stderr}",
+            args.join(" "),
+        );
+    }
 }

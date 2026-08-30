@@ -1,0 +1,314 @@
+---
+title: Rust
+description: Per-function governance for Rust agents using Nanny macros.
+---
+
+The Rust SDK brings Nanny's enforcement boundary into your code. You mark individual functions as tools and rules, and Nanny evaluates each call before it executes.
+
+---
+
+## Installation
+
+The SDK ships inside the same crate as the CLI binary. Add it to your project:
+
+```bash
+cargo add nannyd
+```
+
+Then import what you need:
+
+```rust
+use nanny::{tool, rule, agent, PolicyContext};
+```
+
+---
+
+## Passthrough mode
+
+If your agent runs without `nanny run`, every macro is a no-op. The function executes normally with no enforcement overhead:
+
+```bash
+# Governed — enforcement active (reads [start].cmd from nanny.toml)
+nanny run
+
+# Not governed — macros silent, agent runs normally
+cargo run
+```
+
+---
+
+## `#[tool]` — declare a governed tool
+
+Mark a function as a tool that Nanny should govern:
+
+```rust
+use nanny::tool;
+
+#[tool(tokens = 10)]
+fn fetch_page(url: &str) -> String {
+    // HTTP call, file read, LLM call, or any side-effecting operation
+    reqwest::blocking::get(url).unwrap().text().unwrap()
+}
+```
+
+When the agent calls `fetch_page`:
+
+1. Nanny checks: is `fetch_page` in the `[tools] allowed` list?
+2. Nanny checks: has `fetch_page` exceeded `[tools.fetch_page] max_calls`?
+3. Nanny records 10 tokens for attribution.
+4. If any check fails, execution stops immediately — the function body never runs.
+
+### Tokens
+
+The `tokens` argument is required. It is the number of tokens charged per call.
+Set it to `0` for tools you want tracked but not charged:
+
+```rust
+#[tool(tokens = 0)]
+fn log_step(msg: &str) { ... }
+```
+
+### Matching the tool allowlist
+
+The tool name used for allowlist checks is the **function name** as declared in Rust:
+
+```toml
+# nanny.toml
+[tools]
+allowed = ["fetch_page", "read_file"]
+
+[tools.fetch_page]
+max_calls       = 20
+max_calls = 10   # most calls to this tool in one run
+```
+
+---
+
+## `nanny::http_get` — built-in HTTP tool
+
+`nanny::http_get` is a built-in governed HTTP GET function. It requires no `#[tool]` annotation — Nanny applies allowlist, call-count, and token enforcement automatically.
+
+```rust
+use nanny::http_get;
+
+let html = http_get("https://example.com")?;
+```
+
+Governance applied automatically:
+
+- Checked against the `[tools] allowed` list (tool name: `"http_get"`)
+- Subject to `[tools.http_get] max_calls` limit
+- Reports 10 tokens per successful call, for attribution
+
+```toml
+# nanny.toml
+[tools]
+allowed = ["http_get"]
+
+[tools.http_get]
+max_calls       = 15
+max_calls = 10
+```
+
+In passthrough mode (no `nanny run`), `nanny::http_get` makes the request directly with no enforcement overhead.
+
+---
+
+## `nanny::report_usage` — report LLM token usage
+
+`#[tool(tokens = N)]` records a *declared* token cost per call. To record the *actual* tokens an LLM used, report them after the call with `nanny::report_usage`. Hand Nanny the counts already present on the response.
+
+Measurement only. Nothing here stops a run: tokens are recorded so you can answer what a run cost, and Nanny never makes a decision from them.
+
+```rust
+use nanny::{report_usage, Usage};
+
+let resp = client.chat().create(request).await?;
+
+report_usage(Usage {
+    input:  resp.usage.prompt_tokens,
+    output: resp.usage.completion_tokens,
+    ..Default::default()
+});
+```
+
+Only `input` and `output` are required. You can optionally attach `model` and `provider` labels — identifiers only, never prompt or response content — and, if your provider's response reports it, `cache_read`/`cache_write` (a finer split of `input`, never additional tokens beyond it):
+
+```rust
+report_usage(Usage {
+    input:  resp.usage.prompt_tokens,
+    output: resp.usage.completion_tokens,
+    model:    Some("gpt-4o".into()),
+    provider: Some("openai".into()),
+    ..Default::default()
+});
+```
+
+Each call emits an `LlmUsageRecorded` event. `report_usage` is fire-and-forget: it never blocks your agent and never panics. In passthrough mode (no `nanny run`) it is a no-op.
+
+<Note>
+Rust reports usage explicitly, one call per LLM response. In Python, `nanny_sdk.instrument(client)` does the same thing automatically by wrapping the client — Rust cannot patch a client at runtime, so the reporting is an explicit call instead.
+</Note>
+
+---
+
+## `#[rule]` — declare an enforcement rule
+
+A rule is a function that returns a verdict on whether execution should continue.
+Return `true` to allow, `false` to deny:
+
+```rust
+use nanny::{rule, PolicyContext};
+
+#[rule("no_spiral")]
+fn check_spiral(ctx: &PolicyContext) -> bool {
+    let h = &ctx.tool_call_history;
+    // Deny if the last three tool calls were all the same URL
+    !(h.len() >= 3 && h[h.len()-3..].iter().all(|u| u == &h[h.len()-1]))
+}
+```
+
+Rules are evaluated on every tool call. When a rule returns `false`, Nanny stops execution with:
+
+```
+StopReason::RuleDenied { rule_name: "no_spiral" }
+```
+
+### PolicyContext fields
+
+The `ctx` parameter gives you a snapshot of the current execution state:
+
+| Field               | Type                      | Description                                                                              |
+| ------------------- | ------------------------- | ---------------------------------------------------------------------------------------- |
+| Field | Type | Description |
+| --- | --- | --- |
+| `requested_tool`    | `Option<String>`               | The tool being evaluated right now |
+| `last_tool_args`    | `HashMap<String, String>`      | Arguments of that call |
+| `tool_labels`       | `HashMap<String, Vec<String>>` | Labels for **every** allowed tool, not only the pending one |
+| `tool_call_history` | `Vec<String>`                  | Ordered log of tool names already called |
+| `tool_call_counts`  | `HashMap<String, u32>`         | Per-tool call counts |
+| `tokens_spent`      | `u64`                          | Tokens measured so far |
+| `elapsed_ms`        | `u64`                          | Wall-clock time since the run started |
+| `now_ms`            | `u64`                          | Wall-clock at evaluation, milliseconds since the epoch |
+
+Rules are evaluated **before** the tool runs, so `requested_tool` is the call
+being checked, not one already made.
+
+`tool_labels` covers every allowed tool because a rule usually needs to ask what
+an *already-called* tool was. "Did anything that reads untrusted content run
+before this?" cannot be answered from the pending call alone.
+
+`now_ms` is supplied rather than read from the clock, so a rule about when an
+action is permitted stays a pure function of its inputs and can be tested.
+
+### Two helpers
+
+```rust
+ctx.tool_has("web_search", "reads_untrusted");   // -> bool
+ctx.tools_with("external_effect");                // -> Vec<String>, sorted
+```
+
+`tool_has` returns `false` for an unknown tool and for an unknown label, which
+is the safe answer in both directions: a rule asking about a tool the operator
+never declared should not fire, and a misspelled label must not match
+everything.
+
+---
+
+## `#[agent]` — name a phase of the run
+
+Mark a function so every verdict produced inside it is attributed to that phase:
+
+```rust
+use nanny::agent;
+
+#[agent("researcher")]
+fn run_research(topic: &str) {
+    let page = fetch_page(&format!("https://en.wikipedia.org/wiki/{topic}"));
+    // ...
+}
+```
+
+`AgentScopeEntered` and `AgentScopeExited` bracket the events in between, so the
+audit log can answer which phase a denial came from. Nesting is supported.
+
+---
+
+## `nanny::run_scope` — an independent run inside one process
+
+A **run** is Nanny's unit of governance: one rule set, one stop state, final
+once stopped. A long-lived host that handles many independent requests wants
+each one to be its own run, so a stop in one never affects another.
+
+```rust
+use nanny::run_scope;
+
+fn handle_request(payload: Payload) -> Response {
+    run_scope(|| process(payload))
+}
+```
+
+The scope self-cleans on exit, and it is safe under concurrency: each thread or
+task gets its own run id rather than sharing a process-global one. Under local
+`nanny run` one process is always exactly one run, so this is a no-op there.
+Mirrors `nanny_sdk.run_scope()` on the Python side.
+
+---
+
+## Complete example
+
+```rust
+use nanny::{tool, rule, agent, PolicyContext};
+use std::collections::HashMap;
+
+#[tool(tokens = 10)]
+fn fetch_page(url: &str) -> String {
+    reqwest::blocking::get(url).unwrap().text().unwrap()
+}
+
+#[rule("no_spiral")]
+fn check_spiral(ctx: &PolicyContext) -> bool {
+    let h = &ctx.tool_call_history;
+    !(h.len() >= 3 && h[h.len()-3..].iter().all(|u| u == &h[h.len()-1]))
+}
+
+#[agent("researcher")]
+fn research(topic: &str) -> Vec<String> {
+    let mut pages = Vec::new();
+    let mut url = format!("https://en.wikipedia.org/wiki/{topic}");
+
+    loop {
+        let content = fetch_page(&url);
+        pages.push(content.clone());
+        // extract next URL from content ...
+        break;
+    }
+
+    pages
+}
+
+fn main() {
+    let results = research("Alan Turing");
+    println!("Collected {} pages", results.len());
+}
+```
+
+Run it under Nanny:
+
+```bash
+nanny run
+```
+
+Run it without Nanny (macros silent, agent runs normally):
+
+```bash
+cargo run
+```
+
+---
+
+## What happens on stop
+
+When Nanny stops execution inside an instrumented function, the macro propagates the stop signal by panicking with a structured message. The panic is caught by the Nanny runtime — your agent process exits cleanly with a non-zero code and an `ExecutionStopped` event in the log.
+
+You do not need to handle stop reasons in your agent code. Nanny handles the exit path.

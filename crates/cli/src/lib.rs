@@ -203,42 +203,132 @@ pub fn set_harness(harness: Harness) {
     runtime::set_harness(harness.name, harness.version);
 }
 
+/// Declare which app this process belongs to.
+///
+/// Records an `AppIdentified` attribution event so the cloud can group runs by
+/// app. Normally you never call this: `nanny run` reads the committed
+/// `.nanny/app.json` and declares it for you. It exists for the case where a
+/// process joins a governor and wants to report under its own identity rather
+/// than inheriting the governor's.
+///
+/// Identity travels in the event stream, not in the API key, which is what lets
+/// one governor holding one credential serve many apps and still attribute each
+/// separately, the same reason OpenTelemetry makes `service.name` a resource
+/// attribute rather than a transport concern.
+///
+/// # Passthrough mode
+///
+/// When running outside `nanny run` (no bridge active) this is a no-op. An
+/// empty `app_id` is ignored; an empty `name` is allowed, since the id is what
+/// identifies and the name is only a label.
+pub fn set_app(app_id: impl Into<String>, name: impl Into<String>) {
+    runtime::set_app(app_id.into(), name.into());
+}
+
+/// Declare the rules registered in this process to the governor.
+///
+/// Records a `RulesDeclared` audit event listing every `#[nanny::rule]` name
+/// compiled into this binary. Normally you never call this: the first governed
+/// tool call declares them for you.
+///
+/// It exists because rules are the half of declared authority the governor
+/// cannot see. It reads nanny.toml, not your binary, so without this the audit
+/// log records every refusal but never what *could* have refused, which is the
+/// difference between "nothing was blocked" and "nothing was watching".
+///
+/// Declaration only: naming a rule here never enforces it. Enforcement stays
+/// with the rule body.
+///
+/// # Passthrough mode
+///
+/// When running outside `nanny run` (no bridge active) this is a no-op.
+pub fn declare_rules() {
+    runtime::declare_rules();
+}
+
 // ── Run control ─────────────────────────────────────────────────────────────
 
-/// Start a new governed run in the current process. Returns the new run id.
+/// Scope a governed run to the current thread, not the whole process.
 ///
-/// A run is Nanny's real unit of governance: one cumulative token/step
-/// counter, one stop state, "a stop is final." A `#[nanny::agent(...)]`
-/// scope does *not* give you a second one of these — it only changes which
-/// ceiling that same, single, ever-growing counter is compared against
-/// while active. If your process runs several logically independent
-/// phases back to back (a research phase handing off to a drafting phase,
-/// one long-lived server giving each incoming request its own clean
-/// slate) and you want each one to start from a genuinely fresh budget
-/// rather than inherit whatever an earlier phase already spent, this is
-/// how you say that.
+/// A run is Nanny's real unit of governance: one stop state, one history, "a
+/// stop is final". A `#[nanny::agent(...)]` scope does not give you a second
+/// one, it only labels a phase within the current one. If your process runs
+/// several logically independent runs (one long-lived server giving each
+/// incoming request its own clean slate) this is how you say that.
 ///
 /// ```rust,ignore
-/// nanny::fresh_run();   // everything governed after this point is a fresh run
+/// {
+///     let _run = nanny::run_scope(None);
+///     // every governed call on this thread now belongs to a fresh run
+/// }   // previous scope restored here
 /// ```
 ///
-/// Only meaningful when governed through a network server (`nanny run
-/// --serve` / `--join`): the server keys independent state per run id, so
-/// a stop in the run you just left has zero effect on the one you're
-/// starting. Under local `nanny run` (no `--serve`), one process is
-/// already always exactly one run, so this is a safe no-op there — code
-/// that might run under either mode doesn't need to branch on which one
-/// it's in.
+/// Pass `Some(id)` to resume a specific run; pass `None` to mint one. The
+/// previous scope is restored on drop, so nesting is safe.
 ///
-/// Before this existed, the only way to do this was setting the
-/// `NANNY_RUN_ID` environment variable directly, an internal detail the
-/// client happens to read fresh on every call, never documented as
-/// something to rely on. This is that same mechanism, given a real,
-/// public name — mirrors `nanny_sdk.fresh_run()` on the Python side.
-pub fn fresh_run() -> String {
-    let id = uuid::Uuid::new_v4().to_string();
-    std::env::set_var("NANNY_RUN_ID", &id);
-    id
+/// # Threads and tasks
+///
+/// The scope is thread-local. Two threads each in their own `run_scope` never
+/// see each other's run id. **On a Tokio runtime use
+/// [`run_scope_async`] instead**: tasks are multiplexed onto shared threads and
+/// migrate between them, so a thread-local would leak across concurrent tasks,
+/// which is exactly the bug this exists to prevent.
+///
+/// Only meaningful when governed through a governance server (`nanny run
+/// --serve` / `--join`), which keys state per run id. Under local `nanny run`
+/// one process is always exactly one run, so this is a safe no-op there and
+/// code that runs under either mode does not need to branch.
+///
+/// Mirrors `nanny_sdk.run_scope()` on the Python side.
+#[must_use = "the scope ends when the guard is dropped; binding to `_` drops it immediately"]
+pub fn run_scope(run_id: Option<String>) -> RunScope {
+    let id = run_id.unwrap_or_else(nanny_config::new_run_id);
+    let previous = runtime::scoped_run_id();
+    runtime::set_scoped_run_id(Some(id.clone()));
+    RunScope { id, previous }
+}
+
+/// The active run scope. Restores the previous scope when dropped.
+///
+/// Restoring rather than clearing is what makes nesting safe: an inner scope
+/// ending must not silently promote its caller to "no scope at all".
+pub struct RunScope {
+    id: String,
+    previous: Option<String>,
+}
+
+impl RunScope {
+    /// The run id this scope activated.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl Drop for RunScope {
+    fn drop(&mut self) {
+        runtime::set_scoped_run_id(self.previous.take());
+    }
+}
+
+/// Scope a governed run to the current Tokio task.
+///
+/// The async counterpart of [`run_scope`]. Tokio tasks share and migrate
+/// between threads, so a thread-local scope would leak between concurrent
+/// tasks; this binds the run id to the task instead.
+///
+/// ```rust,ignore
+/// let out = nanny::run_scope_async(None, async {
+///     // every governed call in this task belongs to its own run
+/// }).await;
+/// ```
+///
+/// Under the reframe this is a correctness property, not an accounting one:
+/// rules read tool call history, so a leaked run id means one tenant's
+/// untrusted read poisons another tenant's history, which is a wrong security
+/// verdict rather than a wrong number.
+pub async fn run_scope_async<F: std::future::Future>(run_id: Option<String>, f: F) -> F::Output {
+    let id = run_id.unwrap_or_else(nanny_config::new_run_id);
+    runtime::TASK_RUN_ID.scope(id, f).await
 }
 
 // ── Private runtime — for generated code only ─────────────────────────────────
@@ -284,7 +374,9 @@ mod runtime {
 
     impl ClientState {
         fn new() -> Self {
-            Self { start: Instant::now() }
+            Self {
+                start: Instant::now(),
+            }
         }
     }
 
@@ -308,7 +400,9 @@ mod runtime {
 
     #[cfg(unix)]
     fn bridge_socket_path() -> Option<std::path::PathBuf> {
-        std::env::var("NANNY_BRIDGE_SOCKET").ok().map(std::path::PathBuf::from)
+        std::env::var("NANNY_BRIDGE_SOCKET")
+            .ok()
+            .map(std::path::PathBuf::from)
     }
 
     #[cfg(not(unix))]
@@ -323,7 +417,9 @@ mod runtime {
     /// `NANNY_BRIDGE_ADDR` — host:port of the network governance server.
     /// Set automatically by `nanny run` when a server is running.
     fn bridge_addr() -> Option<String> {
-        std::env::var("NANNY_BRIDGE_ADDR").ok().filter(|s| !s.is_empty())
+        std::env::var("NANNY_BRIDGE_ADDR")
+            .ok()
+            .filter(|s| !s.is_empty())
     }
 
     /// True if `addr` (host:port) is a loopback address. The server serves plain
@@ -333,19 +429,64 @@ mod runtime {
         if let Ok(sa) = addr.parse::<std::net::SocketAddr>() {
             return sa.ip().is_loopback();
         }
-        addr.rsplit_once(':').map(|(h, _)| h == "localhost").unwrap_or(false)
+        addr.rsplit_once(':')
+            .map(|(h, _)| h == "localhost")
+            .unwrap_or(false)
     }
 
     fn session_token() -> String {
         std::env::var("NANNY_SESSION_TOKEN").unwrap_or_default()
     }
 
-    /// `NANNY_RUN_ID` — which run this process belongs to on the governance
-    /// server. Runs are independently budgeted and stop independently, so a
-    /// stop ends this run, not the server (G3). Absent → the server's default
-    /// run (shared-budget behaviour). The local bridge ignores it (one process
-    /// is always one run).
+    tokio::task_local! {
+        /// Task-local run id, set by `run_scope_async`.
+        pub(crate) static TASK_RUN_ID: String;
+    }
+
+    thread_local! {
+        /// Thread-local run id, set by `run_scope`.
+        static THREAD_RUN_ID: std::cell::RefCell<Option<String>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    pub(crate) fn scoped_run_id() -> Option<String> {
+        THREAD_RUN_ID.with(|c| c.borrow().clone())
+    }
+
+    pub(crate) fn set_scoped_run_id(id: Option<String>) {
+        THREAD_RUN_ID.with(|c| *c.borrow_mut() = id);
+    }
+
+    /// Which run this process belongs to on the governance server.
+    ///
+    /// Resolution order, most specific first:
+    ///   1. the current Tokio task's scope (`run_scope_async`)
+    ///   2. the current thread's scope (`run_scope`)
+    ///   3. `NANNY_RUN_ID`, how separate processes opt into a shared run
+    ///
+    /// Task before thread because a task is the narrower context: a task
+    /// running inside a thread that also has a scope means someone asked for
+    /// per-task isolation, and honouring the thread there would defeat it.
+    ///
+    /// Runs stop independently, so a stop ends this run, not the server (G3).
+    /// Absent → the server's default run. The local bridge ignores it: one
+    /// process is always one run.
+    /// Test-only view of the resolved run id. Not public API: tests need to
+    /// assert on resolution order, but nothing outside this crate should.
+    #[cfg(test)]
+    pub(crate) fn run_id_for_test() -> Option<String> {
+        run_id()
+    }
+
     fn run_id() -> Option<String> {
+        if let Ok(id) = TASK_RUN_ID.try_with(|id| id.clone()) {
+            if !id.is_empty() {
+                return Some(id);
+            }
+        }
+        if let Some(id) = scoped_run_id().filter(|s| !s.is_empty()) {
+            return Some(id);
+        }
         std::env::var("NANNY_RUN_ID").ok().filter(|s| !s.is_empty())
     }
 
@@ -389,8 +530,8 @@ mod runtime {
     fn resolve_pem(env_var: &str, fallback: std::path::PathBuf) -> Option<Vec<u8>> {
         match std::env::var(env_var) {
             Ok(val) if val.starts_with("-----BEGIN") => Some(val.into_bytes()),
-            Ok(val) if !val.is_empty()               => std::fs::read(&val).ok(),
-            _                                        => std::fs::read(&fallback).ok(),
+            Ok(val) if !val.is_empty() => std::fs::read(&val).ok(),
+            _ => std::fs::read(&fallback).ok(),
         }
     }
 
@@ -398,7 +539,7 @@ mod runtime {
 
     struct BridgeResponse {
         status: u16,
-        body:   String,
+        body: String,
     }
 
     fn http_get(path: &str) -> Option<BridgeResponse> {
@@ -520,20 +661,20 @@ mod runtime {
         // NANNY_BRIDGE_CERT may be a combined cert+key PEM bundle, in which case
         // NANNY_BRIDGE_KEY can be omitted (empty bytes are harmless when appended).
         let cert_pem = resolve_pem("NANNY_BRIDGE_CERT", certs_dir.join("client.crt"))?;
-        let key_pem  = resolve_pem("NANNY_BRIDGE_KEY",  certs_dir.join("client.key"))
-            .unwrap_or_default();
-        let ca_pem   = resolve_pem("NANNY_BRIDGE_CA",   certs_dir.join("ca.crt"))?;
+        let key_pem =
+            resolve_pem("NANNY_BRIDGE_KEY", certs_dir.join("client.key")).unwrap_or_default();
+        let ca_pem = resolve_pem("NANNY_BRIDGE_CA", certs_dir.join("ca.crt"))?;
 
         // reqwest::Identity requires PEM cert + key concatenated.
         let mut identity_pem = cert_pem;
         identity_pem.extend_from_slice(&key_pem);
         let identity = reqwest::Identity::from_pem(&identity_pem).ok()?;
-        let ca_cert  = reqwest::Certificate::from_pem(&ca_pem).ok()?;
+        let ca_cert = reqwest::Certificate::from_pem(&ca_pem).ok()?;
 
         reqwest::blocking::Client::builder()
             .add_root_certificate(ca_cert)
             .identity(identity)
-            .use_rustls_tls()   // force rustls — Identity::from_pem produces a rustls identity
+            .use_rustls_tls() // force rustls — Identity::from_pem produces a rustls identity
             .build()
             .ok()
     }
@@ -567,14 +708,20 @@ mod runtime {
         let resp = builder.send().ok()?;
         let status = resp.status().as_u16();
         let resp_body = resp.text().ok()?;
-        Some(BridgeResponse { status, body: resp_body })
+        Some(BridgeResponse {
+            status,
+            body: resp_body,
+        })
     }
 
     fn parse_http_response(raw: &str) -> Option<BridgeResponse> {
         let (headers, body) = raw.split_once("\r\n\r\n")?;
         let status_line = headers.lines().next()?;
         let status: u16 = status_line.split_whitespace().nth(1)?.parse().ok()?;
-        Some(BridgeResponse { status, body: body.to_string() })
+        Some(BridgeResponse {
+            status,
+            body: body.to_string(),
+        })
     }
 
     // ── Rule evaluation ───────────────────────────────────────────────────────
@@ -592,6 +739,12 @@ mod runtime {
         tool_name: &str,
         args: HashMap<String, String>,
     ) -> Option<&'static str> {
+        // Declare once, on the first governed call, so the audit log records
+        // what could have refused without the operator having to remember to
+        // call declare_rules() by hand. Bridge-side dedupe makes the repeat
+        // calls free; this guard just avoids the HTTP round trip.
+        declare_rules_once();
+
         let elapsed_ms = client_state().lock().unwrap().start.elapsed().as_millis() as u64;
 
         // Fetch all tracked counters from the bridge (authoritative state).
@@ -607,22 +760,22 @@ mod runtime {
             // Passthrough mode (no bridge env vars) — zeros are correct; rules
             // still run but counters will be empty, which is expected offline.
             None => BridgeStatus {
-                step_count:        0,
-                tokens_spent:      0,
-                tool_call_counts:  HashMap::new(),
+                tokens_spent: 0,
+                tool_call_counts: HashMap::new(),
                 tool_call_history: Vec::new(),
+                tool_labels: HashMap::new(),
             },
         };
 
         let ctx = PolicyContext {
-            requested_tool:    Some(tool_name.to_string()),
-            tool_call_counts:  status.tool_call_counts,
+            requested_tool: Some(tool_name.to_string()),
+            tool_call_counts: status.tool_call_counts,
             tool_call_history: status.tool_call_history,
-            last_tool_args:    args,
+            tool_labels: status.tool_labels,
+            last_tool_args: args,
             elapsed_ms,
-            step_count:    status.step_count,
-            tokens_spent:  status.tokens_spent,
-            ..PolicyContext::default()
+            now_ms: nanny_core::events::event::now_ms(),
+            tokens_spent: status.tokens_spent,
         };
 
         for rule in inventory::iter::<Rule> {
@@ -635,10 +788,10 @@ mod runtime {
 
     /// Counters fetched from the bridge `/status` endpoint.
     struct BridgeStatus {
-        step_count:        u32,
-        tokens_spent:      u64,
-        tool_call_counts:  HashMap<String, u32>,
+        tokens_spent: u64,
+        tool_call_counts: HashMap<String, u32>,
         tool_call_history: Vec<String>,
+        tool_labels: HashMap<String, Vec<String>>,
     }
 
     /// Fetch all live counters from the bridge /status endpoint.
@@ -654,20 +807,25 @@ mod runtime {
             Ok(v) => v,
             Err(_) => return None,
         };
-        // Bridge wire names: "step" → step_count, "tokens_spent" → tokens_spent
-        let step_count = v.get("step")
-            .and_then(|s| s.as_u64())
-            .unwrap_or(0) as u32;
-        let tokens_spent = v.get("tokens_spent")
-            .and_then(|c| c.as_u64())
-            .unwrap_or(0);
-        let tool_call_counts = v.get("tool_call_counts")
+        let tokens_spent = v.get("tokens_spent").and_then(|c| c.as_u64()).unwrap_or(0);
+        let tool_call_counts = v
+            .get("tool_call_counts")
             .and_then(|c| serde_json::from_value(c.clone()).ok())
             .unwrap_or_default();
-        let tool_call_history = v.get("tool_call_history")
+        let tool_call_history = v
+            .get("tool_call_history")
             .and_then(|h| serde_json::from_value(h.clone()).ok())
             .unwrap_or_default();
-        Some(BridgeStatus { step_count, tokens_spent, tool_call_counts, tool_call_history })
+        let tool_labels = v
+            .get("tool_labels")
+            .and_then(|l| serde_json::from_value(l.clone()).ok())
+            .unwrap_or_default();
+        Some(BridgeStatus {
+            tokens_spent,
+            tool_call_counts,
+            tool_call_history,
+            tool_labels,
+        })
     }
 
     // ── Tool call ─────────────────────────────────────────────────────────────
@@ -691,7 +849,9 @@ mod runtime {
             Some(resp) if resp.status == 200 => {
                 let reason = extract_str(&resp.body, "rule_name")
                     .map(|r| format!("RuleDenied: {r}"))
-                    .or_else(|| extract_str(&resp.body, "tool_name").map(|t| format!("ToolDenied: {t}")))
+                    .or_else(|| {
+                        extract_str(&resp.body, "tool_name").map(|t| format!("ToolDenied: {t}"))
+                    })
                     .or_else(|| extract_str(&resp.body, "reason"))
                     .unwrap_or_else(|| "ToolDenied".to_string());
                 ToolVerdict::Stop(reason)
@@ -731,12 +891,13 @@ mod runtime {
             Some(resp) if resp.status == 200 => {
                 // Use serde_json so the result field is safely decoded even
                 // when it contains HTML with escaped quotes or special chars.
-                let v: serde_json::Value = serde_json::from_str(&resp.body)
-                    .map_err(|e| e.to_string())?;
+                let v: serde_json::Value =
+                    serde_json::from_str(&resp.body).map_err(|e| e.to_string())?;
                 if v["status"] == "allowed" {
                     Ok(v["result"].as_str().unwrap_or("").to_string())
                 } else {
-                    let reason = v["rule_name"].as_str()
+                    let reason = v["rule_name"]
+                        .as_str()
                         .map(|r| format!("RuleDenied: {r}"))
                         .or_else(|| v["tool_name"].as_str().map(|t| format!("ToolDenied: {t}")))
                         .or_else(|| v["reason"].as_str().map(str::to_string))
@@ -783,7 +944,8 @@ mod runtime {
             "reason":    "RuleDenied",
             "tool":      tool,
             "rule_name": rule_name,
-        }).to_string();
+        })
+        .to_string();
         let _ = http_post("/stop", &body);
     }
 
@@ -847,6 +1009,51 @@ mod runtime {
         let _ = http_post("/harness", &body.to_string());
     }
 
+    /// POST /app: declare which app this process is.
+    ///
+    /// No-op in passthrough mode (no bridge) and for an empty `app_id`.
+    /// Fire-and-forget on the same contract as `set_harness`: the response is
+    /// ignored and transport errors are swallowed, so declaring identity can
+    /// never interrupt the agent.
+    pub fn set_app(app_id: String, name: String) {
+        if !is_active() || app_id.trim().is_empty() {
+            return;
+        }
+        let body = serde_json::json!({"app_id": app_id, "name": name});
+        let _ = http_post("/app", &body.to_string());
+    }
+
+    /// POST /rules: declare the rules registered in this process.
+    ///
+    /// Reads the same `inventory` registry `evaluate_local_rules` enforces
+    /// from, so the declaration cannot drift from what actually runs.
+    ///
+    /// No-op in passthrough mode (no bridge) and when nothing is registered.
+    /// Fire-and-forget on the same contract as `set_harness`.
+    /// Declare registered rules the first time anything is governed.
+    ///
+    /// `Once` rather than a bridge round trip per call: the bridge already
+    /// dedupes, but the cheapest request is the one never sent.
+    pub(crate) fn declare_rules_once() {
+        static DECLARED: std::sync::Once = std::sync::Once::new();
+        DECLARED.call_once(declare_rules);
+    }
+
+    pub fn declare_rules() {
+        if !is_active() {
+            return;
+        }
+        let names: Vec<&str> = inventory::iter::<Rule>
+            .into_iter()
+            .map(|r| r.name)
+            .collect();
+        if names.is_empty() {
+            return;
+        }
+        let body = serde_json::json!({"rules": names});
+        let _ = http_post("/rules", &body.to_string());
+    }
+
     // ── Agent enter / exit ────────────────────────────────────────────────────
 
     /// POST /agent/enter — switch to a named limits set.
@@ -868,7 +1075,9 @@ mod runtime {
 
     fn extract_str(json: &str, key: &str) -> Option<String> {
         let needle = format!("\"{key}\":");
-        let after = json.find(&needle).map(|i| json[i + needle.len()..].trim_start())?;
+        let after = json
+            .find(&needle)
+            .map(|i| json[i + needle.len()..].trim_start())?;
         let inner = after.strip_prefix('"')?;
         let end = inner.find('"')?;
         Some(inner[..end].to_string())
@@ -914,7 +1123,11 @@ mod tests {
             std::env::remove_var("NANNY_BRIDGE_ADDR");
         }
         // No bridge active → no-op. Must not panic or attempt any connection.
-        crate::report_usage(crate::Usage { input: 100, output: 50, ..Default::default() });
+        crate::report_usage(crate::Usage {
+            input: 100,
+            output: 50,
+            ..Default::default()
+        });
         crate::report_usage(crate::Usage {
             input: 8,
             output: 3,
@@ -933,7 +1146,10 @@ mod tests {
             std::env::remove_var("NANNY_BRIDGE_ADDR");
         }
         // No bridge active → no-op. Must not panic or attempt any connection.
-        crate::set_harness(crate::Harness { name: "opencode".into(), ..Default::default() });
+        crate::set_harness(crate::Harness {
+            name: "opencode".into(),
+            ..Default::default()
+        });
         crate::set_harness(crate::Harness {
             name: "langgraph".into(),
             version: Some("0.3.2".into()),
@@ -942,35 +1158,155 @@ mod tests {
         crate::set_harness(crate::Harness::default());
     }
 
-    // NANNY_RUN_ID is process-wide state, and cargo test runs tests in
-    // parallel by default — the other env-var tests in this module avoid
-    // reading state back after mutating it for exactly this reason (see the
-    // comment above `inactive_when_no_env_vars`). fresh_run() has to both set
-    // and be verifiable, so its tests are combined under one shared lock
-    // instead, guaranteeing no other fresh_run test can interleave.
-    static NEW_RUN_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    // ── run_scope ─────────────────────────────────────────────────────────────
+    //
+    // No shared mutex here, unlike the fresh_run tests these replace. That
+    // lock existed because fresh_run wrote a process-global env var, so its
+    // own tests corrupted each other under cargo's default parallelism. The
+    // scope is thread-local, so the tests are naturally isolated: the bug is
+    // gone rather than worked around.
 
     #[test]
-    fn fresh_run_behaves_correctly() {
-        let _guard = NEW_RUN_TEST_LOCK.lock().unwrap();
+    fn run_scope_mints_an_id_and_restores_on_drop() {
+        assert!(
+            crate::runtime::scoped_run_id().is_none(),
+            "no scope to start"
+        );
 
-        // Sets NANNY_RUN_ID to exactly its own return value.
-        let first = crate::fresh_run();
-        assert_eq!(std::env::var("NANNY_RUN_ID").unwrap(), first);
-
-        // A second call replaces it with a genuinely different id.
-        let second = crate::fresh_run();
-        assert_ne!(first, second);
-        assert_eq!(std::env::var("NANNY_RUN_ID").unwrap(), second);
-
-        // Replaces a run id that was already set by something else, too.
-        // SAFETY: guarded by NEW_RUN_TEST_LOCK, no other fresh_run test can
-        // observe or mutate NANNY_RUN_ID concurrently with this one.
-        unsafe {
-            std::env::set_var("NANNY_RUN_ID", "old-run");
+        {
+            let scope = crate::run_scope(None);
+            assert!(!scope.id().is_empty());
+            assert_eq!(crate::runtime::scoped_run_id().as_deref(), Some(scope.id()));
         }
-        let third = crate::fresh_run();
-        assert_ne!(third, "old-run");
-        assert_eq!(std::env::var("NANNY_RUN_ID").unwrap(), third);
+
+        assert!(
+            crate::runtime::scoped_run_id().is_none(),
+            "drop must restore"
+        );
+    }
+
+    #[test]
+    fn run_scope_accepts_an_explicit_id() {
+        let scope = crate::run_scope(Some("resumed-run".to_string()));
+        assert_eq!(scope.id(), "resumed-run");
+        assert_eq!(
+            crate::runtime::scoped_run_id().as_deref(),
+            Some("resumed-run")
+        );
+    }
+
+    /// An inner scope ending must restore its caller, not clear the scope
+    /// entirely. Clearing would silently promote the outer run to "no scope".
+    #[test]
+    fn nested_scopes_restore_the_outer_one() {
+        let outer = crate::run_scope(Some("outer".to_string()));
+        {
+            let _inner = crate::run_scope(Some("inner".to_string()));
+            assert_eq!(crate::runtime::scoped_run_id().as_deref(), Some("inner"));
+        }
+        assert_eq!(
+            crate::runtime::scoped_run_id().as_deref(),
+            Some("outer"),
+            "the outer scope must survive the inner one ending"
+        );
+        drop(outer);
+    }
+
+    /// The bug fresh_run could not fix. Two threads each in their own scope
+    /// must never observe each other's run id; with a process-global env var
+    /// one would clobber the other.
+    #[test]
+    fn concurrent_scopes_on_two_threads_do_not_clobber() {
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let handles: Vec<_> = ["run-a", "run-b"]
+            .into_iter()
+            .map(|id| {
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    let _scope = crate::run_scope(Some(id.to_string()));
+                    // Both threads hold their scope at the same time.
+                    barrier.wait();
+                    crate::runtime::scoped_run_id()
+                })
+            })
+            .collect();
+
+        let seen: Vec<Option<String>> = handles
+            .into_iter()
+            .map(|h| h.join().expect("thread must not panic"))
+            .collect();
+
+        assert_eq!(seen[0].as_deref(), Some("run-a"));
+        assert_eq!(seen[1].as_deref(), Some("run-b"));
+    }
+
+    /// The case a thread-local alone gets wrong: many concurrent tasks
+    /// multiplexed onto shared runtime threads. Each task must keep its own
+    /// run id even when it yields and resumes on a different thread.
+    #[test]
+    fn concurrent_tasks_keep_their_own_run_id() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("runtime must build");
+
+        let seen: Vec<(String, String)> = rt.block_on(async {
+            let tasks: Vec<_> = (0..8)
+                .map(|i| {
+                    let want = format!("task-{i}");
+                    tokio::spawn(crate::run_scope_async(Some(want.clone()), async move {
+                        // Yield so the task can resume on another thread.
+                        tokio::task::yield_now().await;
+                        let got = crate::runtime::run_id_for_test().unwrap_or_default();
+                        (want, got)
+                    }))
+                })
+                .collect();
+
+            let mut out = Vec::new();
+            for t in tasks {
+                out.push(t.await.expect("task must not panic"));
+            }
+            out
+        });
+
+        for (want, got) in seen {
+            assert_eq!(
+                got, want,
+                "each task must keep its own run id across a yield"
+            );
+        }
+    }
+
+    /// Task scope beats thread scope: asking for per-task isolation inside a
+    /// thread that also has a scope must honour the narrower one.
+    #[test]
+    fn a_task_scope_wins_over_a_thread_scope() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime must build");
+
+        let _thread_scope = crate::run_scope(Some("thread".to_string()));
+        let got = rt.block_on(crate::run_scope_async(Some("task".to_string()), async {
+            crate::runtime::run_id_for_test()
+        }));
+
+        assert_eq!(got.as_deref(), Some("task"));
+    }
+
+    /// A scope on one thread is invisible to another. Scoping is per-thread,
+    /// never process-wide.
+    #[test]
+    fn a_scope_does_not_leak_to_another_thread() {
+        let _scope = crate::run_scope(Some("mine".to_string()));
+        let other = std::thread::spawn(crate::runtime::scoped_run_id)
+            .join()
+            .expect("thread must not panic");
+        assert!(
+            other.is_none(),
+            "another thread must not see this scope; got {other:?}"
+        );
     }
 }

@@ -1,8 +1,6 @@
 // Nanny CLI — the only surface humans touch.
-mod app_credentials;
 mod cloud;
 mod commands;
-mod credentials;
 mod events;
 mod identity;
 mod runtime;
@@ -10,7 +8,7 @@ mod sync;
 //
 // Two commands exist:
 //   nanny init                        — write a starter nanny.toml in the current directory
-//   nanny run [--limits=<name>] <cmd> — run a command under nanny enforcement
+//   nanny run <cmd> — run a command under nanny governance
 //
 // No logic lives here. The CLI loads config and hands off to the runtime.
 // All enforcement happens in nanny-core, not here.
@@ -18,9 +16,7 @@ mod sync;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use nanny_bridge::{Bridge, BridgeAddress, ExecutionState};
-use nanny_core::agent::limits::Limits;
-use nanny_core::events::event::{ExecutionEvent, LimitsSnapshot, now_ms};
-use nanny_core::ledger::Ledger;
+use nanny_core::events::event::{now_ms, ExecutionEvent};
 use std::io::Write;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -32,7 +28,7 @@ use std::time::{Duration, Instant};
 #[command(
     name = "nanny",
     about = "Execution boundary for autonomous systems",
-    long_about = "Nanny enforces hard limits on agents and long-running processes.\nIt deterministically stops execution when a limit is reached.",
+    long_about = "Nanny enforces what agents and long-running processes are allowed to do.\nIt deterministically stops execution when a policy is violated.",
     version
 )]
 struct Cli {
@@ -56,22 +52,22 @@ enum Command {
     ///
     /// Reads [start].cmd from nanny.toml and runs it. With --serve, instead runs
     /// a headless governance server (no child of its own) that other processes
-    /// and machines join, sharing one budget.
+    /// and machines join, sharing one rule set.
     ///
     /// Example: nanny run
-    /// Example: nanny run --limits=researcher
     /// Example: nanny run --serve --addr 0.0.0.0:62669
     Run {
-        /// Named limits set to activate from nanny.toml [limits.<name>].
-        /// Inherits from [limits] defaults and overrides only declared fields.
-        /// Example: --limits=researcher activates [limits.researcher]
-        #[arg(long)]
-        limits: Option<String>,
-
-        /// Do not forward events to Nanny Cloud for this run, even if logged in.
+        /// Do not forward events to Nanny Cloud for this run, even with a key set.
         /// Enforcement is unaffected. Also settable with NANNY_NO_SYNC=1.
         #[arg(long)]
         no_sync: bool,
+
+        /// Which Nanny Cloud to forward to. Hidden: this exists for people
+        /// *building* Nanny, not people building apps with it. Everyone else
+        /// has exactly one cloud and never chooses. Takes a name, never a URL,
+        /// so no other endpoint is expressible. See CONTRIBUTING.md.
+        #[arg(long, value_enum, default_value_t = cloud::CloudEnv::Prod, hide = true)]
+        env: cloud::CloudEnv,
 
         /// Join an existing governance server by appId (from that server's
         /// `.nanny/app.json`), instead of starting a local bridge. Explicit and
@@ -82,14 +78,18 @@ enum Command {
         join: Option<String>,
 
         /// Run as a headless governance server that other processes and machines
-        /// join, sharing one budget. Same enforcement as `nanny run`, exposed
+        /// join, sharing one rule set. Same enforcement as `nanny run`, exposed
         /// over the network.
         #[arg(long)]
         serve: bool,
 
-        /// (with --serve) Listen address; governance API and proxy share this port.
+        /// (with --serve) Listen address for the governance API.
         /// Loopback is plain HTTP; a non-loopback address makes mTLS mandatory.
-        #[arg(long, default_value = "127.0.0.1:62669")]
+        ///
+        /// Left at the default, a busy port steps forward to the next free one
+        /// and the real address is recorded for `--join`/`--app` to find.
+        /// Named explicitly, a busy port is an error rather than a silent move.
+        #[arg(long, default_value_t = nanny_bridge::network::default_governor_addr())]
         addr: SocketAddr,
 
         /// (with --serve) Server certificate PEM. Defaults to ~/.nanny/certs/server.crt.
@@ -121,7 +121,7 @@ enum Command {
 
     /// Show the live status of a running governance server.
     ///
-    /// Prints its listen address, connected agents, and current budget.
+    /// Prints its listen address and connected agents.
     Status {
         /// Which app's governor to check, by appId. Defaults to the app identified
         /// by .nanny/app.json in the current directory.
@@ -137,19 +137,19 @@ enum Command {
         app: Option<String>,
     },
 
+    /// Install and inspect rule packs.
+    ///
+    /// A pack is vendored into `.nanny/rules/` and declared in `[rules]
+    /// extends`. Your source is never edited: `@rule` remains for your own
+    /// private rules.
+    #[command(subcommand)]
+    Rules(commands::rules::RulesCommand),
+
     /// Show the health of all active Nanny components.
     ///
     /// Checks: local bridge, network server, certificate expiry.
     /// Exits 0 if healthy, 1 if any active component is unhealthy.
     Health,
-
-    /// Connect your machine to Nanny Cloud (`login` / `logout`).
-    ///
-    /// Optional. Enforcement is always local and never depends on this — login
-    /// only turns on cloud event sync. `nanny auth login` opens the browser to
-    /// approve, then remembers your machine so `nanny run` can sync.
-    #[command(subcommand)]
-    Auth(commands::auth::AuthCommand),
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -159,29 +159,48 @@ fn main() {
 
     let result = match cli.command {
         Command::Init => cmd_init(),
-        Command::Run { limits, no_sync, join, serve, addr, cert, key, ca, extra_args } => {
+        Command::Run {
+            no_sync,
+            env,
+            join,
+            serve,
+            addr,
+            cert,
+            key,
+            ca,
+            extra_args,
+        } => {
             if serve {
-                if !extra_args.is_empty() || limits.is_some() || join.is_some() {
+                if join.is_some() {
                     Err(anyhow::anyhow!(
-                        "`--serve` runs a headless governor and takes no command, --limits, or \
-                         --join, use `nanny run --serve [--addr ...]`"
+                        "`--serve` runs the governance server and does not take --join. \
+                         Its rules come from nanny.toml, and it *is* the governor, \
+                         so there is nothing to join."
                     ))
                 } else {
-                    // The headless governor runs the full network server
-                    // (mTLS, certs, etc.), plus cloud sync gated on an
-                    // app-scoped credential being present, honoring --no-sync.
-                    commands::server::cmd_server_start(addr, cert, key, ca, no_sync)
+                    // Runs the full network server (mTLS, certs), plus
+                    // cloud sync gated on NANNY_API_KEY, honoring --no-sync.
+                    // Also launches [start].cmd underneath it when nanny.toml
+                    // declares one; without [start] it stays headless for the
+                    // shared-governor case. Trailing args append to that
+                    // command, exactly as they do for plain `nanny run`.
+                    commands::server::cmd_server_start(
+                        addr, cert, key, ca, no_sync, env, extra_args,
+                    )
                 }
             } else {
-                cmd_run(&cli.config, limits.as_deref(), no_sync, join, extra_args)
+                cmd_run(&cli.config, no_sync, env, join, extra_args)
             }
         }
         Command::Uninstall => cmd_uninstall(),
         Command::Status { app } => commands::server::cmd_server_status(app),
         Command::Stop { app } => commands::server::cmd_server_stop(app),
         Command::Certs(action) => commands::certs::cmd_certs(action),
+        Command::Rules(cmd) => {
+            let root = std::env::current_dir().unwrap_or_else(|_| ".".into());
+            commands::rules::run(cmd, &root)
+        }
         Command::Health => commands::health::cmd_health(),
-        Command::Auth(action) => commands::auth::cmd_auth(action),
     };
 
     if let Err(e) = result {
@@ -238,7 +257,9 @@ fn cmd_init() -> Result<()> {
         print!("nanny.toml already exists. Replace it with the default template?\nYour current configuration will be lost. [y/N] ");
         std::io::stdout().flush().ok();
         let mut input = String::new();
-        std::io::stdin().read_line(&mut input).context("failed to read input")?;
+        std::io::stdin()
+            .read_line(&mut input)
+            .context("failed to read input")?;
         if !matches!(input.trim().to_lowercase().as_str(), "y" | "yes") {
             println!("Skipped, your existing nanny.toml was not changed.");
         } else {
@@ -273,21 +294,25 @@ fn cmd_init() -> Result<()> {
             print!("App name [{default_name}]: ");
             std::io::stdout().flush().ok();
             let mut name_input = String::new();
-            std::io::stdin().read_line(&mut name_input).context("failed to read input")?;
+            std::io::stdin()
+                .read_line(&mut name_input)
+                .context("failed to read input")?;
             let name = match name_input.trim() {
                 "" => default_name,
                 trimmed => trimmed.to_string(),
             };
 
             let created = identity::AppIdentity::create(cwd, name)?;
-            println!("App identity created (name: {}, appId: {}).", created.name, created.app_id);
+            println!(
+                "App identity created (name: {}, appId: {}).",
+                created.name, created.app_id
+            );
         }
     }
 
     println!();
     println!("Set [start] cmd to how you normally launch your agent, then:");
     println!("    nanny run");
-    println!("    nanny run --limits=researcher");
     println!();
     println!("Works with any language — Python, Rust, Go, Node, or any compiled binary.");
 
@@ -297,8 +322,7 @@ fn cmd_init() -> Result<()> {
 // ── nanny uninstall ───────────────────────────────────────────────────────────
 
 fn cmd_uninstall() -> Result<()> {
-    let exe = std::env::current_exe()
-        .context("failed to determine current binary path")?;
+    let exe = std::env::current_exe().context("failed to determine current binary path")?;
 
     // Homebrew manages its own metadata — removing the binary directly leaves
     // the formula in a broken state. Redirect to `brew uninstall nannyd`.
@@ -377,20 +401,9 @@ fn cmd_uninstall_impl(exe: &Path) -> Result<()> {
 struct NetworkServerInfo {
     /// Address to inject as NANNY_BRIDGE_ADDR (0.0.0.0 → 127.0.0.1 for local use).
     addr: String,
-    /// Session token to inject as NANNY_SESSION_TOKEN. Guards every ordinary
-    /// governance request, never the CONNECT tunnel, which uses
-    /// `proxy_token` instead (see network.rs's `AppState::proxy_token` for why
-    /// they're deliberately separate credentials).
+    /// Session token to inject as NANNY_SESSION_TOKEN. Guards every
+    /// governance request.
     token: String,
-    /// The CONNECT-only credential, embedded as Proxy-Authorization userinfo
-    /// in the injected HTTPS_PROXY URL, never the session token.
-    proxy_token: String,
-    /// Whether the SERVER (not the joining client's own nanny.toml, which may
-    /// live in a different directory entirely) has `[proxy] allowed_hosts`
-    /// configured, read from `server.proxy`, written by `cmd_server_start` at
-    /// the same time as `server.addr`. Missing file (older server binary)
-    /// defaults to false, no proxy env injection.
-    proxy_configured: bool,
 }
 
 /// Look up the governor for `app_id` and confirm it's actually reachable.
@@ -431,58 +444,82 @@ fn detect_joined_server(app_id: &str) -> Result<NetworkServerInfo> {
         );
     }
 
-    let proxy_configured = std::fs::read_to_string(state_dir.join("server.proxy"))
-        .map(|s| s.trim() == "1")
-        .unwrap_or(false);
-
-    // Only required when the server actually has [proxy] configured, a
-    // server with no proxy still writes this file (see network.rs), but
-    // failing loudly here regardless keeps this function's error handling
-    // simple and matches the existing "corrupt state" bail above.
-    let proxy_token = std::fs::read_to_string(state_dir.join("server.proxy_token"))
-        .with_context(|| format!("missing proxy token for app '{app_id}'"))?
-        .trim()
-        .to_string();
-
-    Ok(NetworkServerInfo { addr: connect_addr, token, proxy_token, proxy_configured })
-}
-
-/// Run the command against a detected network governance server instead of
-/// starting a local bridge. The server handles all enforcement — `nanny run`
-/// here just injects env vars and waits for the child to finish.
-///
-/// When `server.proxy_configured` is true, the child also gets
-/// `HTTPS_PROXY`/`HTTP_PROXY` (and lowercase variants) pointed at the same
-/// governor address automatically — the governance API and the CONNECT proxy
-/// share one port. Without this, the allowlist silently does nothing
-/// unless a human remembers to set these vars by hand, which is a fail-open
-/// gap the manifesto forbids. Read from the SERVER's own config
-/// (`server.proxy`), not the joining client's nanny.toml — the two may live in
-/// different directories entirely.
-/// Percent-encode a value for safe use as URL userinfo (the `user` in
-/// `http://user@host`). Every value passed through this today is a UUID we
-/// generate ourselves, so nothing here is ever actually escaped in
-/// practice, this exists purely so that fact stays true even if
-/// `proxy_token`'s shape ever changes later, rather than relying on it.
-fn percent_encode_userinfo(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for b in value.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
-                out.push(b as char);
-            }
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
+    Ok(NetworkServerInfo {
+        addr: connect_addr,
+        token,
+    })
 }
 
 fn cmd_run_via_network_server(command: Vec<String>, server: NetworkServerInfo) -> Result<()> {
-    let (program, args) = command.split_first().expect("command is non-empty");
-
     println!("nanny: network server detected at {}", server.addr);
-    println!("nanny: governance enforced remotely — limits and rules apply");
+    println!("nanny: governance enforced remotely — tool permission and rules apply");
     println!();
+
+    let (mut cmd, run_id) = build_governed_child(command, &server)?;
+
+    // Declare this app to the governor for this run, before the child can do
+    // anything attributable. A governor holds one credential but serves many
+    // apps, so identity has to travel per run in the event stream; without
+    // this, everything a joined process does would be filed under the
+    // governor's own app.
+    declare_app_to_governor(&server, Path::new("."), &run_id);
+
+    let status = cmd
+        .status()
+        .with_context(|| format!("failed to run '{}'", command_program(&cmd)))?;
+
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
+
+    Ok(())
+}
+
+/// The program name from a built command, for error messages.
+fn command_program(cmd: &std::process::Command) -> String {
+    cmd.get_program().to_string_lossy().into_owned()
+}
+
+/// Build a child process wired to a governance server: transport, credentials,
+/// run id, and mTLS certs.
+///
+/// Shared by `--join` (joining someone else's governor) and `--serve` (running
+/// the app under the governor this process just started), so the two can never
+/// drift on how a governed child is wired.
+/// Resolve the rule packs a config declares, refusing to start without them.
+///
+/// A pack named in `[rules] extends` but absent from disk means the operator
+/// believes controls are in force that are not, so the honest response is to
+/// refuse rather than run an agent less governed than its config says.
+///
+/// **Shared by `nanny run` and `nanny run --serve` deliberately.** It lived
+/// only in the former until 2026-08-29, which meant the fail-closed guarantee
+/// held for local development and not for `--serve` — the shape every container
+/// runs. An image missing its vendored pack booted and ran unguarded, silently,
+/// because nothing else checks: the SDK loads whatever is on disk and carries on
+/// when that is nothing. Same defect as `/rules` being registered on the socket
+/// dispatch and missing from the network router, and the same fix: one
+/// implementation both paths call.
+pub fn resolve_declared_packs(
+    config: &nanny_config::NannyConfig,
+    config_dir: &Path,
+) -> Result<Vec<nanny_config::pack::PackManifest>> {
+    let pinned = config.rules.pinned()?;
+    let packs = nanny_config::pack::load_declared_packs(config_dir, &pinned)?;
+    if !packs.is_empty() {
+        println!(
+            "nanny: rule packs — {:?}",
+            packs.iter().map(|p| p.slug()).collect::<Vec<_>>()
+        );
+    }
+    Ok(packs)
+}
+
+fn build_governed_child(
+    command: Vec<String>,
+    server: &NetworkServerInfo,
+) -> Result<(std::process::Command, String)> {
+    let (program, args) = command.split_first().expect("command is non-empty");
 
     // Cert files from ~/.nanny/certs/ — auto-injected if present.
     // Cross-machine deployments override these via NANNY_BRIDGE_CERT/KEY/CA.
@@ -498,87 +535,76 @@ fn cmd_run_via_network_server(command: Vec<String>, server: NetworkServerInfo) -
     let run_id = std::env::var("NANNY_RUN_ID")
         .ok()
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        .unwrap_or_else(nanny_config::new_run_id);
 
     let mut cmd = std::process::Command::new(program);
     cmd.args(args);
-    cmd.env("NANNY_BRIDGE_ADDR",    &server.addr);
-    cmd.env("NANNY_SESSION_TOKEN",  &server.token);
-    cmd.env("NANNY_RUN_ID",         &run_id);
+    cmd.env("NANNY_BRIDGE_ADDR", &server.addr);
+    cmd.env("NANNY_SESSION_TOKEN", &server.token);
+    cmd.env("NANNY_RUN_ID", &run_id);
 
     // Only inject cert paths that actually exist — agents on remote machines
     // may have already set these env vars themselves via their deployment config.
     let cert_file = certs_dir.join("client.crt");
-    let key_file  = certs_dir.join("client.key");
-    let ca_file   = certs_dir.join("ca.crt");
-    if cert_file.exists() { cmd.env("NANNY_BRIDGE_CERT", &cert_file); }
-    if key_file.exists()  { cmd.env("NANNY_BRIDGE_KEY",  &key_file); }
-    if ca_file.exists()   { cmd.env("NANNY_BRIDGE_CA",   &ca_file); }
-
-    // Auto-inject the CONNECT proxy address so [proxy] allowed_hosts is
-    // enforced without the dev having to set these by hand. The governance API
-    // and the proxy share one port (network.rs), so the same server address
-    // works for both. Set both cases — some HTTP clients only check lowercase
-    // (curl, several Python libs), others only uppercase.
-    //
-    // proxy_token (NOT the session token) is embedded as userinfo
-    // (`http://<proxy_token>:@host:port`) so the child's own HTTP client sends
-    // it as standard `Proxy-Authorization: Basic ...` on the CONNECT
-    // handshake, the only credential mechanism a generic proxy-aware client
-    // can actually deliver there (unlike NANNY_SESSION_TOKEN above, which
-    // rides a custom header on ordinary requests; a CONNECT tunnel has no
-    // opportunity to carry one). Using a separate, narrowly-scoped credential
-    // here (rather than reusing the session token) matters because this is
-    // the one value in the whole system that ends up embedded in a URL: some
-    // HTTP clients print the full proxy URL when their own verbose/debug
-    // logging is turned on, which a header value wouldn't be as likely to hit.
-    // If that ever leaks, it only grants "open a tunnel to an already
-    // allowlisted host", not full run control (stop, tool calls, budget).
-    // Percent-encoded defensively even though it's always a UUID we generate
-    // ourselves, cheap insurance against this ever changing later.
-    //
-    // The trailing `:` (empty password) is load-bearing, not decorative:
-    // confirmed directly against Python's `requests`, with no `:`, urlparse
-    // reports `password=None` rather than `""`, which trips an internal
-    // exception in `requests.utils.get_auth_from_url` that silently discards
-    // the username too (returns `("", "")` with no error). httpx doesn't
-    // share this bug, which is why chat (httpx) worked and Tavily search
-    // (requests, used by the tavily-python client) got a bare, credential-less
-    // CONNECT and a 407. An explicit empty password avoids the whole path.
-    if server.proxy_configured {
-        let proxy_url = format!("http://{}:@{}", percent_encode_userinfo(&server.proxy_token), server.addr);
-        cmd.env("HTTPS_PROXY", &proxy_url);
-        cmd.env("https_proxy", &proxy_url);
-        cmd.env("HTTP_PROXY",  &proxy_url);
-        cmd.env("http_proxy",  &proxy_url);
-        // So the agent's own bridge/session calls to the governor never get
-        // routed through the proxy they're configuring.
-        cmd.env("NO_PROXY",  "127.0.0.1,localhost");
-        cmd.env("no_proxy",  "127.0.0.1,localhost");
+    let key_file = certs_dir.join("client.key");
+    let ca_file = certs_dir.join("ca.crt");
+    if cert_file.exists() {
+        cmd.env("NANNY_BRIDGE_CERT", &cert_file);
+    }
+    if key_file.exists() {
+        cmd.env("NANNY_BRIDGE_KEY", &key_file);
+    }
+    if ca_file.exists() {
+        cmd.env("NANNY_BRIDGE_CA", &ca_file);
     }
 
-    let status = cmd
-        .status()
-        .with_context(|| format!("failed to run '{program}'"))?;
+    Ok((cmd, run_id))
+}
 
-    if !status.success() {
-        std::process::exit(status.code().unwrap_or(1));
+/// Tell the governor which app this run belongs to.
+///
+/// Done from the CLI rather than the child because an app that links no SDK
+/// has no way to declare for itself. Borrows the SDK's own client
+/// by setting the same env vars on this process that were staged onto the
+/// child, so all three transports (socket, loopback TCP, mTLS) stay one
+/// implementation rather than a second copy of the logic here.
+///
+/// Best-effort: an app with no `.nanny/app.json` simply doesn't declare, and
+/// Cloud groups its runs the way it always has.
+fn declare_app_to_governor(server: &NetworkServerInfo, dir: &Path, run_id: &str) {
+    let Ok(Some(app)) = identity::AppIdentity::load(dir) else {
+        return;
+    };
+    // SAFETY: called before the child is spawned, with nothing else in this
+    // process reading the environment concurrently. These are the same values
+    // already staged onto the child's command, the run id especially, since
+    // declaring against a different run would file the identity under a run
+    // that never does any work.
+    unsafe {
+        std::env::set_var("NANNY_BRIDGE_ADDR", &server.addr);
+        std::env::set_var("NANNY_SESSION_TOKEN", &server.token);
+        std::env::set_var("NANNY_RUN_ID", run_id);
     }
-
-    Ok(())
+    nanny::set_app(app.app_id, app.name);
 }
 
 fn cmd_run(
     config_path: &Path,
-    limits_name: Option<&str>,
     no_sync: bool,
+    env: cloud::CloudEnv,
     join: Option<String>,
     extra_args: Vec<String>,
 ) -> Result<()> {
     // Guard: exactly one nanny*.toml allowed per directory.
     let config_dir = config_path
         .parent()
-        .map(|p| if p == Path::new("") { Path::new(".") } else { p })
+        .map(|p| {
+            if p == Path::new("") {
+                Path::new(".")
+            } else {
+                p
+            }
+        })
         .unwrap_or(Path::new("."));
     let existing = nanny_tomls_in_dir(config_dir)?;
     if existing.len() > 1 {
@@ -602,28 +628,36 @@ fn cmd_run(
 
     // [managed] endpoint/api_key, and [runtime]/mode, are both retired; either
     // is now silently ignored by the parser, so warn rather than silently do
-    // nothing. There is no config knob to "keep" anymore, sync is automatic
-    // once this machine is logged in (`nanny auth login`).
+    // nothing. There is no config knob to "keep" anymore: sync is decided
+    // entirely by whether NANNY_API_KEY is set in the environment.
     if let Ok(raw) = std::fs::read_to_string(config_path) {
         if nanny_config::has_managed_section(&raw) {
             eprintln!(
-                "nanny: [managed] in nanny.toml is deprecated and ignored — run \
-                 `nanny auth login` and Cloud sync happens automatically, no config needed."
+                "nanny: [managed] in nanny.toml is deprecated and ignored. Set the \
+                 NANNY_API_KEY environment variable and Cloud sync happens \
+                 automatically, no config needed."
             );
         }
     }
 
+    // ── Resolve declared rule packs ───────────────────────────────────────────
+    let declared_packs = resolve_declared_packs(&config, config_dir)?;
+    let _ = &declared_packs;
+
     // Require [start] — nanny run always reads the command from config.
-    let start = config.start.as_ref()
+    let start = config
+        .start
+        .as_ref()
         .ok_or_else(|| anyhow::anyhow!("no start config found in nanny.toml"))?;
 
     // Build command: parse [start].cmd with shell quoting rules, then append extra args.
     // shlex::split handles quoted paths and escaped spaces — e.g. 'python "my agent.py"'.
-    let mut command: Vec<String> = shlex::split(&start.cmd)
-        .ok_or_else(|| anyhow::anyhow!(
+    let mut command: Vec<String> = shlex::split(&start.cmd).ok_or_else(|| {
+        anyhow::anyhow!(
             "invalid [start].cmd in nanny.toml: unterminated quote or invalid shell syntax: {:?}",
             start.cmd
-        ))?;
+        )
+    })?;
     if command.is_empty() {
         return Err(anyhow::anyhow!("[start].cmd in nanny.toml is empty"));
     }
@@ -639,96 +673,114 @@ fn cmd_run(
     }
 
     // Build the wired runtime from config.
-    // If a named limits set was requested, resolve it with inheritance.
-    let components = if let Some(name) = limits_name {
-        runtime::build_from_config_named(&config, name)
-            .with_context(|| format!("failed to activate limits set '{name}'"))?
-    } else {
-        runtime::build_from_config(&config)
-    };
+    let components = runtime::build_from_config(&config);
 
-    // Print what limits are active before running anything.
-    let active_set = limits_name.unwrap_or("[limits]");
     println!("nanny: config loaded from '{}'", config_path.display());
-    println!("nanny: limits ({active_set}) — steps={} tokens={} timeout={}ms",
-        components.limits.max_steps,
-        components.limits.max_tokens,
-        components.limits.timeout_ms,
-    );
     println!("nanny: tools allowed — {:?}", config.tools.allowed);
 
     let registered = components.registry.registered_names();
-    println!("nanny: registry — {} tool(s) registered: {:?}", registered.len(), registered);
-    println!("nanny: ledger — {} units", components.ledger.balance());
+    println!(
+        "nanny: registry — {} tool(s) registered: {:?}",
+        registered.len(),
+        registered
+    );
     println!();
 
-    let timeout = Duration::from_millis(components.limits.timeout_ms);
     let started_at = Instant::now();
 
     // ── Open event log ────────────────────────────────────────────────────
     let mut log = events::EventWriter::from_config(&config.observability, config_dir)?;
 
-    let started_event = execution_started_event(&components.limits, active_set, &command.join(" "));
-    log.write(&started_event)?;
+    // The run id is minted before anything is written: `ExecutionStarted` is
+    // seq 0 of this run and the bridge continues from 1, so the log is one
+    // sequence rather than two that collide.
+    let run_id = runtime::resolve_run_id();
+    let started_event =
+        execution_started_event(&command.join(" "), &config.tools, config.fingerprint());
+    log.write(&run_id, 0, &started_event)?;
 
     // ── Start bridge ──────────────────────────────────────────────────────
-    let bridge_components = runtime::build_bridge_components(&config, components.limits.clone(), limits_name.is_some());
-    let bridge = Bridge::start(bridge_components)
-        .context("failed to start bridge")?;
+    let bridge_components = runtime::build_bridge_components(&config);
+    let bridge =
+        Bridge::start(bridge_components, run_id.clone()).context("failed to start bridge")?;
 
-    // ── Cloud sync (None + no-op unless a credential is present) ────────────
+    // ── Cloud sync (off unless NANNY_API_KEY is set) ────────────────────────
     // Forwards a copy of the NDJSON event log to the cloud; enforcement stays
-    // fully local. Fire-and-forget, never blocks or fails the run. There is
-    // no mode setting: sync happens exactly when an app-scoped credential
-    // exists (self-minted below if this machine is logged in but this app
-    // isn't yet), and `--no-sync` did not turn it off.
-    let app_credentials = identity::AppIdentity::load(config_dir)
-        .ok()
-        .flatten()
-        .and_then(|app| app_credentials::maybe_self_mint(config_dir, &app.app_id));
-    println!("nanny: mode, {}", sync::effective_mode_label(app_credentials.as_ref()));
-    let managed = match sync::resolve_sync(app_credentials.as_ref(), no_sync) {
-        Some(target) => {
-            println!("nanny: syncing events to {} (enforcement stays local)", target.endpoint);
-            sync::CloudSync::start(target.endpoint, target.api_key, &bridge.session_token)
-        }
-        None => None,
-    };
+    // fully local. Fire-and-forget, never blocks or fails the run. The key is
+    // the only input: no config field, no credential file, nothing written to
+    // disk. The status line prints on every run either way, because a run that stops
+    // reporting must never do so silently.
+    // Declare which app this is, before anything else can be attributed to it.
+    // Identity rides in the event stream rather than being derived from the API
+    // key, so one credential can serve many apps and each still lands under its
+    // own name. An app with no `.nanny/app.json` simply doesn't declare, and
+    // Cloud groups its runs the way it always has.
+    let app = identity::AppIdentity::load(config_dir).ok().flatten();
+    if let Some(app) = &app {
+        bridge.declare_app(&app.app_id, &app.name);
+    }
+    let app_name = app.map(|a| a.name);
+
+    let target = sync::resolve_sync(env, no_sync);
+    println!(
+        "{}",
+        sync::sync_status_line(target.as_ref().map_err(|e| *e), app_name.as_deref())
+    );
+    let managed = target.ok().and_then(|t| {
+        sync::CloudSync::start(
+            t.endpoint,
+            t.api_key,
+            &bridge.session_token,
+            config_dir,
+            config
+                .observability
+                .resolve_log_path(config_dir)
+                .ok()
+                .flatten(),
+        )
+    });
     // ExecutionStarted was already written locally; forward it too.
     if let (Some(sender), Ok(line)) = (&managed, serde_json::to_string(&started_event)) {
         sender.enqueue(line);
     }
 
     // ── Spawn child process ───────────────────────────────────────────────
-    let (program, args) = command.split_first()
+    let (program, args) = command
+        .split_first()
         .expect("command is non-empty — enforced by clap");
 
     let mut cmd = std::process::Command::new(program);
     cmd.args(args);
     match &bridge.address {
         #[cfg(unix)]
-        BridgeAddress::Unix(path) => { cmd.env("NANNY_BRIDGE_SOCKET", path); }
-        BridgeAddress::Tcp(port) => { cmd.env("NANNY_BRIDGE_PORT", port.to_string()); }
+        BridgeAddress::Unix(path) => {
+            cmd.env("NANNY_BRIDGE_SOCKET", path);
+        }
+        BridgeAddress::Tcp(port) => {
+            cmd.env("NANNY_BRIDGE_PORT", port.to_string());
+        }
     }
     cmd.env("NANNY_SESSION_TOKEN", &bridge.session_token);
 
-    let mut child = match cmd.spawn()
-    {
+    let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
             // ExecutionStarted was emitted — always pair it with ExecutionStopped.
             let elapsed_ms = started_at.elapsed().as_millis() as u64;
-            let _ = log.write(&execution_stopped_event("SpawnFailed", 0, 0, elapsed_ms));
+            let _ = log.write(
+                &run_id,
+                bridge.next_seq(),
+                &execution_stopped_event("SpawnFailed", 0, elapsed_ms),
+            );
             return Err(e).with_context(|| format!("failed to spawn '{}'", program));
         }
     };
 
-    // ── Poll until exit, timeout, or bridge-signaled stop ────────────────
+    // ── Poll until exit or a bridge-signaled stop ────────────────────────
     //
-    // We poll every 50 ms. Coarse enough to avoid busy-spinning;
-    // fine enough that a 30-second timeout fires within half a tick.
-    // The bridge signals stop (budget, rules, max-steps) independently
-    // of the child's own exit — we must check both.
+    // We poll every 50 ms. Coarse enough to avoid busy-spinning; fine enough
+    // that a stop is noticed promptly. The bridge signals stop (allowlist,
+    // rules) independently of the child's own exit — we must check both.
     //
     // Bridge events (ToolAllowed, RuleDenied, ToolDenied, …) are drained on every tick
     // so the NDJSON stream is written in near-real-time — `tail -f` on the
@@ -743,7 +795,7 @@ fn cmd_run(
             }
         }
 
-        // Check bridge first — it may have stopped execution (budget, rules, etc.)
+        // Check bridge first — it may have stopped execution (allowlist, rules).
         if let ExecutionState::Stopped { reason } = bridge.execution_state() {
             let _ = child.kill();
             let _ = child.wait(); // reap — avoid zombie
@@ -757,7 +809,11 @@ fn cmd_run(
                 // RuleDenied or ToolFailed), in which case the bridge already
                 // has the specific reason. bridge.stop() is idempotent — it
                 // won't overwrite a reason the child already reported.
-                let fallback = if status.success() { "AgentCompleted" } else { "ProcessCrashed" };
+                let fallback = if status.success() {
+                    "AgentCompleted"
+                } else {
+                    "ProcessCrashed"
+                };
                 bridge.stop(fallback);
                 // Re-read: prefer the bridge's reason over the generic fallback.
                 let reason = match bridge.execution_state() {
@@ -767,18 +823,16 @@ fn cmd_run(
                 break reason;
             }
             Ok(None) => {
-                if started_at.elapsed() >= timeout {
-                    let _ = child.kill();
-                    let _ = child.wait(); // reap — avoid zombie
-                    bridge.stop("TimeoutExpired");
-                    break "TimeoutExpired".to_string();
-                }
                 std::thread::sleep(poll_interval);
             }
             Err(e) => {
                 // Polling failed — emit stopped before surfacing the error.
                 let elapsed_ms = started_at.elapsed().as_millis() as u64;
-                let _ = log.write(&execution_stopped_event("InternalError", 0, 0, elapsed_ms));
+                let _ = log.write(
+                    &run_id,
+                    bridge.next_seq(),
+                    &execution_stopped_event("InternalError", 0, elapsed_ms),
+                );
                 return Err(e).context("failed to poll child process");
             }
         }
@@ -802,11 +856,8 @@ fn cmd_run(
     // This usually means the model ignored its tool definitions — a common
     // sign of a model that is too small or a prompt that needs improvement.
     // Suppress the warning when execution was stopped by a governance decision
-    // (rule denial, tool denial, budget) — in that case 0 calls is expected.
-    let is_governance_stop = matches!(
-        stop_reason.as_str(),
-        "RuleDenied" | "ToolDenied" | "BudgetExhausted" | "MaxStepsReached" | "TimeoutExpired"
-    );
+    // (rule denial, tool denial) — in that case 0 calls is expected.
+    let is_governance_stop = matches!(stop_reason.as_str(), "RuleDenied" | "ToolDenied");
     if metrics.allowed_tool_count > 0 && metrics.tool_call_count == 0 && !is_governance_stop {
         eprintln!(
             "nanny: warning — execution completed with 0 tool calls \
@@ -816,13 +867,8 @@ fn cmd_run(
         );
     }
 
-    let stopped_event = execution_stopped_event(
-        &stop_reason,
-        metrics.step_count,
-        metrics.tokens_spent,
-        elapsed_ms,
-    );
-    log.write(&stopped_event)?;
+    let stopped_event = execution_stopped_event(&stop_reason, metrics.tokens_spent, elapsed_ms);
+    log.write(&run_id, bridge.next_seq(), &stopped_event)?;
     if let Some(sender) = &managed {
         if let Ok(line) = serde_json::to_string(&stopped_event) {
             sender.enqueue(line);
@@ -845,24 +891,45 @@ fn cmd_run(
 
 // ── Event constructors ────────────────────────────────────────────────────────
 
-fn execution_started_event(limits: &Limits, limits_set: &str, command: &str) -> ExecutionEvent {
+/// The declared authority of this run, written before the agent does anything.
+///
+/// Carries the config-side half of the grant: what the governor knows from
+/// nanny.toml. The rules half lives in the agent's process and arrives as
+/// `RulesDeclared` once it contacts the bridge.
+fn execution_started_event(
+    command: &str,
+    tools: &nanny_config::ToolsConfig,
+    config_hash: String,
+) -> ExecutionEvent {
+    // Every allowlisted tool appears, unlabelled ones with an empty list, so a
+    // reader can tell "declared, no labels" from "never declared".
+    let tool_labels = tools
+        .allowed
+        .iter()
+        .map(|name| {
+            let labels = tools
+                .per_tool
+                .get(name)
+                .map(|cfg| cfg.labels().iter().map(|l| l.to_string()).collect())
+                .unwrap_or_default();
+            (name.clone(), labels)
+        })
+        .collect();
+
     ExecutionEvent::ExecutionStarted {
         ts: now_ms(),
-        limits: LimitsSnapshot {
-            steps: limits.max_steps,
-            tokens: limits.max_tokens,
-            timeout: limits.timeout_ms,
-        },
-        limits_set: limits_set.to_string(),
         command: command.to_string(),
+        allowed_tools: tools.allowed.clone(),
+        tool_labels,
+        config_hash,
+        runtime_version: env!("CARGO_PKG_VERSION").to_string(),
     }
 }
 
-fn execution_stopped_event(reason: &str, steps: u32, tokens_spent: u64, elapsed_ms: u64) -> ExecutionEvent {
+fn execution_stopped_event(reason: &str, tokens_spent: u64, elapsed_ms: u64) -> ExecutionEvent {
     ExecutionEvent::ExecutionStopped {
         ts: now_ms(),
         reason: reason.to_string(),
-        steps,
         tokens_spent,
         elapsed_ms,
     }

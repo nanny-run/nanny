@@ -32,7 +32,7 @@ Thank you for taking the time to contribute. Nanny is a small, focused primitive
 
 ## The one rule that governs everything
 
-**Nanny is a primitive. It enforces limits. It does not think.**
+**Nanny is a primitive. It enforces authority. It does not think.**
 
 Every line of code in this repo must answer "yes" to this question:
 
@@ -60,7 +60,7 @@ Use `crates/runtime/src/tools/http_get.rs` as the template. A tool must:
 
 ### Config validation
 
-`crates/config/src/lib.rs` currently accepts values like `steps = 0` without complaint. Adding clear range checks with actionable error messages is a high-value, low-risk contribution.
+`crates/config/src/lib.rs` accepts values like `max_calls = 0` without complaint. Adding clear range checks with actionable error messages is a high-value, low-risk contribution.
 
 ### Stop reasons
 
@@ -126,7 +126,7 @@ This repository has three doc surfaces. Keep each one in scope and consistent wi
 | --------- | ------------------------------------------------------------------------ | ------------------------------ | --------------------------------------------------------------------------------- |
 | Docs site | `docs/` (Mintlify)                                                       | Developers using Nanny         | Commands, configuration, SDK usage, concepts, reference                           |
 | Root docs | `README.md`, `ARCHITECTURE.md`, `CHANGELOG.md`, `SECURITY.md`, this file | Contributors and evaluators    | Project overview, deep implementation model, contribution workflow, release notes |
-| Examples  | `examples/**/README.md`                                                  | Developers learning by copying | Runnable “this is how you use it” integrations                                    |
+| Wire protocol | `crates/bridge/PROTOCOL.md`                                          | Maintainers                    | Endpoints, headers, event shape. Internal, never published                        |
 
 Entry points:
 
@@ -139,10 +139,6 @@ Entry points:
   - `CHANGELOG.md` (release notes, authoritative user-visible changes)
   - `CONTRIBUTING.md` (how to work in this repo)
 - **Examples**
-  - `examples/rust/webdingo/README.md`
-  - `examples/rust/qabud/README.md`
-  - `examples/python/dev_assist/README.md`
-  - `examples/python/metrics_crew/README.md`
 
 If your PR changes user-facing behaviour, CLI output, config schema, or event format, update the docs site (`docs/`) and any affected example READMEs in the same PR.
 
@@ -152,7 +148,7 @@ If your PR changes user-facing behaviour, CLI output, config schema, or event fo
 | --------- | --------------- | ---------------- | ---------------------------------------------------------------------------------------------- |
 | `cli`     | `nannyd`        | ✓                | The `nanny` binary and Rust SDK (`#[tool]`, `#[rule]`, `#[agent]`)                             |
 | `core`    | `nanny-core`    | ✗                | Traits (`Policy`, `Ledger`, `ToolExecutor`) and the `ExecutionEvent` type. No implementations. |
-| `runtime` | `nanny-runtime` | ✗                | Concrete impls: `LimitsPolicy`, `RuleEvaluator`, `FakeLedger`, `ToolRegistry`, built-in tools  |
+| `runtime` | `nanny-runtime` | ✗                | Concrete impls: `ToolPermissionPolicy`, `RuleEvaluator`, `ChainPolicy`, `ToolRegistry`, built-in tools |
 | `bridge`  | `nanny-bridge`  | ✗                | Local HTTP enforcement server (Unix socket / TCP); holds all execution state                   |
 | `config`  | `nanny-config`  | ✗                | Parses `nanny.toml`; owns `NannyConfig`                                                        |
 | `macros`  | `nanny-macros`  | ✗                | The `#[tool]`, `#[rule]`, `#[agent]` proc-macros (re-exported by `cli`)                        |
@@ -173,179 +169,10 @@ If you are adding a new enforcement rule, it goes in `runtime`. If you are addin
 
 ## Reference examples
 
-`examples/` contains complete agents that exercise the full SDK — two Rust and two Python:
+`packs/` contains the first-party rule packs. Their tests run from `sdks/python`:
 
-| Example                                                        | What it demonstrates                                                                                |
-| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| [`examples/rust/webdingo`](examples/rust/webdingo)             | `#[nanny::tool]`, `#[nanny::agent]`, `nanny::http_get`, loop-detection rule                         |
-| [`examples/rust/qabud`](examples/rust/qabud)                   | `#[nanny::tool]`, content-based rule (`last_tool_args`), allowlist enforcement                      |
-| [`examples/python/dev_assist`](examples/python/dev_assist)     | `@tool`, `@rule`, `@agent` — LangGraph debug agent (Groq), Python-driven StateGraph nodes           |
-| [`examples/python/metrics_crew`](examples/python/metrics_crew) | `@tool`, `@rule`, `@agent` — CrewAI multi-agent pipeline (Groq), single-tool tasks, per-role limits |
-
-All four examples depend on the published crates (`nannyd` from crates.io, `nanny-sdk` from PyPI). `webdingo`, `qabud`, and `dev_assist` use Groq (`llama-3.3-70b-versatile`, free tier — set `GROQ_API_KEY`). `metrics_crew` uses OpenAI (`gpt-4.1-nano` — set `OPENAI_API_KEY`). Copy `.env.example` → `.env` in each directory and fill in the relevant key. Each example also documents a one-line swap to Ollama for offline use. All four are the best starting point for understanding how the pieces fit together before touching the crate or SDK internals.
-
----
-
-## Setting up locally
-
-**Requirements:** Rust stable (1.75+).
-
-Contributors do not have write access to `nanny-run/nanny` directly. The standard flow is fork → clone your fork → open a PR back to the main project.
-
-```bash
-# 1. Fork nanny-run/nanny on GitHub (click "Fork" in the top right)
-
-# 2. Clone your fork — replace <your-username> with your GitHub handle
-git clone https://github.com/<your-username>/nanny.git
-cd nanny
-
-# 3. Add the upstream repo as a remote so you can pull future changes
-git remote add upstream https://github.com/nanny-run/nanny.git
-
-# 4. Create a branch for your change
-git checkout -b fix/my-descriptive-branch-name
-
-# 5. Build everything
-cargo build --workspace
-
-# 6. Run all tests
-cargo test --workspace
-
-# 7. Check for warnings (CI enforces this)
-cargo clippy --workspace -- -D warnings
+```sh
+uv run pytest ../../packs/nanny-recommended/tests
 ```
-
-There are no external service dependencies. The bridge runs in-process during tests — no ports need to be open.
-
-**Keeping your fork up to date:**
-
-```bash
-git fetch upstream
-git rebase upstream/main
-```
-
----
-
-## Running tests
-
-```bash
-# All tests
-cargo test --workspace
-
-# A specific crate
-cargo test -p nanny-bridge
-
-# A specific test by name
-cargo test -p nanny -- process_lifecycle
-```
-
-Tests run in parallel by default. The test suite is designed to tolerate parallelism — if you write tests that create temp files or sockets, make sure names are unique (use the `AtomicU64` counter pattern in `crates/cli/tests/process_lifecycle.rs` as a reference).
-
-All tests must pass before a PR can be merged. The CI matrix runs on `ubuntu-latest` and `macos-latest`.
-
----
-
-## Opening a pull request
-
-```bash
-# Push your branch to your fork
-git push origin fix/my-descriptive-branch-name
-```
-
-Then open a pull request on GitHub from your fork's branch to `nanny-run/nanny` targeting the **`main`** branch. `main` is the default and the only active development branch.
-
-**Fork and branch model:**
-
-- Fork `nanny-run/nanny` on GitHub, clone your fork, and branch off `main`.
-- `main` is the only active development branch — all PRs must target `main`.
-- No direct pushes to the upstream repo. Always go through a PR.
-
-**Commit style — conventional commits:**
-
-Use conventional commit prefixes so the changelog can be generated automatically:
-
-| Prefix      | When to use                                              |
-| ----------- | -------------------------------------------------------- |
-| `feat:`     | New feature or behaviour visible to users                |
-| `fix:`      | Bug fix                                                  |
-| `chore:`    | Maintenance (CI, deps, tooling) — no user-visible change |
-| `docs:`     | Documentation only                                       |
-| `refactor:` | Internal restructure with no behaviour change            |
-| `test:`     | Adding or fixing tests only                              |
-
-PR titles are checked against this format. Example: `feat: add [start] table to nanny.toml`.
-
-**Checklist before opening:**
-
-1. **Open an issue first** for anything beyond a small bug fix or typo. This avoids duplicate work and confirms the change fits the project's scope.
-2. **Keep PRs focused.** One logical change per PR. Reviewers will ask you to split large PRs.
-3. **Write tests.** PRs without tests for new behaviour will not be merged.
-4. **Run clippy before pushing.** `cargo clippy --workspace -- -D warnings` must be clean.
-5. **No `unwrap()` in non-test code.** Use `?` or explicit error handling.
-6. **Update the docs** if your change affects user-facing behaviour, config schema, or events. The documentation lives in the `docs/` directory of this repository — update the relevant `.mdx` files in the same PR.
-
----
-
-## Release process
-
-**Who cuts releases:** Only the maintainer pushes version tags. Contributors submit PRs; the maintainer merges and tags. You never need to tag or publish anything yourself.
-
-**Tag protection:** Version tags (`v*`) are restricted to maintainers at the GitHub repo level (Settings → Rules → Tag protection → pattern `v*`). Pushing a `v*` tag from a fork or contributor branch will be rejected.
-
-**How a release happens:**
-
-1. Maintainer merges the release branch into `main`.
-2. Maintainer pushes a `v*` tag (e.g. `v0.1.3`) on `main`.
-3. The release workflow runs automatically: binaries built, GitHub Release created with notes from `CHANGELOG.md`, all six crates published to crates.io in dependency order, Homebrew formula updated in the tap repo.
-
-**Pre-tag checklist — complete every item before pushing the tag:**
-
-Every item below is a release participant. Missing any one of them produces a broken or misleading release.
-
-| #   | What                          | How                                                                                                                                                                                             |
-| --- | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | **Workspace version**         | Bump `version` in `[workspace.package]` and all `version = "x.y.z"` entries in `[workspace.dependencies]` inside the root `Cargo.toml`. Run `cargo check --workspace` to confirm.               |
-| 2   | **Example app versions**      | Bump `nannyd = "x.y.z"` in `examples/rust/qabud/Cargo.toml` and `examples/rust/webdingo/Cargo.toml` to match. Do this after publish — the new version must exist on crates.io first.            |
-| 3   | **Homebrew formula template** | Bump `version "x.y.z"` in `homebrew/nannyd.rb`. CI substitutes the SHA256s automatically; the version line must match so the template stays readable.                                           |
-| 4   | **Python SDK version**        | `version` in `sdks/python/pyproject.toml` must match the tag. The `publish-pypi` CI job validates this and fails loudly if they diverge.                                                        |
-| 5   | **`CHANGELOG.md` entry**      | Add `## [x.y.z] — YYYY-MM-DD` with `### Added` / `### Fixed` sections. The release workflow reads this file and uses it as the GitHub Release body. A missing entry means blank release notes.  |
-| 6   | **Rust tests pass**           | `cargo test --workspace` must be green on both Linux and macOS.                                                                                                                                 |
-| 7   | **Clippy clean**              | `cargo clippy --workspace -- -D warnings` must produce no errors.                                                                                                                               |
-| 8   | **Python SDK tests pass**     | `cd sdks/python && uv run pytest -q` must be green. `uv run mypy nanny_sdk` and `uv run ruff check .` must be clean.                                                                            |
-| 9   | **Tag matches Cargo.toml**    | The `publish-crates` CI job validates this automatically and fails loudly — but verify locally first: the tag you push (e.g. `v0.1.4`) must equal `[workspace.package] version` (e.g. `0.1.4`). |
-
-**What CI handles automatically (do not do manually):**
-
-- SHA256 computation and Homebrew tap update
-- `cargo publish` for all six crates in dependency order
-- Python SDK wheel built and published to PyPI via OIDC trusted publishing
-- GitHub Release artifact upload and release notes body
-
----
-
-## Reporting bugs
-
-Use [GitHub Issues](https://github.com/nanny-run/nanny/issues). Include:
-
-- Nanny version (`nanny --version`)
-- OS and architecture
-- Your `nanny.toml` (redact any API keys)
-- The command you ran
-- What you expected vs what happened
-- The NDJSON event log if relevant
-
-For security vulnerabilities, do **not** open a public issue. See [SECURITY.md](SECURITY.md).
-
----
-
-## Code style
-
-- Standard `rustfmt` formatting (`cargo fmt --all`)
-- No `unwrap()` or `expect()` outside of tests
-- Error types use `thiserror` — match the pattern already in each crate
-- Public items must have doc comments (`///`)
-- Keep `nanny-core` free of any concrete implementations — traits and types only
-
----
 
 _Nanny is open source under the [Apache-2.0 license](LICENSE)._

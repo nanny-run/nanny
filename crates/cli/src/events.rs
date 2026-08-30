@@ -6,7 +6,7 @@
 
 use anyhow::{Context, Result};
 use nanny_config::ObservabilityConfig;
-use nanny_core::events::event::ExecutionEvent;
+use nanny_core::events::event::{ExecutionEvent, LoggedEvent};
 use std::fs::OpenOptions;
 use std::io::{self, BufWriter, Write};
 use std::path::Path;
@@ -30,7 +30,9 @@ impl EventWriter {
     ///          it doesn't exist. See `ObservabilityConfig::resolve_log_path`.
     pub fn from_config(config: &ObservabilityConfig, base_dir: &Path) -> Result<Self> {
         match config.resolve_log_path(base_dir)? {
-            None => Ok(Self { out: Box::new(io::stdout()) }),
+            None => Ok(Self {
+                out: Box::new(io::stdout()),
+            }),
             Some(path) => Self::file(&path),
         }
     }
@@ -41,19 +43,27 @@ impl EventWriter {
             .append(true)
             .open(path)
             .with_context(|| format!("failed to open log file '{}'", path.display()))?;
-        Ok(Self { out: Box::new(BufWriter::new(file)) })
+        Ok(Self {
+            out: Box::new(BufWriter::new(file)),
+        })
     }
 
     /// Write one event as a single line of JSON, flushed immediately.
-    pub fn write(&mut self, event: &ExecutionEvent) -> Result<()> {
-        let line = serde_json::to_string(event).context("failed to serialize event")?;
+    ///
+    /// Takes the run id and sequence explicitly rather than holding a counter:
+    /// the bridge numbers every verdict, so a second counter here would produce
+    /// two overlapping sequences for one run. The CLI only ever writes the two
+    /// bookends, and it takes their numbers from the bridge.
+    pub fn write(&mut self, run_id: &str, seq: u64, event: &ExecutionEvent) -> Result<()> {
+        let stamped = LoggedEvent::new(run_id, seq, event.clone());
+        let line = serde_json::to_string(&stamped).context("failed to serialize event")?;
         self.write_raw(&line)
     }
 
     /// Write a pre-serialised JSON line, flushed immediately.
     ///
-    /// Used to forward raw event lines from the bridge (e.g. `StepCompleted`,
-    /// `ToolAllowed`, `ToolDenied`) without re-parsing or re-serialising them.
+    /// Used to forward raw event lines from the bridge (e.g. `ToolAllowed`,
+    /// `ToolDenied`, `RuleDenied`) without re-parsing or re-serialising them.
     pub fn write_raw(&mut self, line: &str) -> Result<()> {
         writeln!(self.out, "{line}").context("failed to write event")?;
         self.out.flush().context("failed to flush event log")?;
@@ -66,22 +76,24 @@ impl EventWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nanny_core::events::event::LimitsSnapshot;
 
     fn started_event() -> ExecutionEvent {
         ExecutionEvent::ExecutionStarted {
             ts: 0,
-            limits: LimitsSnapshot { steps: 100, tokens: 1000, timeout: 30_000 },
-            limits_set: "[limits]".to_string(),
             command: "python agent.py".to_string(),
+            allowed_tools: vec!["http_get".to_string()],
+            tool_labels: [("http_get".to_string(), vec!["reads_untrusted".to_string()])]
+                .into_iter()
+                .collect(),
+            config_hash: "deadbeef".to_string(),
+            runtime_version: "0.6.0".to_string(),
         }
     }
 
-    fn stopped_event(reason: &str, steps: u32, tokens_spent: u64, elapsed_ms: u64) -> ExecutionEvent {
+    fn stopped_event(reason: &str, tokens_spent: u64, elapsed_ms: u64) -> ExecutionEvent {
         ExecutionEvent::ExecutionStopped {
             ts: 0,
             reason: reason.to_string(),
-            steps,
             tokens_spent,
             elapsed_ms,
         }
@@ -94,39 +106,37 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         assert_eq!(v["event"], "ExecutionStarted");
-        assert_eq!(v["limits_set"], "[limits]");
         assert_eq!(v["command"], "python agent.py");
-        assert_eq!(v["limits"]["steps"], 100);
-        assert_eq!(v["limits"]["tokens"], 1000);
-        assert_eq!(v["limits"]["timeout"], 30_000u64);
         assert!(v["ts"].is_number());
+        assert_eq!(v["allowed_tools"][0], "http_get");
+        assert_eq!(v["tool_labels"]["http_get"][0], "reads_untrusted");
+        assert_eq!(v["runtime_version"], "0.6.0");
     }
 
     #[test]
     fn execution_stopped_is_valid_json() {
-        let event = stopped_event("TimeoutExpired", 7, 0, 5_432);
+        let event = stopped_event("ToolDenied", 0, 5_432);
         let json = serde_json::to_string(&event).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         assert_eq!(v["event"], "ExecutionStopped");
-        assert_eq!(v["reason"], "TimeoutExpired");
-        assert_eq!(v["steps"], 7);
+        assert_eq!(v["reason"], "ToolDenied");
         assert_eq!(v["tokens_spent"], 0u64);
         assert_eq!(v["elapsed_ms"], 5_432u64);
     }
 
     #[test]
     fn both_event_types_serialize_with_event_field() {
-        let events = [
-            started_event(),
-            stopped_event("AgentCompleted", 0, 0, 0),
-        ];
+        let events = [started_event(), stopped_event("AgentCompleted", 0, 0)];
         let names = ["ExecutionStarted", "ExecutionStopped"];
 
         for (event, expected_name) in events.iter().zip(names.iter()) {
             let json = serde_json::to_string(event).unwrap();
             let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-            assert_eq!(v["event"], *expected_name, "wrong event name for {expected_name}");
+            assert_eq!(
+                v["event"], *expected_name,
+                "wrong event name for {expected_name}"
+            );
         }
     }
 
@@ -139,11 +149,15 @@ mod tests {
                 fn write(&mut self, data: &[u8]) -> io::Result<usize> {
                     self.0.lock().unwrap().write(data)
                 }
-                fn flush(&mut self) -> io::Result<()> { Ok(()) }
+                fn flush(&mut self) -> io::Result<()> {
+                    Ok(())
+                }
             }
-            let mut writer = EventWriter { out: Box::new(ArcWriter(buf_clone)) };
-            for event in events {
-                writer.write(&event).unwrap();
+            let mut writer = EventWriter {
+                out: Box::new(ArcWriter(buf_clone)),
+            };
+            for (seq, event) in events.into_iter().enumerate() {
+                writer.write("test-run", seq as u64, &event).unwrap();
             }
         }
         let bytes = buf.lock().unwrap().clone();
@@ -152,10 +166,7 @@ mod tests {
 
     #[test]
     fn event_writer_produces_ndjson_lines() {
-        let output = write_to_buf([
-            started_event(),
-            stopped_event("AgentCompleted", 1, 0, 100),
-        ]);
+        let output = write_to_buf([started_event(), stopped_event("AgentCompleted", 0, 100)]);
 
         let lines: Vec<&str> = output.lines().collect();
         for line in &lines {
@@ -167,10 +178,7 @@ mod tests {
 
     #[test]
     fn execution_started_is_first_line() {
-        let output = write_to_buf([
-            started_event(),
-            stopped_event("AgentCompleted", 0, 0, 0),
-        ]);
+        let output = write_to_buf([started_event(), stopped_event("AgentCompleted", 0, 0)]);
         let first: serde_json::Value =
             serde_json::from_str(output.lines().next().unwrap()).unwrap();
         assert_eq!(first["event"], "ExecutionStarted");
@@ -178,12 +186,8 @@ mod tests {
 
     #[test]
     fn execution_stopped_is_last_line() {
-        let output = write_to_buf([
-            started_event(),
-            stopped_event("MaxStepsReached", 100, 0, 200),
-        ]);
-        let last: serde_json::Value =
-            serde_json::from_str(output.lines().last().unwrap()).unwrap();
+        let output = write_to_buf([started_event(), stopped_event("RuleDenied", 0, 200)]);
+        let last: serde_json::Value = serde_json::from_str(output.lines().last().unwrap()).unwrap();
         assert_eq!(last["event"], "ExecutionStopped");
     }
 
@@ -195,8 +199,10 @@ mod tests {
 
         {
             let mut writer = EventWriter::file(&path).unwrap();
-            writer.write(&started_event()).unwrap();
-            writer.write(&stopped_event("AgentCompleted", 0, 0, 50)).unwrap();
+            writer.write("test-run", 0, &started_event()).unwrap();
+            writer
+                .write("test-run", 1, &stopped_event("AgentCompleted", 0, 50))
+                .unwrap();
         }
 
         let content = std::fs::read_to_string(&path).unwrap();

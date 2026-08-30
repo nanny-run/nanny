@@ -17,11 +17,15 @@ from pytest_httpserver import HTTPServer
 @pytest.fixture(autouse=True)
 def _reset_rules() -> Generator[None, None, None]:
     """Clear _RULES before and after every test."""
-    from nanny_sdk._decorators import _RULES
+    import nanny_sdk._decorators as decorators
 
-    _RULES.clear()
+    # The declare-once guard is module state, so a test that triggers it would
+    # otherwise suppress the declaration in every test after it.
+    decorators._RULES.clear()
+    decorators._declared = False
     yield
-    _RULES.clear()
+    decorators._RULES.clear()
+    decorators._declared = False
 
 
 @pytest.fixture()
@@ -43,15 +47,20 @@ def mock_bridge(httpserver: HTTPServer, monkeypatch: pytest.MonkeyPatch) -> HTTP
     # Using expect_request (not expect_oneshot_request) so it handles any number of calls
     # and is NOT checked by check_assertions(), avoiding noise in allow-path tests.
     httpserver.expect_request("/stop", method="POST").respond_with_json({"status": "ok"})
+    # Permanent catch-all for POST /rules — the first governed call declares
+    # what could have refused. Not checked by check_assertions().
+    httpserver.expect_request("/rules", method="POST").respond_with_json({"status": "ok"})
     # Permanent catch-all for GET /status — the @tool decorator fetches live counters
     # before running rules. Tests that need specific counter values register a oneshot
     # handler before calling the tool (oneshot handlers take priority over persistent ones).
-    httpserver.expect_request("/status", method="GET").respond_with_json({
-        "state": "running",
-        "step": 0,
-        "tokens_spent": 0,
-        "elapsed_ms": 0,
-        "tool_call_counts": {},
-        "tool_call_history": [],
-    })
+    httpserver.expect_request("/status", method="GET").respond_with_json(
+        {
+            "state": "running",
+            "tokens_spent": 0,
+            "elapsed_ms": 0,
+            "tool_call_counts": {},
+            "tool_call_history": [],
+            "tool_labels": {},
+        }
+    )
     return httpserver

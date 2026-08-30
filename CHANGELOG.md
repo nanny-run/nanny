@@ -5,6 +5,80 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-08-19
+
+### Added
+
+- **App identity now reaches Cloud.** A new `AppIdentified { ts, app_id,
+  name }` core event, sourced from the committed `.nanny/app.json`, is
+  declared consistently on both `nanny run` and `nanny run --join` (only
+  `run` announced it before) and dedup'd bridge-side via a new
+  `POST /app` endpoint (mirroring `POST /harness`). Before this, no app
+  identity reached Cloud in any form, so every app in an org collapsed
+  into one undifferentiated stream; a joined process is now attributed to
+  the app that joined, not the governor that hosts it. `nanny_sdk.set_app`
+  mirrors this on the Python SDK side, for the case `nanny run` itself
+  can't cover: a process embedded somewhere `nanny run` didn't launch.
+- **`nanny_sdk.run_scope()`.** Scopes a run id to a Python `contextvar`
+  instead of the process-global `NANNY_RUN_ID` environment variable, which
+  a threaded host serving several concurrent runs in one process (GoTM's
+  hosted port is the first real case) would otherwise silently share
+  across every run, billing one org's tokens to another's budget and
+  landing stops on the wrong run entirely. `contextvars` propagate into a
+  thread pool correctly, which is what makes this safe under FastAPI's
+  own threaded request handling.
+- **`nanny_sdk.get_run_events(run_id)`.** Lets a host serving many
+  concurrent runs under `--serve` build its own per-tenant usage ledger
+  from one run's buffered events, without parsing the CLI's flat NDJSON
+  log, which carries no run id to filter by.
+- **A durable outbox holds undelivered Cloud sync events** instead of
+  dropping them on a connectivity gap, so a brief network blip no longer
+  silently loses fleet telemetry.
+- **`nanny status` reports whether the fleet is actually syncing.**
+  `--serve` records its resolved Cloud destination (host only, never the
+  key) in `~/.nanny/servers/<app_id>/server.sync`, so the answer to "is my
+  fleet reporting?" outlives the one-time startup log line that used to
+  be the only place it appeared.
+- **`nanny run --serve` falls forward to another port** when the default
+  is already taken, instead of failing to start.
+
+### Changed
+
+- **Cloud sync is now decided by one input: the `NANNY_API_KEY`
+  environment variable** (breaking change). The old `nanny auth login`
+  device flow and its app-scoped credential are retired: sync had been
+  dead under 0.5.0 and failing silently, since `resolve_sync` relied on
+  self-minting a credential Cloud never actually accepted, and the
+  swallowed error meant a container with a key set and no local session
+  ran fully local with no indication why.
+- **`nanny run --serve` now launches `[start].cmd` directly as the
+  governor's own child process.** One process instead of the
+  two-command shell-launcher pattern this previously required: `nanny` is
+  PID 1, receives SIGTERM/SIGINT directly, and owns the child so it's
+  reaped instead of orphaned if either side dies.
+- **`[proxy] allowed_hosts` now refuses to start if the bridge can't
+  actually enforce it** (breaking change), a fail-closed default in place
+  of silently not enforcing an allowlist the config claimed was active.
+- **Token files are created owner-only from the start**, not `chmod`'d
+  after creation, closing the brief window where they were readable more
+  broadly right after creation.
+
+### Fixed
+
+- **No signal handler existed for `nanny run --serve` at all.** A plain
+  Ctrl-C (or a container's SIGTERM) left every one of the six
+  `~/.nanny/servers/<app_id>/` discovery files stale forever (the
+  existing post-loop cleanup only ever handled three of them), breaking
+  the next `--serve` in the same directory with "has server state but
+  isn't reachable". This happened on every normal Ctrl-C, not an edge
+  case: nothing intercepted the signal before the OS's default
+  disposition killed the process outright, mid-loop, before it ever
+  reached the cleanup code. A real `ctrlc`-based handler now force-kills
+  the governed child and removes every discovery file immediately on
+  SIGINT/SIGTERM.
+- **Test ports allocated from the OS** instead of hardcoded, closing a
+  source of flaky test collisions.
+
 ## [0.5.0] - 2026-08-08
 
 ### Added

@@ -1,0 +1,118 @@
+---
+title: nanny.toml reference
+description: Complete schema for the nanny.toml configuration file.
+---
+
+## Full schema
+
+```toml
+# ── Start ─────────────────────────────────────────────────────────────────────
+
+[start]
+cmd = "python agent.py"   # required, the command nanny run executes
+
+# ── Tools ─────────────────────────────────────────────────────────────────────
+
+[tools]
+allowed = ["web_search", "send_outreach"]   # empty list denies every tool call
+
+# Per-tool configuration. The name must match the function name in code.
+[tools.web_search]
+max_calls       = 30      # most calls allowed in one run
+reads_untrusted = true    # ingests content you do not control
+
+[tools.send_outreach]
+external_effect = true    # acts on the outside world
+
+# ── Rules ─────────────────────────────────────────────────────────────────────
+
+[rules]
+extends = ["nanny:recommended@1.0.0"]   # installed with nanny rules add
+
+# ── Observability ─────────────────────────────────────────────────────────────
+
+[observability]
+log  = "stdout"   # "stdout" | "file" — "file" writes to .nanny/logs/log.ndjson
+# file = "events"   # optional, bare name only, no extension — see below
+
+# Cloud sync isn't a config field. It turns on for any machine that sets
+# the NANNY_API_KEY environment variable. There is no endpoint or key here.
+```
+
+---
+
+## [start]
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `cmd` | string | — | **Required.** The shell command `nanny run` executes. Examples: `"python agent.py"`, `"cargo run --release"`, `"node agent.js"`. |
+
+---
+
+## [tools]
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `allowed` | string array | — | Explicit allowlist of tool names. **An empty array denies every tool call.** If `[tools]` is not present, all tools are allowed. |
+
+### Per-tool configuration, `[tools.<name>]`
+
+```toml
+[tools.web_search]
+max_calls       = 30
+reads_untrusted = true
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `max_calls` | integer | unlimited | Most calls to this tool in one run. Exceeding it fires `RuleDenied` with `rule_name = "<tool>.max_calls"`. |
+| `reads_untrusted` | boolean | `false` | Ingests content you do not control. |
+| `external_effect` | boolean | `false` | Acts on the outside world. |
+| `destructive` | boolean | `false` | Irreversible. |
+| `moves_money` | boolean | `false` | Financial transaction. |
+| `reads_sensitive` | boolean | `false` | Touches secrets or personal data. |
+
+The five booleans are [tool labels](/v0.6/concepts/tool-labels). Rules read
+labels rather than tool names, which is what lets one rule govern any
+application whose operator has labelled their tools.
+
+The name in `[tools.<name>]` must exactly match the function name used in the
+`@tool` decorator or `#[nanny::tool]` macro.
+
+---
+
+## [rules]
+
+```toml
+[rules]
+extends = ["nanny:recommended@1.0.0", "nanny:owasp@1.0.0"]
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `extends` | string array | `[]` | Rule packs governing this app, each pinned as `name@version`. |
+
+Every entry is pinned. An unpinned entry is a config error, not a request for
+the newest version: a control that changes without you deciding to change it is
+not a control, and it would mean past evidence no longer describes what ran.
+
+A pack named here but not installed stops the run before it starts. Add it with
+[`nanny rules add`](/v0.6/reference/cli-rules).
+
+---
+
+## [observability]
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `log` | `"stdout"` \| `"file"` | `"stdout"` | Destination for the NDJSON event stream. |
+| `file` | string | `"log"` | Optional. A bare name, no extension and no path separators — Nanny always appends `.ndjson`. The directory is always `.nanny/logs/`, owned by Nanny, auto-created and gitignored — not configurable. |
+
+---
+
+## Cloud sync
+
+Cloud sync has no config block. It turns on wherever the `NANNY_API_KEY` environment variable is set, and there is no field to flip. No key, endpoint, or org lives in `nanny.toml`, because it is committed, and a committed file must never hold a secret or differ between your staging and production deploys.
+
+See [Connect to Nanny Cloud](/v0.6/guides/managed-mode) for the full flow, and [Deploying a governed app](/v0.6/guides/deploying) for containers and CI.
+

@@ -122,7 +122,7 @@ pub trait ToolExecutor {
 
     /// Return the declared cost for a named tool, if it exists.
     ///
-    /// Used by the executor to charge the ledger after a successful call.
+    /// Used by the executor to charge tokens after a successful call.
     /// Returns `None` if the tool is not registered.
     fn declared_cost(&self, name: &str) -> Option<u64>;
 }

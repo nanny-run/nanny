@@ -1,0 +1,81 @@
+---
+title: Declared authority
+description: What the agent was permitted to do, recorded before it did anything.
+---
+
+A log of refusals cannot answer the question an auditor actually asks.
+
+"Show me that this agent could not send email" is not answered by an absence of
+email in the log. An agent that never tried and an agent that could not are
+indistinguishable, unless the boundary itself was written down.
+
+So Nanny records the grant at the start of every run, before the agent does
+anything.
+
+## Two halves, two events
+
+The grant arrives in two pieces because two different parties know them.
+
+**`ExecutionStarted`** carries the config half, which Nanny reads from
+`nanny.toml`:
+
+```json
+{
+  "event": "ExecutionStarted",
+  "run_id": "a1b2c3d4",
+  "seq": 0,
+  "command": "python agent.py",
+  "allowed_tools": ["web_search", "send_outreach"],
+  "tool_labels": {
+    "web_search": ["reads_untrusted"],
+    "send_outreach": ["external_effect"]
+  },
+  "config_hash": "9f2a41c8"
+}
+```
+
+**`RulesDeclared`** carries the rules half, which lives in your process:
+
+```json
+{
+  "event": "RulesDeclared",
+  "run_id": "a1b2c3d4",
+  "seq": 1,
+  "rules": [
+    {"name": "no_send_after_read", "version": "1.0.0", "pack": "nanny:recommended"},
+    {"name": "my_own_rule"}
+  ]
+}
+```
+
+Rules are compiled into your agent, not into `nanny.toml`, so Nanny cannot see
+them for itself. Splitting the event is deliberate: emitting `rules: []` because
+it could not see them would read as "no rules registered", which is worse than
+saying nothing.
+
+A rule you wrote yourself has no `version` and no `pack`. Those fields are
+omitted rather than sent empty, because a hand-written rule genuinely has no
+pack provenance and inventing one would imply otherwise.
+
+## `config_hash`
+
+A fingerprint of the parsed config. Two runs with the same hash ran the same
+policy; two runs with different hashes did not.
+
+Hashed over the parsed config rather than the file bytes, so reformatting,
+reordering keys, or adding a comment does not change it. A fingerprint that
+moved when someone reflowed a comment would report a policy change that never
+happened.
+
+It is the join key between a run and the revision of `nanny.toml` that governed
+it. Your git history versions that file; the hash is what connects a specific
+run to a specific version of it.
+
+## What this makes answerable
+
+- Which tools was this agent allowed to call?
+- Which of them did it never use? (Authority granted for nothing.)
+- Which rules were in force, at which versions?
+- Did these two runs operate under the same policy?
+
+None of those can be derived from denials alone.

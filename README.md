@@ -8,7 +8,7 @@
 
 <p align="center">
   <strong>Open-source enforcement primitive for autonomous systems.</strong><br/>
-  Hard limits. Deterministic stops. Structured audit trail.
+  Bounded authority. Deterministic stops. Provable audit trail.
 </p>
 
 <p align="center">
@@ -38,9 +38,11 @@ This is happening right now at hundreds of companies.
 
 Nanny is the enforcement layer that prevents it.
 
-You tell Nanny what each agent is allowed to do — how many steps, how much budget, which tools, how long. The moment any limit is crossed, Nanny kills the process immediately, emits a structured log saying exactly what happened and why, and exits. No grace period. No recovery logic. No second chances.
+You tell Nanny what each agent is allowed to do: which tools it may call, and under which rules. The moment it tries something outside that, Nanny stops the run immediately, emits a structured log saying exactly what happened and why, and exits. No grace period. No recovery logic. No second chances.
 
-When you have multiple specialized agents — a researcher, an analyst, a reporter — Nanny gives each one its own budget, its own tool allowlist, and its own kill switch. The analysis agent cannot call the reporter's tools. A loop-detection rule stops any agent from running the same computation five times in a row. The moment any agent steps outside its role or hits its ceiling, it stops. You get a full audit trail of every call, every decision, and every stop reason.
+Liability attaches to authority, not consumption. Nobody is accountable for a token count. People are accountable when an agent emails the wrong customer, deletes the wrong record, or moves money it should not have.
+
+Rules read **labels**, not tool names, so one rule governs any application whose operator has labelled their tools. `no_send_after_read` denies an `external_effect` call once a `reads_untrusted` call has happened in the same run: the shape of an indirect prompt injection, caught without Nanny ever reading the content.
 
 Think of it as a **deterministic enforcement layer** — auditable, and structurally impossible for any agent to bypass.
 
@@ -58,9 +60,8 @@ flowchart TD
 
         subgraph ENFORCE[" "]
             direction TB
-            STEPS["steps"]
-            TOKENS["tokens"]
-            TIMER["timeout"]
+            ALLOW["allowlist"]
+            RULES["rules"]
         end
 
         AGENT -- "tool call" --> ENFORCE
@@ -68,7 +69,7 @@ flowchart TD
     end
 
     ENFORCE -- "✗  limit reached → killed" --> DEAD(["process exits"])
-    DEAD --> LOG["ExecutionStopped\nreason · steps · tokens_spent\n→ stdout"]
+    DEAD --> LOG["ExecutionStopped\nreason · tokens_spent\n→ stdout"]
 ```
 
 ---
@@ -77,38 +78,32 @@ flowchart TD
 
 | Layer                           | What it does                                                                                                                             |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| **Nanny CLI**                   | Token budget, step ceiling, and timeout for any agent process in any language.                                                           |
+| **Nanny CLI**                   | Tool permission and rule enforcement for any agent process in any language.                                                              |
 | **Rust SDK**                    | Per-function token metering, allowlist enforcement, and custom rules — in-process.                                                       |
-| **Python SDK**                  | Per-function and per-role governance for Python agents — each agent in your fleet gets its own budget, tool allowlist, and custom rules. |
+| **Python SDK**                  | Per-function governance for Python agents: tools, rules, and named phases.                                                               |
 | **Governance server**           | Cross-process and cross-machine enforcement via a long-lived server with mutual TLS.                                                     |
-| **Nanny Cloud** _(Coming soon)_ | Durable audit logs, team dashboards, org-level budget aggregation, and managed fleet enforcement.                                        |
+| **Nanny Cloud**                 | Durable signed audit trails, cost attribution across your fleet, and team access control.                                                |
 
 → Full docs at [docs.nanny.run](https://docs.nanny.run)
 
 ---
 
-## Sample applications
+## Rule packs
 
-Four complete agent samples ship in `examples/`. Three use [Groq](https://console.groq.com) (`llama-3.3-70b-versatile`, free tier — no credit card required); `metrics_crew` uses OpenAI (`gpt-4.1-nano`). Copy `.env.example` → `.env` in each example directory and add the relevant API key.
+Curated rules, installed with one command and pinned to a version:
 
-| Sample                                                         | What it does                                                                                                                                                                                                                                                                                                 | Stop reasons demonstrated                     |
-| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------- |
-| [`examples/rust/webdingo`](examples/rust/webdingo)             | Web research agent (Rust) — fetches pages, synthesises a report. Classic spiral risk.                                                                                                                                                                                                                        | `BudgetExhausted`, `RuleDenied`               |
-| [`examples/rust/qabud`](examples/rust/qabud)                   | Code review agent (Rust) — reads source files, identifies issues, blocks sensitive files before they're opened.                                                                                                                                                                                              | `RuleDenied`, `ToolDenied`, `MaxStepsReached` |
-| [`examples/python/dev_assist`](examples/python/dev_assist)     | Debug agent (LangGraph) — given a stack trace, reads relevant files and searches for related symbols. Python drives every tool call; LLM only synthesises the diagnosis.                                                                                                                                     | `BudgetExhausted`, `RuleDenied`, `ToolDenied` |
-| [`examples/python/metrics_crew`](examples/python/metrics_crew) | Multi-agent governance (CrewAI) — four specialized agents with per-role budgets, per-role tool allowlists, and a loop-detection rule. The analysis agent cannot call the reporter's tools. If it tries, `ToolDenied` fires. This is what least-privilege fleet governance looks like in 200 lines of Python. | `BudgetExhausted`, `RuleDenied`, `ToolDenied` |
-
-```bash
-# Rust examples
-cd examples/rust/webdingo && nanny run -- "best Rust HTTP clients"
-cd examples/rust/qabud && nanny run -- ./src
-
-# Python examples
-cd examples/python/dev_assist && nanny run
-cd examples/python/metrics_crew && nanny run
+```sh
+nanny rules add nanny:recommended@1.0.0 --from ./packs/nanny-recommended
 ```
 
-> **Scope:** Nanny governs agents within a single process today. When all agents run in the same process — as in CrewAI, LangGraph, AutoGen, or any framework that orchestrates agents within one Python or Rust runtime — every agent is governed. For cross-process and cross-machine enforcement, use the governance server.
+| Pack | Rules | Covers |
+| --- | --- | --- |
+| `nanny:recommended` | 30 | Injection and taint, sequence, loops, argument safety, destructive actions, payments, operating conditions |
+| `nanny:owasp` | 15 | Controls mapped to the OWASP Agentic Top Ten |
+
+Your source is never edited. `@rule` stays for your own private rules.
+
+> **Scope:** Nanny governs agents within a single process today. When all agents run in the same process, as in CrewAI, LangGraph, AutoGen, or any framework that orchestrates within one Python or Rust runtime, every agent is governed. For cross-process and cross-machine enforcement, use the governance server.
 
 ---
 
@@ -170,8 +165,8 @@ nanny init
 # 2. Run your agent
 nanny run
 
-# 3. Use a named limit set for specific workloads
-nanny run --limits=researcher
+# 3. Or run a governance server for several processes
+nanny run --serve
 ```
 
 **nanny.toml:**
@@ -180,21 +175,19 @@ nanny run --limits=researcher
 [start]
 cmd = "python agent.py"   # nanny run always reads this
 
-[limits]
-steps   = 100     # max tool calls
-tokens  = 1000    # max tokens
-timeout = 30000   # wall-clock ms
-
-[limits.researcher]
-steps   = 200
-tokens  = 5000
-timeout = 120000
-
 [tools]
-allowed = ["http_get", "read_file"]   # anything not listed is denied
-```
+allowed = ["web_search", "send_outreach"]   # anything not listed is denied
 
-![Nanny demo — BudgetExhausted stops a web research agent mid-run](https://raw.githubusercontent.com/nanny-run/nanny/main/assets/demo/webdingo-budget-exhausted.gif)
+[tools.web_search]
+max_calls       = 30
+reads_untrusted = true    # ingests content you do not control
+
+[tools.send_outreach]
+external_effect = true    # acts on the outside world
+
+[rules]
+extends = ["nanny:recommended@1.0.0"]
+```
 
 ---
 
@@ -230,8 +223,6 @@ async fn run_research(topic: &str) {
 ```
 
 All macros are no-ops when running outside `nanny run` — no enforcement overhead.
-
-![Nanny demo — named agent scopes (planner → researcher → synthesizer) entering and exiting](https://raw.githubusercontent.com/nanny-run/nanny/main/assets/demo/webdingo-agent-scopes.gif)
 
 → Full Rust SDK guide at [docs.nanny.run/guides/rust-sdk](https://docs.nanny.run/guides/rust-sdk)
 
@@ -310,10 +301,11 @@ report_usage(Usage { input: resp.usage.prompt_tokens, output: resp.usage.complet
 Every run emits NDJSON to stdout. One event per line. Always starts with `ExecutionStarted`, always ends with `ExecutionStopped`.
 
 ```json
-{"event":"ExecutionStarted","ts":1711234567000,"limits":{"steps":100,"tokens":1000,"timeout":30000},"limits_set":"[limits]","command":"python agent.py"}
-{"event":"ToolAllowed","ts":1711234567120,"tool":"http_get"}
-{"event":"StepCompleted","ts":1711234567800,"step":1}
-{"event":"ExecutionStopped","ts":1711234572000,"reason":"BudgetExhausted","steps":12,"tokens_spent":1000,"elapsed_ms":5000}
+{"event":"ExecutionStarted","ts":1711234567000,"run_id":"a1b2c3d4","seq":0,"command":"python agent.py","allowed_tools":["web_search","send_outreach"],"tool_labels":{"web_search":["reads_untrusted"],"send_outreach":["external_effect"]},"config_hash":"9f2a41c8"}
+{"event":"RulesDeclared","ts":1711234567100,"run_id":"a1b2c3d4","seq":1,"rules":[{"name":"no_send_after_read","version":"1.0.0","pack":"nanny:recommended"}]}
+{"event":"ToolAllowed","ts":1711234567120,"run_id":"a1b2c3d4","seq":2,"tool":"web_search","cleared_by":["no_send_after_read"]}
+{"event":"RuleDenied","ts":1711234572000,"run_id":"a1b2c3d4","seq":3,"tool":"send_outreach","rule_name":"no_send_after_read","cleared_by":[]}
+{"event":"ExecutionStopped","ts":1711234572000,"run_id":"a1b2c3d4","seq":4,"reason":"RuleDenied","tokens_spent":380,"elapsed_ms":5000}
 ```
 
 Pipe it to a file, stream it to your log aggregator, or query it inline:

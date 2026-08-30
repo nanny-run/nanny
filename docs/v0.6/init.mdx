@@ -1,0 +1,59 @@
+---
+title: nanny init
+description: Scaffold a nanny.toml configuration file in the current directory.
+---
+
+Writes a `nanny.toml` with safe defaults into the current working directory.
+
+```bash
+nanny init
+```
+
+---
+
+## What it does
+
+Creates a `nanny.toml` with conservative defaults that work for most agents out of the box.
+Set `[start].cmd` to your agent's entry point and adjust the limit values to match your requirements.
+
+The generated file includes inline comments for every field and links to the full `nanny.toml` reference.
+
+It also writes `.nanny/app.json`, this app's permanent identity (an `app_id` plus a
+human-facing `name`, which you'll be prompted for and which labels the app in the Nanny Cloud dashboard). This is written **once, ever**:
+if it already exists, `nanny init` leaves it untouched, even if you choose to
+replace `nanny.toml`. There's no way to regenerate an existing identity; a
+genuinely different app means running `nanny init` in a genuinely different
+directory. `app_id` is what `--serve`, `--join=<appId>`, `--app=<id>`, and Cloud
+sync all use to address this app. It isn't a secret, and `.nanny/app.json` is meant
+to be committed to git so the identity travels with the code to every environment
+that runs it (laptop, VPS, CI) unmodified.
+
+---
+
+## Flags
+
+`nanny init` takes no flags. It always writes to the current working directory.
+
+---
+
+## Errors
+
+| Condition | Behaviour |
+| --------- | --------- |
+| `nanny.toml` already exists | Prompts for confirmation. Overwrites on `y` or `yes`. Exits without changes on any other input. |
+| Multiple `nanny*.toml` files exist | Exits with an error listing the conflicting files. A project must have exactly one `nanny.toml`. |
+| No write permission in current directory | Exits with an error. |
+
+To reset a config to defaults, run `nanny init` and confirm when prompted. This never affects `.nanny/app.json`: the app identity is independent of `nanny.toml` and is never reset.
+
+---
+
+## Next step
+
+Once your config is in place, run your agent:
+
+```bash
+nanny run
+```
+
+See [nanny run](/v0.6/run) for the full command reference.

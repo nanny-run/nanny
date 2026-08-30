@@ -49,6 +49,18 @@ pub enum CertsCommand {
         /// Certificate validity in days.
         #[arg(long, default_value_t = 365)]
         days: u32,
+
+        /// Additional hostname or IP the server certificate is valid for.
+        /// Repeatable.
+        ///
+        /// Required whenever anything joins over a name other than localhost:
+        /// a client verifies the hostname it dialled against this list, so a
+        /// governor reached at `gotm-server:62669` needs `--san gotm-server`
+        /// or the handshake fails before any request is made.
+        ///
+        ///     nanny certs generate --san gotm-server --san 10.0.1.4
+        #[arg(long = "san", value_name = "HOST")]
+        sans: Vec<String>,
     },
 
     /// Import externally-issued certificates (BYOC — bring your own certs).
@@ -76,7 +88,16 @@ pub enum CertsCommand {
     /// without restarting.
     ///
     /// To replace the CA as well, use `nanny certs generate --force`.
-    Rotate,
+    Rotate {
+        /// Additional hostname or IP the new server certificate is valid for.
+        /// Repeatable.
+        ///
+        /// Omitted, the names from the previous certificate are kept, so a
+        /// routine rotation never silently narrows what the governor can be
+        /// reached by. Passing any value replaces that list.
+        #[arg(long = "san", value_name = "HOST")]
+        sans: Vec<String>,
+    },
 
     /// Delete all certificates from the certs directory.
     Remove,
@@ -89,9 +110,14 @@ pub enum CertsCommand {
 
 pub fn cmd_certs(action: CertsCommand) -> Result<()> {
     match action {
-        CertsCommand::Generate { out_dir, force, days } => cmd_certs_generate(out_dir, force, days),
+        CertsCommand::Generate {
+            out_dir,
+            force,
+            days,
+            sans,
+        } => cmd_certs_generate(out_dir, force, days, &sans),
         CertsCommand::Import { pairs } => cmd_certs_import(pairs),
-        CertsCommand::Rotate => cmd_certs_rotate(None),
+        CertsCommand::Rotate { sans } => cmd_certs_rotate(None, &sans),
         CertsCommand::Remove => cmd_certs_remove(),
         CertsCommand::Show => cmd_certs_show(),
     }
@@ -109,6 +135,27 @@ pub fn default_certs_dir() -> PathBuf {
 
 // ── Meta ──────────────────────────────────────────────────────────────────────
 
+/// Names always present on a server certificate, whatever else is asked for.
+///
+/// Kept unconditionally so adding a deployment hostname never breaks the local
+/// path: `nanny run --serve` on loopback, `nanny status`, and every test dial
+/// 127.0.0.1, and a certificate that stopped covering it would turn a working
+/// machine into a handshake error.
+const ALWAYS_SANS: [&str; 2] = ["localhost", "127.0.0.1"];
+
+/// The server certificate's names: the two that are always there, plus what
+/// the operator asked for, de-duplicated and order-stable.
+fn server_sans(extra: &[String]) -> Vec<String> {
+    let mut sans: Vec<String> = ALWAYS_SANS.iter().map(|s| s.to_string()).collect();
+    for name in extra {
+        let name = name.trim();
+        if !name.is_empty() && !sans.iter().any(|s| s == name) {
+            sans.push(name.to_string());
+        }
+    }
+    sans
+}
+
 /// Metadata stored alongside the certs for quick display without re-parsing PEM.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CertsMeta {
@@ -120,7 +167,9 @@ pub struct CertsMeta {
 
 fn write_meta(dir: &Path, expires: OffsetDateTime, san: &[String]) -> Result<()> {
     let meta = CertsMeta {
-        expires: expires.format(&Rfc3339).context("failed to format expiry date")?,
+        expires: expires
+            .format(&Rfc3339)
+            .context("failed to format expiry date")?,
         san: san.to_vec(),
     };
     std::fs::write(
@@ -138,7 +187,12 @@ pub fn read_meta(dir: &Path) -> Result<CertsMeta> {
 
 // ── nanny certs generate ──────────────────────────────────────────────────────
 
-fn cmd_certs_generate(out_dir: Option<PathBuf>, force: bool, days: u32) -> Result<()> {
+fn cmd_certs_generate(
+    out_dir: Option<PathBuf>,
+    force: bool,
+    days: u32,
+    sans: &[String],
+) -> Result<()> {
     let dir = out_dir.unwrap_or_else(default_certs_dir);
 
     // Warn if the certs dir happens to be inside a git-tracked tree — certs
@@ -147,7 +201,14 @@ fn cmd_certs_generate(out_dir: Option<PathBuf>, force: bool, days: u32) -> Resul
     check_git_warning(&dir);
 
     // Guard: refuse to overwrite without --force.
-    let existing = ["ca.crt", "ca.key", "server.crt", "server.key", "client.crt", "client.key"];
+    let existing = [
+        "ca.crt",
+        "ca.key",
+        "server.crt",
+        "server.key",
+        "client.crt",
+        "client.key",
+    ];
     if !force {
         for name in &existing {
             if dir.join(name).exists() {
@@ -172,18 +233,20 @@ fn cmd_certs_generate(out_dir: Option<PathBuf>, force: bool, days: u32) -> Resul
     // ── CA ────────────────────────────────────────────────────────────────────
     let mut ca_dn = DistinguishedName::new();
     ca_dn.push(DnType::CommonName, "Nanny CA");
-    let mut ca_params = CertificateParams::new(vec![])
-        .context("failed to create CA cert params")?;
+    let mut ca_params =
+        CertificateParams::new(vec![]).context("failed to create CA cert params")?;
     ca_params.distinguished_name = ca_dn;
     ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
     ca_params.not_before = not_before;
     ca_params.not_after = not_after;
 
     let ca_key = KeyPair::generate().context("failed to generate CA key pair")?;
-    let ca_cert = ca_params.self_signed(&ca_key).context("failed to self-sign CA cert")?;
+    let ca_cert = ca_params
+        .self_signed(&ca_key)
+        .context("failed to self-sign CA cert")?;
 
     // ── Server cert ───────────────────────────────────────────────────────────
-    let server_sans = vec!["localhost".to_string(), "127.0.0.1".to_string()];
+    let server_sans = server_sans(sans);
     let mut server_dn = DistinguishedName::new();
     server_dn.push(DnType::CommonName, "Nanny Server");
     let mut server_params = CertificateParams::new(server_sans.clone())
@@ -215,8 +278,8 @@ fn cmd_certs_generate(out_dir: Option<PathBuf>, force: bool, days: u32) -> Resul
     // Write to temp names first, then rename — leaves the dir in a consistent
     // state if we're interrupted mid-write.
     let files: &[(&str, String)] = &[
-        ("ca.crt",     ca_cert.pem()),
-        ("ca.key",     ca_key.serialize_pem()),
+        ("ca.crt", ca_cert.pem()),
+        ("ca.key", ca_key.serialize_pem()),
         ("server.crt", server_cert.pem()),
         ("server.key", server_key.serialize_pem()),
         ("client.crt", client_cert.pem()),
@@ -225,8 +288,7 @@ fn cmd_certs_generate(out_dir: Option<PathBuf>, force: bool, days: u32) -> Resul
 
     for (name, pem) in files {
         let tmp = dir.join(format!("{name}.tmp"));
-        std::fs::write(&tmp, pem)
-            .with_context(|| format!("failed to write {name}"))?;
+        std::fs::write(&tmp, pem).with_context(|| format!("failed to write {name}"))?;
         std::fs::rename(&tmp, dir.join(name))
             .with_context(|| format!("failed to finalise {name}"))?;
     }
@@ -244,7 +306,10 @@ fn cmd_certs_generate(out_dir: Option<PathBuf>, force: bool, days: u32) -> Resul
 
     write_meta(&dir, not_after, &server_sans)?;
 
-    println!("nanny certs: generated certificate bundle in '{}'", dir.display());
+    println!(
+        "nanny certs: generated certificate bundle in '{}'",
+        dir.display()
+    );
     println!();
     println!("  ca.crt      — CA certificate");
     println!("  ca.key      — CA private key    (keep secure, used for rotate)");
@@ -253,7 +318,10 @@ fn cmd_certs_generate(out_dir: Option<PathBuf>, force: bool, days: u32) -> Resul
     println!("  client.crt  — client certificate (distribute to agents)");
     println!("  client.key  — client private key  (distribute to agents)");
     println!();
-    println!("  valid until: {}", not_after.format(&Rfc3339).unwrap_or_default());
+    println!(
+        "  valid until: {}",
+        not_after.format(&Rfc3339).unwrap_or_default()
+    );
     println!();
     println!("Start the server:");
     println!("  nanny run --serve");
@@ -272,13 +340,13 @@ fn cmd_certs_import(pairs: Vec<String>) -> Result<()> {
     // Parse key=value pairs. Values are PEM strings or @file references.
     let mut map: HashMap<String, String> = HashMap::new();
     for pair in &pairs {
-        let (k, v) = pair
-            .split_once('=')
-            .ok_or_else(|| anyhow::anyhow!(
+        let (k, v) = pair.split_once('=').ok_or_else(|| {
+            anyhow::anyhow!(
                 "invalid argument '{}' — expected key=value or key=@file\n\
                  Valid keys: ca, cert, key",
                 pair
-            ))?;
+            )
+        })?;
         let value = if let Some(path) = v.strip_prefix('@') {
             std::fs::read_to_string(path)
                 .with_context(|| format!("failed to read file '{path}'"))?
@@ -289,10 +357,7 @@ fn cmd_certs_import(pairs: Vec<String>) -> Result<()> {
             "ca" | "cert" | "key" => {
                 map.insert(k.to_string(), value);
             }
-            other => anyhow::bail!(
-                "unknown key '{}' — valid keys are: ca, cert, key",
-                other
-            ),
+            other => anyhow::bail!("unknown key '{}' — valid keys are: ca, cert, key", other),
         }
     }
 
@@ -330,7 +395,8 @@ fn cmd_certs_import(pairs: Vec<String>) -> Result<()> {
             std::fs::set_permissions(
                 dir.join("server.key"),
                 std::fs::Permissions::from_mode(0o600),
-            ).context("failed to set permissions on server.key")?;
+            )
+            .context("failed to set permissions on server.key")?;
         }
         println!("nanny certs: wrote server.key");
     }
@@ -341,7 +407,7 @@ fn cmd_certs_import(pairs: Vec<String>) -> Result<()> {
     let key_path = dir.join("server.key");
 
     let missing: Vec<&str> = [
-        ("ca.crt",     ca_path.exists()),
+        ("ca.crt", ca_path.exists()),
         ("server.crt", cert_path.exists()),
         ("server.key", key_path.exists()),
     ]
@@ -351,7 +417,10 @@ fn cmd_certs_import(pairs: Vec<String>) -> Result<()> {
 
     if !missing.is_empty() {
         println!();
-        println!("nanny certs: warning — the following files are still missing: {:?}", missing);
+        println!(
+            "nanny certs: warning — the following files are still missing: {:?}",
+            missing
+        );
         println!("Run `nanny certs import` again to provide the remaining files.");
         return Ok(());
     }
@@ -364,13 +433,16 @@ fn cmd_certs_import(pairs: Vec<String>) -> Result<()> {
         .context("chain validation failed — server.crt is not signed by ca.crt")?;
 
     // Read expiry from server cert and update meta.json.
-    let expiry = cert_expiry_from_pem(&cert_pem)
-        .context("failed to read expiry from server.crt")?;
+    let expiry =
+        cert_expiry_from_pem(&cert_pem).context("failed to read expiry from server.crt")?;
     write_meta(&dir, expiry, &["imported".to_string()])?;
 
     println!();
     println!("nanny certs: chain valid — server.crt is signed by ca.crt");
-    println!("nanny certs: expires {}", expiry.format(&Rfc3339).unwrap_or_default());
+    println!(
+        "nanny certs: expires {}",
+        expiry.format(&Rfc3339).unwrap_or_default()
+    );
 
     if nanny_server_is_running() {
         println!();
@@ -382,7 +454,7 @@ fn cmd_certs_import(pairs: Vec<String>) -> Result<()> {
 
 // ── nanny certs rotate ────────────────────────────────────────────────────────
 
-fn cmd_certs_rotate(out_dir: Option<PathBuf>) -> Result<()> {
+fn cmd_certs_rotate(out_dir: Option<PathBuf>, sans: &[String]) -> Result<()> {
     let dir = out_dir.unwrap_or_else(default_certs_dir);
 
     let ca_crt_path = dir.join("ca.crt");
@@ -429,10 +501,9 @@ fn cmd_certs_rotate(out_dir: Option<PathBuf>) -> Result<()> {
     }
 
     // Load the existing CA key — used to sign the new server + client certs.
-    let ca_key_pem = std::fs::read_to_string(&ca_key_path)
-        .context("failed to read ca.key")?;
-    let ca_key = KeyPair::from_pem(&ca_key_pem)
-        .context("failed to load CA key pair from ca.key")?;
+    let ca_key_pem = std::fs::read_to_string(&ca_key_path).context("failed to read ca.key")?;
+    let ca_key =
+        KeyPair::from_pem(&ca_key_pem).context("failed to load CA key pair from ca.key")?;
 
     // Reconstruct a CA cert signing object using the same fixed parameters as
     // `nanny certs generate` (DN: "Nanny CA", IsCa::Ca).
@@ -446,27 +517,36 @@ fn cmd_certs_rotate(out_dir: Option<PathBuf>) -> Result<()> {
     // and keeps the dependency footprint minimal.
     let mut ca_dn = DistinguishedName::new();
     ca_dn.push(DnType::CommonName, "Nanny CA");
-    let mut ca_params = CertificateParams::new(vec![])
-        .context("failed to reconstruct CA cert params")?;
+    let mut ca_params =
+        CertificateParams::new(vec![]).context("failed to reconstruct CA cert params")?;
     ca_params.distinguished_name = ca_dn;
     ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-    let ca_cert = ca_params.self_signed(&ca_key)
+    let ca_cert = ca_params
+        .self_signed(&ca_key)
         .context("failed to reconstruct CA cert for signing")?;
 
     let not_before = OffsetDateTime::now_utc();
-    let not_after  = not_before + time::Duration::days(365);
+    let not_after = not_before + time::Duration::days(365);
 
     // ── New server cert (signed by existing CA) ───────────────────────────────
-    let server_sans = vec!["localhost".to_string(), "127.0.0.1".to_string()];
+    // Keep the names the previous certificate carried unless new ones are
+    // given. A rotation that quietly dropped a deployment hostname would take
+    // a working fleet down at the handshake, hours after the command ran.
+    let carried: Vec<String> = if sans.is_empty() {
+        read_meta(&dir).map(|m| m.san).unwrap_or_default()
+    } else {
+        sans.to_vec()
+    };
+    let server_sans = server_sans(&carried);
     let mut server_dn = DistinguishedName::new();
     server_dn.push(DnType::CommonName, "Nanny Server");
     let mut server_params = CertificateParams::new(server_sans.clone())
         .context("failed to create server cert params")?;
     server_params.distinguished_name = server_dn;
     server_params.not_before = not_before;
-    server_params.not_after  = not_after;
+    server_params.not_after = not_after;
 
-    let server_key  = KeyPair::generate().context("failed to generate server key")?;
+    let server_key = KeyPair::generate().context("failed to generate server key")?;
     let server_cert = server_params
         .signed_by(&server_key, &ca_cert, &ca_key)
         .context("failed to sign server cert with existing CA")?;
@@ -478,9 +558,9 @@ fn cmd_certs_rotate(out_dir: Option<PathBuf>) -> Result<()> {
         .context("failed to create client cert params")?;
     client_params.distinguished_name = client_dn;
     client_params.not_before = not_before;
-    client_params.not_after  = not_after;
+    client_params.not_after = not_after;
 
-    let client_key  = KeyPair::generate().context("failed to generate client key")?;
+    let client_key = KeyPair::generate().context("failed to generate client key")?;
     let client_cert = client_params
         .signed_by(&client_key, &ca_cert, &ca_key)
         .context("failed to sign client cert with existing CA")?;
@@ -495,8 +575,7 @@ fn cmd_certs_rotate(out_dir: Option<PathBuf>) -> Result<()> {
 
     for (name, pem) in files {
         let tmp = dir.join(format!("{name}.tmp"));
-        std::fs::write(&tmp, pem)
-            .with_context(|| format!("failed to write {name}"))?;
+        std::fs::write(&tmp, pem).with_context(|| format!("failed to write {name}"))?;
         std::fs::rename(&tmp, dir.join(name))
             .with_context(|| format!("failed to finalise {name}"))?;
     }
@@ -505,17 +584,18 @@ fn cmd_certs_rotate(out_dir: Option<PathBuf>) -> Result<()> {
     {
         use std::os::unix::fs::PermissionsExt;
         for name in &["server.key", "client.key"] {
-            std::fs::set_permissions(
-                dir.join(name),
-                std::fs::Permissions::from_mode(0o600),
-            ).with_context(|| format!("failed to set permissions on {name}"))?;
+            std::fs::set_permissions(dir.join(name), std::fs::Permissions::from_mode(0o600))
+                .with_context(|| format!("failed to set permissions on {name}"))?;
         }
     }
 
     write_meta(&dir, not_after, &server_sans)?;
 
     println!("nanny certs: rotated — server + client certs regenerated, CA preserved");
-    println!("  valid until: {}", not_after.format(&Rfc3339).unwrap_or_default());
+    println!(
+        "  valid until: {}",
+        not_after.format(&Rfc3339).unwrap_or_default()
+    );
     println!();
     println!("  CA unchanged — existing agents retain their trust anchor");
     println!("  Redistribute client.crt + client.key to agents on other machines");
@@ -534,7 +614,10 @@ fn cmd_certs_remove() -> Result<()> {
     let dir = default_certs_dir();
 
     if !dir.exists() {
-        println!("nanny certs: nothing to remove — '{}' does not exist", dir.display());
+        println!(
+            "nanny certs: nothing to remove — '{}' does not exist",
+            dir.display()
+        );
         return Ok(());
     }
 
@@ -554,14 +637,18 @@ fn cmd_certs_remove() -> Result<()> {
     }
 
     let files = [
-        "ca.crt", "ca.key", "server.crt", "server.key",
-        "client.crt", "client.key", "meta.json",
+        "ca.crt",
+        "ca.key",
+        "server.crt",
+        "server.key",
+        "client.crt",
+        "client.key",
+        "meta.json",
     ];
     for name in &files {
         let path = dir.join(name);
         if path.exists() {
-            std::fs::remove_file(&path)
-                .with_context(|| format!("failed to remove {name}"))?;
+            std::fs::remove_file(&path).with_context(|| format!("failed to remove {name}"))?;
         }
     }
 
@@ -602,18 +689,32 @@ fn cmd_certs_show() -> Result<()> {
                 cert_expiry_from_pem(&pem).context("failed to parse expiry from server.crt")?;
             println!("nanny certs: '{}'", dir.display());
             println!();
-            println!("  expires : {}", expiry.format(&Rfc3339).unwrap_or_default());
-            println!("  san     : (unavailable — re-run `nanny certs generate` to rebuild meta.json)");
+            println!(
+                "  expires : {}",
+                expiry.format(&Rfc3339).unwrap_or_default()
+            );
+            println!(
+                "  san     : (unavailable — re-run `nanny certs generate` to rebuild meta.json)"
+            );
         }
     }
 
     // Show which files are present.
     println!();
     let files = [
-        "ca.crt", "ca.key", "server.crt", "server.key", "client.crt", "client.key",
+        "ca.crt",
+        "ca.key",
+        "server.crt",
+        "server.key",
+        "client.crt",
+        "client.key",
     ];
     for name in &files {
-        let present = if dir.join(name).exists() { "✓" } else { "✗ missing" };
+        let present = if dir.join(name).exists() {
+            "✓"
+        } else {
+            "✗ missing"
+        };
         println!("  {present:<10} {name}");
     }
 
@@ -639,7 +740,8 @@ pub fn watch_certs_dir(
     let (tx, rx) = std::sync::mpsc::channel();
     let mut watcher = RecommendedWatcher::new(tx, notify::Config::default())
         .context("failed to initialise certs directory watcher")?;
-    watcher.watch(dir, RecursiveMode::NonRecursive)
+    watcher
+        .watch(dir, RecursiveMode::NonRecursive)
         .with_context(|| format!("failed to watch '{}'", dir.display()))?;
 
     // Leak the watcher so it keeps running for the lifetime of the process.
@@ -656,7 +758,12 @@ pub fn watch_certs_dir(
 /// directory by default — this only fires for unusual --out-dir overrides.
 fn check_git_warning(dir: &Path) {
     let inside_git = std::process::Command::new("git")
-        .args(["-C", &dir.to_string_lossy(), "rev-parse", "--is-inside-work-tree"])
+        .args([
+            "-C",
+            &dir.to_string_lossy(),
+            "rev-parse",
+            "--is-inside-work-tree",
+        ])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
@@ -771,8 +878,8 @@ mod tests {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let id = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir()
-            .join(format!("nanny-certs-test-{}-{}", std::process::id(), id));
+        let dir =
+            std::env::temp_dir().join(format!("nanny-certs-test-{}-{}", std::process::id(), id));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -780,9 +887,17 @@ mod tests {
     #[test]
     fn generate_creates_all_files() {
         let dir = tmp_dir();
-        cmd_certs_generate(Some(dir.clone()), false, 365).expect("generate must succeed");
+        cmd_certs_generate(Some(dir.clone()), false, 365, &[]).expect("generate must succeed");
 
-        for name in &["ca.crt", "ca.key", "server.crt", "server.key", "client.crt", "client.key", "meta.json"] {
+        for name in &[
+            "ca.crt",
+            "ca.key",
+            "server.crt",
+            "server.key",
+            "client.crt",
+            "client.key",
+            "meta.json",
+        ] {
             assert!(dir.join(name).exists(), "{name} must exist after generate");
         }
 
@@ -792,9 +907,9 @@ mod tests {
     #[test]
     fn generate_refuses_overwrite_without_force() {
         let dir = tmp_dir();
-        cmd_certs_generate(Some(dir.clone()), false, 365).unwrap();
+        cmd_certs_generate(Some(dir.clone()), false, 365, &[]).unwrap();
 
-        let result = cmd_certs_generate(Some(dir.clone()), false, 365);
+        let result = cmd_certs_generate(Some(dir.clone()), false, 365, &[]);
         assert!(result.is_err(), "second generate without --force must fail");
         assert!(
             result.unwrap_err().to_string().contains("already exist"),
@@ -807,15 +922,15 @@ mod tests {
     #[test]
     fn generate_force_overwrites() {
         let dir = tmp_dir();
-        cmd_certs_generate(Some(dir.clone()), false, 365).unwrap();
-        cmd_certs_generate(Some(dir.clone()), true, 365).expect("--force must overwrite");
+        cmd_certs_generate(Some(dir.clone()), false, 365, &[]).unwrap();
+        cmd_certs_generate(Some(dir.clone()), true, 365, &[]).expect("--force must overwrite");
         fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn generated_certs_have_valid_chain() {
         let dir = tmp_dir();
-        cmd_certs_generate(Some(dir.clone()), false, 365).unwrap();
+        cmd_certs_generate(Some(dir.clone()), false, 365, &[]).unwrap();
 
         let ca = fs::read(dir.join("ca.crt")).unwrap();
         let server_cert = fs::read(dir.join("server.crt")).unwrap();
@@ -830,7 +945,7 @@ mod tests {
     #[test]
     fn meta_json_contains_expiry() {
         let dir = tmp_dir();
-        cmd_certs_generate(Some(dir.clone()), false, 90).unwrap();
+        cmd_certs_generate(Some(dir.clone()), false, 90, &[]).unwrap();
 
         let meta = read_meta(&dir).expect("meta.json must be readable");
         assert!(!meta.expires.is_empty(), "expires must be set");
@@ -844,18 +959,95 @@ mod tests {
     }
 
     #[test]
+    fn extra_sans_are_added_without_dropping_the_local_ones() {
+        // Adding a deployment hostname must never cost the local path:
+        // `nanny run --serve` on loopback, `nanny status` and every test dial
+        // 127.0.0.1, and a cert that stopped covering it would turn a working
+        // machine into a handshake failure.
+        let sans = server_sans(&["gotm-server".to_string(), "10.0.1.4".to_string()]);
+        assert_eq!(
+            sans,
+            vec!["localhost", "127.0.0.1", "gotm-server", "10.0.1.4"]
+        );
+    }
+
+    #[test]
+    fn san_list_is_deduplicated_and_ignores_blanks() {
+        let sans = server_sans(&[
+            "localhost".to_string(),
+            "  ".to_string(),
+            "gotm-server".to_string(),
+            "gotm-server".to_string(),
+        ]);
+        assert_eq!(sans, vec!["localhost", "127.0.0.1", "gotm-server"]);
+    }
+
+    #[test]
+    fn a_generated_cert_carries_the_requested_hostname() {
+        let dir = tmp_dir();
+        cmd_certs_generate(Some(dir.clone()), false, 365, &["gotm-server".to_string()]).unwrap();
+        let meta = read_meta(&dir).unwrap();
+        assert!(
+            meta.san.contains(&"gotm-server".to_string()),
+            "the hostname a client will dial must be on the cert: {:?}",
+            meta.san
+        );
+        assert!(
+            meta.san.contains(&"127.0.0.1".to_string()),
+            "{:?}",
+            meta.san
+        );
+    }
+
+    #[test]
+    fn rotation_keeps_the_hostnames_unless_told_otherwise() {
+        // The failure this prevents: a routine rotation silently narrows the
+        // cert back to localhost, and every joined process across the fleet
+        // starts failing its handshake hours later, with nothing in the
+        // rotation output to suggest why.
+        let dir = tmp_dir();
+        cmd_certs_generate(Some(dir.clone()), false, 365, &["gotm-server".to_string()]).unwrap();
+
+        cmd_certs_rotate(Some(dir.clone()), &[]).unwrap();
+        let kept = read_meta(&dir).unwrap();
+        assert!(
+            kept.san.contains(&"gotm-server".to_string()),
+            "rotation must carry the names forward: {:?}",
+            kept.san
+        );
+
+        // Passing names explicitly replaces the list rather than appending to
+        // it, so a host that is decommissioned can actually be removed.
+        cmd_certs_rotate(Some(dir.clone()), &["other-host".to_string()]).unwrap();
+        let replaced = read_meta(&dir).unwrap();
+        assert!(
+            replaced.san.contains(&"other-host".to_string()),
+            "{:?}",
+            replaced.san
+        );
+        assert!(
+            !replaced.san.contains(&"gotm-server".to_string()),
+            "{:?}",
+            replaced.san
+        );
+    }
+
+    #[test]
     fn rotate_regenerates_certs() {
         let dir = tmp_dir();
-        cmd_certs_generate(Some(dir.clone()), false, 365).unwrap();
+        cmd_certs_generate(Some(dir.clone()), false, 365, &[]).unwrap();
 
         let original_server = fs::read(dir.join("server.crt")).unwrap();
         // Rotate the test dir specifically (not the default ~/.nanny/certs) so
         // the test is hermetic and actually exercises rotation against these certs.
-        cmd_certs_rotate(Some(dir.clone())).unwrap();
+        cmd_certs_rotate(Some(dir.clone()), &[]).unwrap();
 
         let new_server = fs::read(dir.join("server.crt")).unwrap();
         // Certs are regenerated — the PEM bytes differ (a fresh key each rotate).
-        assert_ne!(original_server, new_server, "rotated server.crt must differ from original");
+        assert_ne!(
+            original_server, new_server,
+            "rotated server.crt must differ from original"
+        );
 
         fs::remove_dir_all(&dir).ok();
     }
@@ -863,7 +1055,7 @@ mod tests {
     #[test]
     fn import_file_reference_works() {
         let dir = tmp_dir();
-        cmd_certs_generate(Some(dir.clone()), false, 365).unwrap();
+        cmd_certs_generate(Some(dir.clone()), false, 365, &[]).unwrap();
 
         // Import using @file syntax — re-import the same certs.
         let ca_path = dir.join("ca.crt");
@@ -886,12 +1078,18 @@ mod tests {
     #[test]
     fn mismatched_chain_is_rejected() {
         let dir_a = tmp_dir();
-        let dir_b = std::env::temp_dir()
-            .join(format!("nanny-certs-test-b-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().subsec_nanos()));
+        let dir_b = std::env::temp_dir().join(format!(
+            "nanny-certs-test-b-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
         fs::create_dir_all(&dir_b).unwrap();
 
-        cmd_certs_generate(Some(dir_a.clone()), false, 365).unwrap();
-        cmd_certs_generate(Some(dir_b.clone()), false, 365).unwrap();
+        cmd_certs_generate(Some(dir_a.clone()), false, 365, &[]).unwrap();
+        cmd_certs_generate(Some(dir_b.clone()), false, 365, &[]).unwrap();
 
         let ca_a = fs::read(dir_a.join("ca.crt")).unwrap();
         let cert_b = fs::read(dir_b.join("server.crt")).unwrap();
@@ -907,17 +1105,23 @@ mod tests {
     #[test]
     fn cert_expiry_is_parseable() {
         let dir = tmp_dir();
-        cmd_certs_generate(Some(dir.clone()), false, 30).unwrap();
+        cmd_certs_generate(Some(dir.clone()), false, 30, &[]).unwrap();
 
         let pem = fs::read(dir.join("server.crt")).unwrap();
         let expiry = cert_expiry_from_pem(&pem).expect("expiry must parse");
 
         // cert valid for 30 days — expiry should be in the future
-        assert!(expiry > OffsetDateTime::now_utc(), "expiry must be in the future");
+        assert!(
+            expiry > OffsetDateTime::now_utc(),
+            "expiry must be in the future"
+        );
 
         // and within ~31 days
         let delta = expiry - OffsetDateTime::now_utc();
-        assert!(delta.whole_days() <= 31, "30-day cert must expire within 31 days");
+        assert!(
+            delta.whole_days() <= 31,
+            "30-day cert must expire within 31 days"
+        );
 
         fs::remove_dir_all(&dir).ok();
     }
@@ -934,7 +1138,10 @@ mod tests {
 
         // Give the OS inotify/kqueue event up to 500ms to arrive.
         let event = rx.recv_timeout(std::time::Duration::from_millis(500));
-        assert!(event.is_ok(), "watcher must fire an event when a file is written");
+        assert!(
+            event.is_ok(),
+            "watcher must fire an event when a file is written"
+        );
 
         fs::remove_dir_all(&dir).ok();
     }

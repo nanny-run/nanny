@@ -99,7 +99,8 @@ Rules fire on every tool call, before the call executes. They receive a read-onl
 - Which tool is being called and with what arguments
 - The full history of tool calls made so far
 - Counts per tool name
-- Elapsed time and tokens spent
+- Labels for every allowed tool, not only the pending one
+- Elapsed time, tokens measured, and wall-clock at evaluation
 
 Rules are stateless by design. All state they need comes from the execution snapshot. They cannot modify execution state — they can only allow or deny.
 
@@ -107,15 +108,27 @@ A denial exits the process immediately. The denied tool never runs.
 
 ### Agent scope
 
-An **agent scope** is a named limits context. When a function is declared as an agent, the scope's limits become active for the duration of that function and revert when it returns.
+An **agent scope** names a phase of a run. When a function is declared as an
+agent, `AgentScopeEntered` and `AgentScopeExited` bracket every event produced
+inside it, so a verdict in the log can be attributed to the phase that caused
+it. Scopes nest.
 
-Scopes inherit from the base `[limits]` and override only the fields they declare. Be precise about what this changes and what it doesn't: entering a scope swaps which ceiling is checked, it does **not** give the scope its own budget. Tokens spent and steps taken are one running total for the entire run, from start to finish — a named scope never resets it, only changes what it's compared against. Nothing prevents a scope from declaring a *higher* ceiling than an outer one; if it does, and the run has already spent more than the outer scope's number by the time you return to it, the very next governed call there stops the run, since the shared total now exceeds that scope's own check. Size named-scope ceilings expecting to inherit whatever earlier scopes already spent, not in isolation — see [Named sets share one counter](https://docs.nanny.run/v0.5/concepts/limits#named-sets-share-one-counter-they-are-not-separate-budgets) for the full mechanics, and `fresh_run()` if you actually want a scope to start from a clean, independent budget.
+A scope carries no policy of its own. It is attribution, not enforcement.
 
-Scopes are designed for multi-agent pipelines where each stage has different resource requirements: a planner that makes no tool calls gets a tight budget; a researcher that fetches many URLs gets a larger one.
+### Runs
 
-### Starting a genuinely fresh run
+A **run** is Nanny's unit of governance: one rule set, one history, one stop
+state, final once stopped. Under local `nanny run` a process is always exactly
+one run. Under a governance server one process can hold many, and `run_scope()`
+in either SDK opens one.
 
-A **run**, not a scope, is Nanny's actual unit of governance: one cumulative counter, one stop state, final once stopped. If your process does several logically independent phases back to back, a research phase handing off to a drafting phase, a long-lived server giving each incoming request its own clean slate, and you want each one to start from zero rather than inherit whatever an earlier phase already spent, call `nanny::fresh_run()` (Rust) / `nanny_sdk.fresh_run()` (Python) at the phase boundary. It mints a new run id and, when governed through a network server (`nanny run --serve` / `--join`), the server tracks that new run's budget completely independently of the one you left. Under local `nanny run`, one process is already always exactly one run, so it's a safe no-op there.
+That matters for correctness, not just accounting. Taint rules read
+`tool_call_history`, so a leaked run id means one request's untrusted read
+poisons another's history. Run identity is scoped to the thread or task rather
+than the process, which is why `run_scope()` is safe under concurrency.
+
+Every event carries its `run_id` and a per-run `seq`. One log file can hold many
+interleaved runs, and those two fields are what make it readable.
 
 ---
 
@@ -150,10 +163,7 @@ Every execution ends with an `ExecutionStopped` event carrying a `reason` field.
 | Reason | What it means |
 |--------|---------------|
 | `AgentCompleted` | Your agent finished normally. The process exited cleanly on its own. |
-| `TimeoutExpired` | The wall-clock timeout was reached. The process was killed. |
-| `MaxStepsReached` | The step limit was hit. The process was killed. |
-| `BudgetExhausted` | The token budget was exhausted. The process was killed. |
-| `ToolDenied` | A tool call was blocked — the tool is not on the allowlist or exceeded its call limit. |
+| `ToolDenied` | A tool call was blocked: the tool is not on the allowlist. Checked before any rule runs. |
 | `RuleDenied` | A custom rule returned a denial. The tool never ran. |
 | `ManualStop` | Execution was stopped programmatically via the SDK. |
 | `ProcessCrashed` | The process exited unexpectedly with a non-zero code. Nanny did not stop it — something in the agent's own code did (panic, unhandled error, OOM, or the process could not be started). |
@@ -199,33 +209,30 @@ A few properties to keep in mind:
 
 ## Multi-agent pipelines
 
-When building a pipeline of agents, each stage should have its own scope with limits appropriate to its role:
+Each stage names itself, and one set of rules covers all of them:
 
 ```toml
-[limits]
-steps   = 50
-tokens  = 1000
-timeout = 60000
+[tools]
+allowed = ["search", "fetch_page", "write_report"]
 
-[limits.planner]
-steps   = 5
-tokens  = 100
-timeout = 15000
+[tools.fetch_page]
+reads_untrusted = true
+max_calls       = 20
 
-[limits.researcher]
-steps   = 20
-tokens  = 600
-timeout = 60000
+[tools.write_report]
+external_effect = true
 
-[limits.synthesizer]
-steps   = 5
-tokens  = 200
-timeout = 30000
+[rules]
+extends = ["nanny:recommended@1.0.0"]
 ```
 
-The base `[limits]` is the ceiling checked whenever no named scope is active. Tokens spent and steps taken are one running total for the whole run — a named scope only changes which ceiling that total is checked against, it is never its own independent budget, and nothing validates that a scope's own number is smaller than any other scope's. If the global token limit is reached mid-pipeline, the run stops regardless of the active scope, because the same shared total is what every scope's check reads from.
+The rules do not name the stages, and they do not need to. `no_send_after_read`
+denies `write_report` after `fetch_page` regardless of which agent scope is
+active, because the hazard is the ordering of authority rather than the identity
+of the caller.
 
-Design your limits with that shared total in mind: size each stage's ceiling expecting to inherit whatever earlier stages already spent, and keep the sum of all stage budgets comfortably within the global budget, with headroom for overhead between stages.
+Scopes give you attribution in the log; labels and rules give you enforcement.
+Keep those two jobs separate when designing a pipeline.
 
 ---
 
@@ -235,9 +242,9 @@ Before shipping, verify that each of your governance constraints actually fires.
 
 - **Allowlist** — call a tool that is not in `[tools] allowed`. It should produce `ToolDenied`.
 - **Rules** — construct input that your rule is designed to block. It should produce `RuleDenied`.
-- **Token limit** — set a very low `tokens` limit and make enough tool calls to exceed it. It should produce `BudgetExhausted`.
-- **Step limit** — set a very low `steps` limit and make enough tool calls to exceed it. It should produce `MaxStepsReached`.
-- **Timeout** — set a very short `timeout` and run a slow operation. It should produce `TimeoutExpired`.
+- **Per-tool cap** — call one tool past its `max_calls`. It should produce `RuleDenied` with `rule_name = "<tool>.max_calls"`.
+- **Declared authority** — read `ExecutionStarted` and confirm `allowed_tools`, `tool_labels`, and `config_hash` match the config you shipped.
+- **Rule packs** — remove an installed pack from disk while leaving it in `[rules] extends`. The run should refuse to start.
 
 Use the `ExecutionStopped` event in the NDJSON log to verify the reason. Do not rely on stderr output alone — the event log is the authoritative record.
 

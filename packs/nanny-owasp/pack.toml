@@ -1,0 +1,22 @@
+# The same test as nanny:recommended: a rule belongs here only if it needs no
+# number and no knowledge of a particular application. Rules that map to an
+# OWASP item but need tuning are not shipped, and the coverage this pack claims
+# is stated against what it actually enforces rather than against what the
+# framework lists.
+
+name = "nanny:owasp"
+version = "1.0.0"
+description = "Controls mapped to the OWASP Agentic Top Ten. Threshold-free, like nanny:recommended."
+python = "python"
+rules = [
+  "no_secret_patterns_in_args",
+  "no_pii_to_external_effect_tools",
+  "no_private_network_urls",
+  "no_urls_outside_declared_pattern",
+  "no_path_traversal",
+  "no_shell_metacharacters",
+  "no_sql_patterns_in_args",
+  "no_destructive_without_confirmation",
+  "no_external_effect_after_untrusted_read",
+  "no_untrusted_read_after_secrets",
+]

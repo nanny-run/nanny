@@ -1,7 +1,7 @@
-"""nanny_sdk.instrument — LLM token + attribution measurement via client wrapping.
+"""nanny_sdk.instrument: LLM token and attribution measurement via client wrapping.
 
-Call once at agent startup to automatically submit LLM token usage — plus the
-model, provider, and (auto-detected) harness — to the bridge on every call. The
+Call once at agent startup to automatically submit LLM token usage, plus the
+model, provider, and (auto-detected) harness, to the bridge on every call. The
 bridge debits tokens from the shared ledger and records the attribution the cloud
 uses for Fleet Intelligence (cost, model/provider/harness breakdowns).
 
@@ -11,9 +11,9 @@ Usage::
     import nanny_sdk
 
     client = openai.OpenAI()
-    nanny_sdk.instrument(client)   # one line — done
+    nanny_sdk.instrument(client)   # one line, done
 
-Supported clients (detected by duck-typing — no provider package is imported):
+Supported clients (detected by duck-typing, no provider package is imported):
 
 - **OpenAI** ``openai.OpenAI`` / ``openai.AsyncOpenAI`` (+ Groq / Together / Azure
   / LiteLLM / OpenRouter / DeepSeek via the OpenAI-compatible interface)
@@ -24,16 +24,16 @@ Supported clients (detected by duck-typing — no provider package is imported):
 
 **Attribution captured on every call:**
 
-- **model** — read off the response (``response.model``).
-- **provider** — the client family; for the OpenAI-compatible bucket, refined from
-  the client's ``base_url`` host (groq/together/openrouter/…), else ``openai``.
-- **harness** — auto-detected from the call stack / imported frameworks
-  (langgraph, crewai, opencode, …), cached after first detection and re-sent on
+- **model**: read off the response (``response.model``).
+- **provider**: the client family; for the OpenAI-compatible bucket, refined from
+  the client's ``base_url`` host (groq/together/openrouter/etc.), else ``openai``.
+- **harness**: auto-detected from the call stack / imported frameworks
+  (langgraph, crewai, opencode, etc.), cached after first detection and re-sent on
   every call (the bridge dedups). ``None`` when no known harness is present.
-- **cache_read / cache_write** — a finer split of ``input`` tokens, for
+- **cache_read / cache_write**: a finer split of ``input`` tokens, for
   providers that report prompt-caching usage (OpenAI, Anthropic, DeepSeek,
-  Gemini). Every provider names and shapes this differently — there is no
-  shared field the way there is for input/output tokens — so each is handled
+  Gemini). Every provider names and shapes this differently, there is no
+  shared field the way there is for input/output tokens, so each is handled
   by its own explicit branch in ``_extract_cache_usage``. Absent, not zero,
   for providers/responses that don't report it. Reporting only: never
   debited separately from ``input``, no pricing logic reads these fields in
@@ -44,7 +44,7 @@ Supported clients (detected by duck-typing — no provider package is imported):
 the client unchanged. No wrapping, no overhead.
 
 **Non-intrusive:** it monkey-patches the completion method only. It never
-inspects message content — only numeric token counts and the model/provider
+inspects message content, only numeric token counts and the model/provider
 identifiers from the response. No manifesto violation.
 
 **Streaming:** streamed responses are wrapped so usage is submitted once the
@@ -65,7 +65,7 @@ import nanny_sdk._client as _bridge
 # A usage record extracted from a response: (input_tokens, output_tokens, model,
 # cache_read, cache_write). cache_read/cache_write are a finer split of
 # input_tokens (never additional tokens beyond it), present only for
-# providers that report prompt-caching usage at all — None, not 0, for
+# providers that report prompt-caching usage at all. None, not 0, for
 # providers/responses that don't.
 UsageRecord = tuple[int, int, "str | None", "int | None", "int | None"]
 
@@ -78,7 +78,7 @@ def instrument(client: Any) -> Any:
     """Wrap *client* so token usage + attribution is reported to the bridge.
 
     Returns the same client object (mutated in-place). No-op when the bridge is
-    not active. Providers detected by duck-typing — no provider package imported.
+    not active. Providers detected by duck-typing, no provider package imported.
     """
     if _bridge.is_passthrough():
         return client
@@ -117,7 +117,7 @@ def _openai_provider(client: Any) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Harness auto-detection (SDK-layer convenience — never in the engine)
+# Harness auto-detection (SDK-layer convenience, never in the engine)
 # ---------------------------------------------------------------------------
 
 # Known agentic harnesses / frameworks, by their top-level import name.
@@ -146,7 +146,7 @@ def _detect_harness() -> str | None:
 
     Prefers the call stack (which framework actually drove this call), then falls
     back to imported-module presence. Returns None when no known harness is found.
-    Heuristic — that's why it lives in the SDK, not the engine.
+    Heuristic, that's why it lives in the SDK, not the engine.
     """
     global _harness_detected, _harness_value
     if _harness_detected:
@@ -190,16 +190,16 @@ def _patch_client(client: Any) -> None:
                 return
             _patched_clients.add(client)
         except TypeError:
-            # Not hashable / weak-referenceable — instrument anyway, no dedup.
+            # Not hashable / weak-referenceable, instrument anyway, no dedup.
             pass
 
-    # Detection order matters — see module docstring for rationale.
-    _try_patch_openai(client)            # client.chat.completions.create
+    # Detection order matters, see module docstring for rationale.
+    _try_patch_openai(client)  # client.chat.completions.create
     _try_patch_openai_responses(client)  # client.responses.create
-    _try_patch_anthropic(client)         # client.messages.create
-    _try_patch_mistral(client)     # client.chat.complete (no .completions)
-    _try_patch_gemini(client)      # client.models.generate_content
-    _try_patch_cohere(client)      # callable(client.chat) — fallback, runs last
+    _try_patch_anthropic(client)  # client.messages.create
+    _try_patch_mistral(client)  # client.chat.complete (no .completions)
+    _try_patch_gemini(client)  # client.models.generate_content
+    _try_patch_cohere(client)  # callable(client.chat), fallback, runs last
 
 
 # ---------------------------------------------------------------------------
@@ -208,7 +208,7 @@ def _patch_client(client: Any) -> None:
 
 
 def _try_patch_openai(client: Any) -> None:
-    """Patch ``client.chat.completions.create`` — OpenAI / Groq / Together / LiteLLM."""
+    """Patch ``client.chat.completions.create``: OpenAI / Groq / Together / LiteLLM."""
     try:
         completions = client.chat.completions
     except AttributeError:
@@ -217,7 +217,7 @@ def _try_patch_openai(client: Any) -> None:
 
 
 def _try_patch_openai_responses(client: Any) -> None:
-    """Patch ``client.responses.create`` — OpenAI's Responses API, the
+    """Patch ``client.responses.create``: OpenAI's Responses API, the
     endpoint required for combining tool calls with real reasoning_effort
     on GPT-5.x reasoning models (confirmed live: /v1/chat/completions
     rejects that combination outright). A separate top-level attribute from
@@ -238,7 +238,7 @@ def _try_patch_openai_responses(client: Any) -> None:
 
 
 def _try_patch_anthropic(client: Any) -> None:
-    """Patch ``client.messages.create`` — Anthropic."""
+    """Patch ``client.messages.create``: Anthropic."""
     try:
         messages = client.messages
     except AttributeError:
@@ -247,7 +247,7 @@ def _try_patch_anthropic(client: Any) -> None:
 
 
 def _try_patch_mistral(client: Any) -> None:
-    """Patch ``client.chat.complete`` — Mistral AI (has ``.complete``, no ``.completions``)."""
+    """Patch ``client.chat.complete``: Mistral AI (has ``.complete``, no ``.completions``)."""
     try:
         chat = client.chat
     except AttributeError:
@@ -258,7 +258,7 @@ def _try_patch_mistral(client: Any) -> None:
 
 
 def _try_patch_gemini(client: Any) -> None:
-    """Patch ``client.models.generate_content`` — Google Gemini (google-genai SDK)."""
+    """Patch ``client.models.generate_content``: Google Gemini (google-genai SDK)."""
     try:
         models = client.models
     except AttributeError:
@@ -269,7 +269,7 @@ def _try_patch_gemini(client: Any) -> None:
 
 
 def _try_patch_cohere(client: Any) -> None:
-    """Patch ``client.chat`` — Cohere v2 (``client.chat`` is directly callable)."""
+    """Patch ``client.chat``: Cohere v2 (``client.chat`` is directly callable)."""
     chat = getattr(client, "chat", None)
     if chat is None or not callable(chat):
         return
@@ -435,11 +435,11 @@ def _extract_cache_usage(usage: Any) -> tuple[int | None, int | None]:
     """Return ``(cache_read, cache_write)`` from a response's ``usage`` object,
     ``(None, None)`` if this provider/response doesn't report prompt-caching
     usage at all. Every provider uses its own field name and shape for this
-    (confirmed against each provider's own docs — unlike input/output tokens,
+    (confirmed against each provider's own docs, unlike input/output tokens,
     cache accounting never converged industry-wide), so unlike
     ``_extract_usage`` above there's no single shared field pattern to try;
     each provider gets its own explicit branch. Absent (``None``), not
-    ``(0, 0)``, when nothing matches — a provider that doesn't report cache
+    ``(0, 0)``, when nothing matches: a provider that doesn't report cache
     usage is a genuinely different case from one that reports zero cache
     hits, and downstream cost calculators need to be able to tell them apart.
     """
@@ -462,14 +462,14 @@ def _extract_cache_usage(usage: Any) -> tuple[int | None, int | None]:
 
         # DeepSeek (OpenAI-compatible shape, own top-level hit/miss fields).
         # Only "hit" maps to cache_read: a miss is priced at the normal input
-        # rate, already counted in input_tokens — DeepSeek has no write-cost
+        # rate, already counted in input_tokens. DeepSeek has no write-cost
         # concept the way Anthropic does, so cache_write is never set here.
         hit = getattr(usage, "prompt_cache_hit_tokens", None)
         if hit is not None:
             return (int(hit), None)
 
         # OpenAI Responses API (nested, but under input_tokens_details, not
-        # prompt_tokens_details — a real, different attribute name from
+        # prompt_tokens_details, a real, different attribute name from
         # Chat Completions despite being the same provider). Confirmed live
         # against a real gpt-5.6-terra call: ResponseUsage carries both
         # cached_tokens and cache_write_tokens (unlike Chat Completions,
@@ -485,7 +485,7 @@ def _extract_cache_usage(usage: Any) -> tuple[int | None, int | None]:
                     int(written) if written is not None else None,
                 )
 
-    except Exception:  # noqa: BLE001 — never crash the agent for telemetry
+    except Exception:  # noqa: BLE001 (never crash the agent for telemetry)
         pass
 
     return (None, None)
@@ -496,7 +496,7 @@ def _extract_usage(response: Any) -> UsageRecord:
     from any supported response.
 
     Tries all known usage field patterns; returns ``(0, 0, model, None, None)``
-    if none match or anything raises — this must never crash the agent.
+    if none match or anything raises, this must never crash the agent.
     """
     model = _extract_model(response)
     try:
@@ -512,14 +512,14 @@ def _extract_usage(response: Any) -> UsageRecord:
             # OpenAI Responses API. Shares the input_tokens/output_tokens
             # field names with Anthropic below (real, separate provider,
             # coincidentally same names), so this must be checked first and
-            # disambiguated by input_tokens_details — a marker Anthropic's
-            # own Usage object never has (see _extract_cache_usage) — not
+            # disambiguated by input_tokens_details, a marker Anthropic's
+            # own Usage object never has (see _extract_cache_usage), not
             # by field name alone, or a Responses-API call would silently
             # fall into Anthropic's ADDITIVE total-input formula below and
             # double-count cached tokens, over-debiting the budget for
             # every cache-heavy Responses call. Confirmed live: like Chat
             # Completions, input_tokens here is already INCLUSIVE of both
-            # cached_tokens and cache_write_tokens, so no addition needed —
+            # cached_tokens and cache_write_tokens, so no addition needed,
             # the same "count includes cache" convention OpenAI uses
             # everywhere, unlike Anthropic's exclusive count.
             if hasattr(usage, "input_tokens_details"):
@@ -529,9 +529,9 @@ def _extract_usage(response: Any) -> UsageRecord:
                     cache_read, cache_write = _extract_cache_usage(usage)
                     return (int(it) or 0, int(ot) or 0, model, cache_read, cache_write)
 
-            # Anthropic. Its own input_tokens is EXCLUSIVE of cache usage —
+            # Anthropic. Its own input_tokens is EXCLUSIVE of cache usage,
             # real total input = input_tokens + cache_read + cache_write
-            # (confirmed against Anthropic's prompt-caching docs) — the
+            # (confirmed against Anthropic's prompt-caching docs), the
             # opposite of DeepSeek/OpenAI, where the base count already
             # includes cache hits. Add them in here so Nanny's own `input`
             # field keeps one universal meaning regardless of provider: the
@@ -562,7 +562,7 @@ def _extract_usage(response: Any) -> UsageRecord:
                 cache_read = int(cached) if cached is not None else None
                 return (int(ptc or 0), int(ctc or 0), model, cache_read, None)
 
-    except Exception:  # noqa: BLE001 — never crash the agent for telemetry
+    except Exception:  # noqa: BLE001 (never crash the agent for telemetry)
         pass
 
     return (0, 0, model, None, None)

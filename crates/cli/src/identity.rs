@@ -72,7 +72,10 @@ impl AppIdentity {
                 path.display()
             );
         }
-        let identity = AppIdentity { app_id: generate_id(), name };
+        let identity = AppIdentity {
+            app_id: generate_id(),
+            name,
+        };
         let dot_nanny = dir.join(DIR_NAME);
         std::fs::create_dir_all(&dot_nanny)
             .with_context(|| format!("failed to create {}", dot_nanny.display()))?;
@@ -91,8 +94,8 @@ impl AppIdentity {
                 and committing it is what lets `nanny init` stay a one-time, local \
                 action, deploy this file as-is to every environment this app runs in.",
         });
-        let text = serde_json::to_string_pretty(&body)
-            .context("failed to serialize app identity")?;
+        let text =
+            serde_json::to_string_pretty(&body).context("failed to serialize app identity")?;
         std::fs::write(&path, format!("{text}\n"))
             .with_context(|| format!("failed to write {}", path.display()))?;
         Ok(identity)
@@ -119,7 +122,9 @@ mod tests {
     fn missing_identity_loads_none() {
         let dir = scratch_dir();
         std::fs::create_dir_all(&dir).unwrap();
-        assert!(AppIdentity::load(&dir).expect("missing is not an error").is_none());
+        assert!(AppIdentity::load(&dir)
+            .expect("missing is not an error")
+            .is_none());
     }
 
     #[test]

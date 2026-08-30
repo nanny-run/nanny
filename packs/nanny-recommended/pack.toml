@@ -1,0 +1,35 @@
+# Every rule here decides on *shape*: an ordering, a pattern in an argument, a
+# thing that is wrong for any agent whatever it does. None of them carries a
+# number, because a number is a fact about one application and nobody outside it
+# can pick one honestly.
+#
+# That is what makes this installable blind. A pack called "recommended" that
+# can refuse an application's ordinary work on its first run is worse than no
+# pack, and this one had eight such rules until 2026-08-29 — one of them a step
+# ceiling, the primitive v0.6.0 deleted, wearing a rule's clothing.
+#
+# Rules that need a number are not shipped at all. A cap is a fact about one
+# application, so it belongs in that application's own `@rule`, or in a
+# community pack its author chose knowingly, never in a first-party pack that
+# installs unread.
+
+name = "nanny:recommended"
+version = "1.0.0"
+description = "Controls that hold for every governed agent. No thresholds, no assumptions about which tools exist."
+python = "python"
+rules = [
+  "no_secret_patterns_in_args",
+  "no_pii_to_external_effect_tools",
+  "no_private_network_urls",
+  "no_urls_outside_declared_pattern",
+  "no_path_traversal",
+  "no_shell_metacharacters",
+  "no_sql_patterns_in_args",
+  "no_destructive_without_confirmation",
+  "no_payment_without_prior_approval",
+  "no_external_effect_after_untrusted_read",
+  "no_untrusted_read_after_secrets",
+  "no_identical_repeat_call",
+  "no_tool_after_a_prior_denial",
+  "prerequisite_tool_ordering",
+]

@@ -5,25 +5,18 @@
 // Same config in → same components out. Always. No hidden state.
 
 use nanny_bridge::BridgeComponents;
-use nanny_config::{resolve_named_limits, ConfigError, NannyConfig};
-use nanny_core::agent::limits::Limits;
-use nanny_runtime::{FakeLedger, ToolRegistry};
+use nanny_config::NannyConfig;
+use nanny_runtime::ToolRegistry;
 use std::collections::HashMap;
 
 // ── RuntimeComponents ─────────────────────────────────────────────────────────
 
-/// The fully wired runtime — limits, ledger, and tool registry — ready to run.
+/// The fully wired runtime — the tool registry — ready to run.
 ///
 /// Every field is derived directly from `NannyConfig`.
 /// Nothing is hardcoded. Nothing comes from ambient state.
 /// Policy enforcement is owned by the bridge (`BridgeComponents`).
 pub struct RuntimeComponents {
-    /// Hard limits passed to the Executor.
-    pub limits: Limits,
-
-    /// In-memory budget ledger. Starts at `max_tokens` and counts down.
-    pub ledger: FakeLedger,
-
     /// All registered built-in tools. The policy controls which are permitted.
     pub registry: ToolRegistry,
 }
@@ -32,111 +25,22 @@ pub struct RuntimeComponents {
 
 /// Build all runtime components from a validated `NannyConfig`.
 ///
-/// Uses the global [limits] defaults. To use a named limits set, call
-/// `build_from_config_named` instead.
-///
 /// The mapping is intentionally explicit — every field traces back to config:
 ///
 /// ```text
-/// config.limits.*      → Limits     (passed to bridge for enforcement)
-/// config.limits.*      → FakeLedger (starting balance)
-/// config.tools.*       → ToolRegistry (built-in tool set + cost overrides)
+/// config.tools.*       → allowlist + per-tool max_calls
 /// ```
-pub fn build_from_config(config: &NannyConfig) -> RuntimeComponents {
-    let limits = Limits {
-        max_steps: config.limits.max_steps,
-        max_tokens: config.limits.max_tokens,
-        timeout_ms: config.limits.timeout_ms,
-    };
-    build_components(config, limits)
-}
-
-// ── build_from_config_named ───────────────────────────────────────────────────
-
-/// Build runtime components using a named limits set from config.
-///
-/// The named set inherits from [limits] and overrides only what it declares.
-/// Returns `Err` if the named set does not exist in config.
-///
-/// Example: `build_from_config_named(&config, "researcher")` uses
-/// the [limits.researcher] table from nanny.toml.
-pub fn build_from_config_named(
-    config: &NannyConfig,
-    name: &str,
-) -> Result<RuntimeComponents, ConfigError> {
-    let resolved = resolve_named_limits(config, name)?;
-
-    let limits = Limits {
-        max_steps: resolved.max_steps,
-        max_tokens: resolved.max_tokens,
-        timeout_ms: resolved.timeout_ms,
-    };
-
-    Ok(build_components(config, limits))
-}
-
-// ── Internal ──────────────────────────────────────────────────────────────────
-
-/// Construct components from a resolved Limits value.
-/// Shared by both build_from_config and build_from_config_named.
-fn build_components(config: &NannyConfig, limits: Limits) -> RuntimeComponents {
-    // Ledger starts at the full budget.
-    let ledger = FakeLedger::new(limits.max_tokens);
-
-    // Registry with tokens_per_call overrides from [tools.<name>].
-    let mut registry = nanny_runtime::default_registry();
-    for (tool_name, tool_cfg) in &config.tools.per_tool {
-        if let Some(cost) = tool_cfg.tokens_per_call {
-            registry.set_cost_override(tool_name, cost);
-        }
+pub fn build_from_config(_config: &NannyConfig) -> RuntimeComponents {
+    RuntimeComponents {
+        registry: nanny_runtime::default_registry(),
     }
-
-    RuntimeComponents { limits, ledger, registry }
 }
 
 // ── build_bridge_components ───────────────────────────────────────────────────
 
-/// Build the `BridgeComponents` the bridge server needs to start.
-///
-/// Resolves every named limits set with full inheritance so `/agent/enter`
-/// can switch contexts without re-reading config.
-///
-/// When `enforce_ceiling` is true (i.e. `--limits=X` was explicitly passed),
-/// every named scope is capped to `min(scope_value, limits_value)` per
-/// dimension. This makes `--limits` a hard ceiling that no `#[nanny::agent]`
-/// scope can exceed, while still allowing all scopes to activate cleanly
-/// (no 404 / panic). Normal `nanny run` passes `false` so per-scope budgets
-/// that intentionally exceed the base `[limits]` are unaffected.
-pub fn build_bridge_components(
-    config: &NannyConfig,
-    limits: Limits,
-    enforce_ceiling: bool,
-) -> BridgeComponents {
-    // Resolve every named set once, up front.
-    let named_limits: HashMap<String, Limits> = config
-        .limits
-        .named
-        .keys()
-        .filter_map(|name| {
-            resolve_named_limits(config, name).ok().map(|partial| {
-                let l = if enforce_ceiling {
-                    Limits {
-                        max_steps:      partial.max_steps.min(limits.max_steps),
-                        max_tokens: partial.max_tokens.min(limits.max_tokens),
-                        timeout_ms:     partial.timeout_ms.min(limits.timeout_ms),
-                    }
-                } else {
-                    Limits {
-                        max_steps:      partial.max_steps,
-                        max_tokens: partial.max_tokens,
-                        timeout_ms:     partial.timeout_ms,
-                    }
-                };
-                (name.clone(), l)
-            })
-        })
-        .collect();
-
+/// Build the enforcement inputs the bridge needs: the tool allowlist, the
+/// per-tool call caps, and the registry of built-in tools.
+pub fn build_bridge_components(config: &NannyConfig) -> BridgeComponents {
     let per_tool_max_calls: HashMap<String, u32> = config
         .tools
         .per_tool
@@ -144,20 +48,44 @@ pub fn build_bridge_components(
         .filter_map(|(name, cfg)| cfg.max_calls.map(|n| (name.clone(), n)))
         .collect();
 
-    let mut registry = nanny_runtime::default_registry();
-    for (tool_name, tool_cfg) in &config.tools.per_tool {
-        if let Some(cost) = tool_cfg.tokens_per_call {
-            registry.set_cost_override(tool_name, cost);
-        }
-    }
+    // Every allowlisted tool gets an entry, including the unlabelled ones.
+    // "declared with no labels" and "never declared" are different answers,
+    // and `tool_has` must be able to tell them apart.
+    let tool_labels: HashMap<String, Vec<String>> = config
+        .tools
+        .allowed
+        .iter()
+        .map(|name| {
+            let labels = config
+                .tools
+                .per_tool
+                .get(name)
+                .map(|cfg| cfg.labels().iter().map(|l| l.to_string()).collect())
+                .unwrap_or_default();
+            (name.clone(), labels)
+        })
+        .collect();
 
     BridgeComponents {
-        registry,
-        limits,
-        named_limits,
+        registry: nanny_runtime::default_registry(),
         allowed_tools: config.tools.allowed.clone(),
         per_tool_max_calls,
+        tool_labels,
     }
+}
+
+/// The id for this run.
+///
+/// `NANNY_RUN_ID` is how separate processes opt into one shared run; absent it,
+/// every invocation is its own. Minted here rather than inside the bridge
+/// because the CLI writes `ExecutionStarted` before the bridge exists, and a
+/// bookend stamped with a different id than the verdicts it brackets would be
+/// worse than no id at all.
+pub fn resolve_run_id() -> String {
+    std::env::var("NANNY_RUN_ID")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(nanny_config::new_run_id)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -165,72 +93,19 @@ pub fn build_bridge_components(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nanny_config::{
-        LimitsConfig, NannyConfig, ObservabilityConfig, PartialLimitsConfig,
-        ToolsConfig,
-    };
-    use nanny_core::ledger::Ledger;
+    use nanny_config::{NannyConfig, ObservabilityConfig, ToolsConfig};
     use std::collections::HashMap;
 
     fn test_config() -> NannyConfig {
         NannyConfig {
             start: None,
-            limits: LimitsConfig {
-                max_steps: 42,
-                max_tokens: 500,
-                timeout_ms: 15_000,
-                named: HashMap::new(),
-            },
             tools: ToolsConfig {
                 allowed: vec!["http_get".to_string()],
                 per_tool: HashMap::new(),
             },
-            observability: ObservabilityConfig::default(),            proxy: None,
+            observability: ObservabilityConfig::default(),
+            rules: Default::default(),
         }
-    }
-
-    fn config_with_named_limits() -> NannyConfig {
-        let mut named = HashMap::new();
-        named.insert(
-            "researcher".to_string(),
-            PartialLimitsConfig {
-                max_steps: Some(200),
-                max_tokens: Some(2000),
-                timeout_ms: None, // inherits from global
-            },
-        );
-
-        NannyConfig {
-            start: None,
-            limits: LimitsConfig {
-                max_steps: 42,
-                max_tokens: 500,
-                timeout_ms: 15_000,
-                named,
-            },
-            tools: ToolsConfig {
-                allowed: vec!["http_get".to_string()],
-                per_tool: HashMap::new(),
-            },
-            observability: ObservabilityConfig::default(),            proxy: None,
-        }
-    }
-
-    #[test]
-    fn limits_match_config() {
-        let components = build_from_config(&test_config());
-
-        assert_eq!(components.limits.max_steps, 42);
-        assert_eq!(components.limits.max_tokens, 500);
-        assert_eq!(components.limits.timeout_ms, 15_000);
-    }
-
-    #[test]
-    fn ledger_starts_at_max_tokens() {
-        let config = test_config();
-        let components = build_from_config(&config);
-
-        assert_eq!(components.ledger.balance(), config.limits.max_tokens);
     }
 
     #[test]
@@ -244,162 +119,33 @@ mod tests {
     }
 
     #[test]
-    fn same_config_produces_same_limits_and_balance() {
-        let config = test_config();
-        let c1 = build_from_config(&config);
-        let c2 = build_from_config(&config);
+    fn bridge_components_carry_the_allowlist() {
+        let components = build_bridge_components(&test_config());
 
-        assert_eq!(c1.limits.max_steps, c2.limits.max_steps);
-        assert_eq!(c1.limits.max_tokens, c2.limits.max_tokens);
-        assert_eq!(c1.limits.timeout_ms, c2.limits.timeout_ms);
-        assert_eq!(c1.ledger.balance(), c2.ledger.balance());
+        assert_eq!(components.allowed_tools, vec!["http_get".to_string()]);
     }
 
     #[test]
     fn empty_allowlist_is_valid() {
-        let config = NannyConfig {
-            start: None,
-            limits: LimitsConfig {
-                max_steps: 10,
-                max_tokens: 100,
-                timeout_ms: 5_000,
-                named: HashMap::new(),
-            },
-            tools: ToolsConfig {
-                allowed: vec![],
-                per_tool: HashMap::new(),
-            },
-            observability: ObservabilityConfig::default(),            proxy: None,
-        };
+        let mut config = test_config();
+        config.tools.allowed = vec![];
 
-        let components = build_from_config(&config);
-        assert_eq!(components.limits.max_steps, 10);
-        assert_eq!(components.ledger.balance(), 100);
+        let components = build_bridge_components(&config);
+        assert!(components.allowed_tools.is_empty());
     }
 
     #[test]
-    fn named_limits_override_and_inherit() {
-        let config = config_with_named_limits();
-        let components =
-            build_from_config_named(&config, "researcher").expect("researcher must exist");
-
-        // Overridden fields
-        assert_eq!(components.limits.max_steps, 200);
-        assert_eq!(components.limits.max_tokens, 2000);
-
-        // Inherited field (timeout_ms is None in partial, inherits from global 15_000)
-        assert_eq!(components.limits.timeout_ms, 15_000);
-
-        // Ledger synced to named budget
-        assert_eq!(components.ledger.balance(), 2000);
-    }
-
-    #[test]
-    fn named_limits_not_found_returns_error() {
-        let config = test_config(); // no named limits defined
-        let result = build_from_config_named(&config, "nonexistent");
-
-        assert!(
-            matches!(result, Err(ConfigError::NamedLimitsNotFound { .. })),
-            "missing named limits must return NamedLimitsNotFound"
-        );
-    }
-
-    #[test]
-    fn ceiling_cap_clamps_named_scope_to_cli_limits() {
-        // Global limits: steps=100, cost=1000, timeout=30_000.
-        // Named "big" scope: steps=500, cost=9999, timeout=60_000 — all exceed global.
-        // With enforce_ceiling=true, every named scope must be clamped to global values.
-        let mut named = HashMap::new();
-        named.insert(
-            "big".to_string(),
-            PartialLimitsConfig {
-                max_steps: Some(500),
-                max_tokens: Some(9999),
-                timeout_ms: Some(60_000),
-            },
-        );
-        let config = NannyConfig {
-            start: None,
-            limits: LimitsConfig {
-                max_steps: 100,
-                max_tokens: 1000,
-                timeout_ms: 30_000,
-                named,
-            },
-            tools: ToolsConfig::default(),
-            observability: ObservabilityConfig::default(),            proxy: None,
-        };
-        let ceiling = Limits { max_steps: 100, max_tokens: 1000, timeout_ms: 30_000 };
-        let components = build_bridge_components(&config, ceiling, true);
-        let big = components.named_limits.get("big").expect("big must be resolved");
-        assert_eq!(big.max_steps, 100, "steps must be capped to CLI ceiling");
-        assert_eq!(big.max_tokens, 1000, "cost must be capped to CLI ceiling");
-        assert_eq!(big.timeout_ms, 30_000, "timeout must be capped to CLI ceiling");
-    }
-
-    #[test]
-    fn ceiling_cap_inactive_without_enforce_flag() {
-        // Same config — without enforce_ceiling, big scope keeps its own values.
-        let mut named = HashMap::new();
-        named.insert(
-            "big".to_string(),
-            PartialLimitsConfig {
-                max_steps: Some(500),
-                max_tokens: Some(9999),
-                timeout_ms: Some(60_000),
-            },
-        );
-        let config = NannyConfig {
-            start: None,
-            limits: LimitsConfig {
-                max_steps: 100,
-                max_tokens: 1000,
-                timeout_ms: 30_000,
-                named,
-            },
-            tools: ToolsConfig::default(),
-            observability: ObservabilityConfig::default(),            proxy: None,
-        };
-        let base = Limits { max_steps: 100, max_tokens: 1000, timeout_ms: 30_000 };
-        let components = build_bridge_components(&config, base, false);
-        let big = components.named_limits.get("big").expect("big must be resolved");
-        assert_eq!(big.max_steps, 500, "steps must not be capped without enforce flag");
-        assert_eq!(big.max_tokens, 9999, "cost must not be capped without enforce flag");
-        assert_eq!(big.timeout_ms, 60_000, "timeout must not be capped without enforce flag");
-    }
-
-    #[test]
-    fn cost_per_call_override_applied_to_registry() {
-        use nanny_config::ToolConfig;
-        use nanny_core::tool::ToolExecutor;
-
-        let mut per_tool = HashMap::new();
-        per_tool.insert(
+    fn max_calls_reaches_the_bridge() {
+        let mut config = test_config();
+        config.tools.per_tool.insert(
             "http_get".to_string(),
-            ToolConfig { max_calls: None, tokens_per_call: Some(25) },
+            nanny_config::ToolConfig {
+                max_calls: Some(3),
+                ..Default::default()
+            },
         );
-        let config = NannyConfig {
-            start: None,
-            limits: LimitsConfig {
-                max_steps: 10,
-                max_tokens: 500,
-                timeout_ms: 5_000,
-                named: HashMap::new(),
-            },
-            tools: ToolsConfig {
-                allowed: vec!["http_get".to_string()],
-                per_tool,
-            },
-            observability: ObservabilityConfig::default(),            proxy: None,
-        };
 
-        let components = build_from_config(&config);
-        assert_eq!(
-            components.registry.declared_cost("http_get"),
-            Some(25),
-            "cost_per_call from config must override tool's declared cost"
-        );
+        let components = build_bridge_components(&config);
+        assert_eq!(components.per_tool_max_calls.get("http_get"), Some(&3));
     }
-
 }

@@ -18,8 +18,7 @@ use std::sync::Mutex;
 use nanny::__private::{
     agent_enter, agent_exit, call_tool, evaluate_local_rules, is_active, ToolVerdict,
 };
-use nanny_bridge::{BridgeAddress, BridgeComponents, Bridge};
-use nanny_core::agent::limits::Limits;
+use nanny_bridge::{Bridge, BridgeAddress, BridgeComponents};
 
 // ── Serialise env-var tests ───────────────────────────────────────────────────
 //
@@ -31,23 +30,14 @@ static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn start_bridge(allowed: &[&str], budget: u64) -> Bridge {
-    start_bridge_named(allowed, budget, HashMap::new())
-}
-
-fn start_bridge_named(
-    allowed: &[&str],
-    budget: u64,
-    named: HashMap<String, Limits>,
-) -> Bridge {
+fn start_bridge(allowed: &[&str]) -> Bridge {
     let components = BridgeComponents {
-        registry:          nanny_runtime::default_registry(),
-        limits:            Limits { max_steps: 100, max_tokens: budget, timeout_ms: 30_000 },
-        named_limits:      named,
-        allowed_tools:     allowed.iter().map(|s| s.to_string()).collect(),
+        registry: nanny_runtime::default_registry(),
+        allowed_tools: allowed.iter().map(|s| s.to_string()).collect(),
         per_tool_max_calls: HashMap::new(),
+        tool_labels: Default::default(),
     };
-    Bridge::start(components).expect("bridge must start in tests")
+    Bridge::start(components, "test-run".to_string()).expect("bridge must start in tests")
 }
 
 fn inject_env(bridge: &Bridge) {
@@ -83,14 +73,17 @@ fn clear_env() {
 fn passthrough_inactive_without_env_vars() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     clear_env();
-    assert!(!is_active(), "is_active must be false when no transport vars are set");
+    assert!(
+        !is_active(),
+        "is_active must be false when no transport vars are set"
+    );
 }
 
 /// Once transport env vars are injected, `is_active()` returns true.
 #[test]
 fn bridge_active_when_env_vars_present() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let bridge = start_bridge(&["search_web"], 1000);
+    let bridge = start_bridge(&["search_web"]);
     inject_env(&bridge);
     let active = is_active();
     clear_env();
@@ -99,12 +92,12 @@ fn bridge_active_when_env_vars_present() {
 
 // ── call_tool ─────────────────────────────────────────────────────────────────
 
-/// A tool in the allowed list with budget available → `Run`.
+/// A tool in the allowed list → `Run`.
 /// The generated macro wrapper calls the original function body on `Run`.
 #[test]
 fn call_tool_allowed_returns_run() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let bridge = start_bridge(&["search_web"], 1000);
+    let bridge = start_bridge(&["search_web"]);
     inject_env(&bridge);
 
     let verdict = call_tool("search_web", 10);
@@ -112,7 +105,7 @@ fn call_tool_allowed_returns_run() {
     clear_env();
     assert!(
         matches!(verdict, ToolVerdict::Run),
-        "allowed tool within budget must return Run"
+        "allowed tool must return Run"
     );
 }
 
@@ -122,7 +115,7 @@ fn call_tool_allowed_returns_run() {
 fn call_tool_not_in_allowlist_returns_stop() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // "send_email" is not in the allowed list.
-    let bridge = start_bridge(&["search_web"], 1000);
+    let bridge = start_bridge(&["search_web"]);
     inject_env(&bridge);
 
     let verdict = call_tool("send_email", 0);
@@ -132,32 +125,6 @@ fn call_tool_not_in_allowlist_returns_stop() {
         matches!(&verdict, ToolVerdict::Stop(msg) if
             msg.contains("send_email") || msg.contains("Denied")),
         "tool not in allowlist must return Stop; got: {verdict:?}"
-    );
-}
-
-/// Budget exhaustion: each call charges cost; once the bridge marks execution
-/// stopped the next call returns Stop.
-///
-/// With budget = 20 and cost = 10:
-///   call 1 → 10 spent, budget not yet exhausted → Run
-///   call 2 → 20 spent, bridge marks stopped after returning allowed → Run
-///   call 3 → execution already stopped → Stop (410 Gone)
-#[test]
-fn call_tool_budget_exhaustion_returns_stop() {
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let bridge = start_bridge(&["search_web"], 20);
-    inject_env(&bridge);
-
-    let v1 = call_tool("search_web", 10); // 10 spent
-    let v2 = call_tool("search_web", 10); // 20 spent — bridge marks stopped
-    let v3 = call_tool("search_web", 10); // 410 Gone → Stop
-
-    clear_env();
-    assert!(matches!(v1, ToolVerdict::Run), "first call must be Run");
-    assert!(matches!(v2, ToolVerdict::Run), "second call (exhausting) must still return Run");
-    assert!(
-        matches!(&v3, ToolVerdict::Stop(_)),
-        "call after budget exhaustion must return Stop; got: {v3:?}"
     );
 }
 
@@ -190,12 +157,7 @@ fn evaluate_local_rules_no_rules_registered_allows_all() {
 #[test]
 fn agent_enter_exit_round_trip() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let mut named = HashMap::new();
-    named.insert(
-        "researcher".to_string(),
-        Limits { max_steps: 200, max_tokens: 5000, timeout_ms: 120_000 },
-    );
-    let bridge = start_bridge_named(&["search_web"], 1000, named);
+    let bridge = start_bridge(&["search_web"]);
     inject_env(&bridge);
 
     agent_enter("researcher");
@@ -203,60 +165,4 @@ fn agent_enter_exit_round_trip() {
 
     clear_env();
     // If we reach here the round-trip succeeded.
-}
-
-/// While inside `agent_enter("researcher")`, the bridge uses the named limits.
-/// After `agent_exit` the bridge reverts to global limits.
-///
-/// Proof: global budget is tiny (5 units); named budget is large (5000).
-/// A 100-unit call succeeds under researcher limits but would fail globally.
-#[test]
-fn agent_named_limits_govern_tool_calls() {
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let mut named = HashMap::new();
-    named.insert(
-        "researcher".to_string(),
-        Limits { max_steps: 200, max_tokens: 5000, timeout_ms: 120_000 },
-    );
-    // Global budget = 5; researcher budget = 5000.
-    let bridge = start_bridge_named(&["search_web"], 5, named);
-    inject_env(&bridge);
-
-    agent_enter("researcher");
-    // 100-unit call: exceeds global budget but within researcher budget.
-    let verdict = call_tool("search_web", 100);
-    agent_exit();
-
-    clear_env();
-    assert!(
-        matches!(verdict, ToolVerdict::Run),
-        "tool call under named limits must return Run; got: {verdict:?}"
-    );
-}
-
-/// `agent_enter` with a name that does not exist in the config panics
-/// immediately — no silent fallback to global limits.
-#[test]
-fn agent_enter_unknown_set_panics() {
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let bridge = start_bridge(&["search_web"], 1000); // no named sets
-    inject_env(&bridge);
-
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        agent_enter("nonexistent_set");
-    }));
-
-    clear_env();
-
-    assert!(result.is_err(), "agent_enter with unknown limits set must panic");
-    let payload = result.unwrap_err();
-    let msg = payload
-        .downcast_ref::<String>()
-        .map(|s| s.as_str())
-        .or_else(|| payload.downcast_ref::<&str>().copied())
-        .unwrap_or("<non-string panic>");
-    assert!(
-        msg.contains("not found in nanny.toml"),
-        "panic message must mention 'not found in nanny.toml'; got: {msg:?}"
-    );
 }

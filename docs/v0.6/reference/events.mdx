@@ -1,0 +1,344 @@
+---
+title: Event Schema
+description: Every event type emitted by Nanny, with full field definitions.
+---
+
+## Format
+
+All events are JSON objects emitted one per line (NDJSON). Every event has:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `event` | string | Event type identifier (see below) |
+| `ts` | integer | Unix timestamp in milliseconds |
+| `run_id` | string | Which run produced this event |
+| `seq` | integer | Position in that run's stream, from 0 |
+
+One log file can hold many runs: a governance server writes every run it
+governs to the same place, and a project's own log accumulates across
+invocations. `run_id` is what tells them apart, and `seq` is what makes a
+missing event visible.
+
+---
+
+## ExecutionStarted
+
+Emitted immediately before the child process is spawned.
+Always the first event in any log.
+
+```json
+{
+  "event": "ExecutionStarted",
+  "ts": 1711234567000,
+  "run_id": "a1b2c3d4",
+  "seq": 0,
+  "command": "python agent.py",
+  "allowed_tools": ["web_search", "send_outreach"],
+  "tool_labels": {
+    "web_search": ["reads_untrusted"],
+    "send_outreach": ["external_effect"]
+  },
+  "config_hash": "9f2a41c8e5b70d3a1f6c2e94b8d07a53c1e6f4b29d80a7c35e1f92b4d6a08c73"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `command` | string | The full command string as passed to `nanny run`. |
+| `allowed_tools` | array | Every tool the agent was permitted to call. |
+| `tool_labels` | object | Each allowed tool's labels. Present for every allowed tool, empty when a tool carries none. |
+| `config_hash` | string | Fingerprint of the `nanny.toml` that produced this grant. |
+
+This is [declared authority](/v0.6/concepts/declared-authority): what the agent
+was permitted to do, written down before it did anything. A log of refusals
+alone cannot answer "what was this agent allowed to do", which is the question
+an auditor asks.
+
+`config_hash` is a fingerprint of the parsed config, so reformatting or adding
+a comment does not change it. Two runs with the same hash ran the same policy.
+
+---
+
+## ExecutionStopped
+
+Emitted on every exit path: clean completion, a policy stop, spawn failure, or
+internal error. Always the last event in a complete log.
+
+```json
+{
+  "event": "ExecutionStopped",
+  "ts": 1711234572000,
+  "run_id": "a1b2c3d4",
+  "seq": 87,
+  "reason": "RuleDenied",
+  "tokens_spent": 380,
+  "elapsed_ms": 4823
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `reason` | string | Why execution stopped. See reasons below. |
+| `tokens_spent` | integer | Total tokens measured. Attribution only, never enforced. |
+| `elapsed_ms` | integer | Total wall-clock time in milliseconds. |
+
+If this event is missing from a run, the process crashed. That absence is
+itself a fact worth reading.
+
+### Stop reasons
+
+| Reason | Description |
+|--------|-------------|
+| `AgentCompleted` | Process exited cleanly on its own. |
+
+| `ToolDenied` | A tool call was blocked because the tool is not in the allowlist. |
+| `RuleDenied` | A tool call was blocked by a custom rule or a per-tool `max_calls` limit. |
+| `ManualStop` | Execution was stopped programmatically. |
+| `ProcessCrashed` | The child process exited with a non-zero code unexpectedly. |
+| `BridgeUnavailable` | Enforcement was active but became unreachable during rule evaluation or a tool call. Nanny fails closed — silently continuing with ungoverned execution is never allowed. |
+
+---
+
+## RulesDeclared
+
+Emitted once when the agent declares which rules it registered. The second half
+of [declared authority](/v0.6/concepts/declared-authority).
+
+```json
+{
+  "event": "RulesDeclared",
+  "ts": 1711234567100,
+  "run_id": "a1b2c3d4",
+  "seq": 1,
+  "rules": [
+    {"name": "no_send_after_read", "version": "1.0.0", "pack": "nanny:recommended"},
+    {"name": "my_own_rule"}
+  ]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `rules` | array | Each registered rule, sorted by name. |
+| `rules[].name` | string | The rule name. |
+| `rules[].version` | string | Version of the pack it came from. Absent for a hand-written rule. |
+| `rules[].pack` | string | Pack it came from. Absent for a hand-written rule. |
+
+Deduped: a caller may safely redeclare, and a second event is emitted only when
+the set actually changes.
+
+---
+
+## AgentScopeEntered
+
+Emitted when a function annotated with `#[nanny::agent("name")]` is entered.
+Names which phase of the run the events that follow belong to.
+
+```json
+{
+  "event": "AgentScopeEntered",
+  "ts": 1711234567200,
+  "run_id": "a1b2c3d4",
+  "seq": 12,
+  "name": "researcher"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | The name of the agent scope. |
+
+---
+
+## AgentScopeExited
+
+Emitted when a function annotated with `#[nanny::agent("name")]` returns, closing the bracket opened by `AgentScopeEntered`.
+
+```json
+{
+  "event": "AgentScopeExited",
+  "ts": 1711234571800,
+  "name": "researcher"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | The name of the agent scope. |
+
+<Note>
+  Per-scope usage is derived by reading the events between a matching
+  `AgentScopeEntered` and `AgentScopeExited`, which is why both carry the name.
+</Note>
+
+---
+
+## HarnessIdentified
+
+Emitted once when the agentic harness running the loop is identified, either auto-detected by the Python SDK from imported frameworks or declared explicitly with `nanny::set_harness` in Rust.
+
+Attribution only: it never affects enforcement, never carries content, and never touches the ledger. De-duplicated, so an SDK may safely re-send it on every call.
+
+```json
+{
+  "event": "HarnessIdentified",
+  "ts": 1711234567150,
+  "name": "langgraph",
+  "version": "0.3.2"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Harness identifier, e.g. `langgraph`, `crewai`, `opencode`. |
+| `version` | string | Optional. Absent when the harness reports no version. |
+
+---
+
+## AppIdentified
+
+Emitted once when a process declares which app it is, read from the committed `.nanny/app.json`. Same category as `HarnessIdentified`: attribution only, de-duplicated, safe to re-send.
+
+This is what lets one governance server, holding one API key, serve many apps and still have each attributed separately. Identity travels in the event stream rather than being derived from the credential, for the same reason OpenTelemetry makes `service.name` a resource attribute rather than a transport concern.
+
+```json
+{
+  "event": "AppIdentified",
+  "ts": 1711234567180,
+  "app_id": "app_70c74914f3694d03a18c70dbca8fb8d8",
+  "name": "gotm-nanny"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `app_id` | string | Permanent identity from `nanny init`. Never regenerated. |
+| `name` | string | Human-facing label, shown in the dashboard. Free to change without the app becoming a different app. |
+
+---
+
+## ToolAllowed
+
+Emitted when Nanny permits a tool call to proceed.
+
+```json
+{
+  "event": "ToolAllowed",
+  "ts": 1711234568101,
+  "run_id": "a1b2c3d4",
+  "seq": 14,
+  "tool": "web_search",
+  "cleared_by": ["no_send_after_read", "web_search.max_calls"]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `tool` | string | The name of the tool that was allowed. |
+| `cleared_by` | array | Rules that evaluated this call and allowed it, in evaluation order. Absent when no rule governed the call. |
+
+`cleared_by` is what proves a control was operating. A rule that runs clean
+every time is doing its job, and without this it would leave no trace at all,
+making a healthy run indistinguishable from one where the rule was never
+reached.
+
+---
+
+## ToolDenied
+
+Emitted when Nanny blocks a tool call because the tool is not in the `[tools] allowed` list in `nanny.toml`.
+
+```json
+{
+  "event": "ToolDenied",
+  "ts": 1711234568101,
+  "run_id": "a1b2c3d4",
+  "seq": 9,
+  "tool": "write_file"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `tool` | string | The name of the tool that was blocked. |
+
+No `cleared_by` here, and that is meaningful: the allowlist is checked before
+any rule runs, so no rule evaluated this call. "Never reached" and "ran clean"
+are different answers.
+
+---
+
+## RuleDenied
+
+Emitted when a custom rule or a per-tool `max_calls` limit blocks a tool call. The tool was on the allowlist but a rule returned a denial before the call executed.
+
+```json
+{
+  "event": "RuleDenied",
+  "ts": 1711234568101,
+  "run_id": "a1b2c3d4",
+  "seq": 31,
+  "tool": "send_outreach",
+  "rule_name": "no_send_after_read",
+  "cleared_by": ["no_secret_patterns_in_args"]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `tool` | string | The name of the tool that triggered the rule. |
+| `rule_name` | string | The rule that fired, or the per-tool cap that was hit (e.g. `"web_search.max_calls"`). |
+| `cleared_by` | array | Rules that evaluated and allowed this call *before* the one that fired. |
+
+Rules stop at the first denial, so rules registered after `rule_name` never ran.
+They are absent from `cleared_by` because they produced no verdict, not because
+they passed.
+
+---
+
+## ToolFailed
+
+Emitted when a permitted tool fails at runtime. Distinct from `ToolDenied` — the tool was allowed but encountered an error (network failure, bad arguments, timeout). No tokens are charged on failure.
+
+```json
+{
+  "event": "ToolFailed",
+  "ts": 1711234568200,
+  "tool": "http_get",
+  "error": "connection refused"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `tool` | string | The name of the tool that failed. |
+| `error` | string | A description of the error. |
+
+---
+
+## LlmUsageRecorded
+
+Emitted when LLM token usage is reported to Nanny — via the Python SDK's `instrument()` or the Rust SDK's `report_usage()`. Records the measured input and output tokens debited from the budget, plus optional model, provider, and cache-usage labels.
+
+```json
+{
+  "event": "LlmUsageRecorded",
+  "ts": 1711234568150,
+  "input": 1200,
+  "output": 340,
+  "model": "gpt-4o",
+  "provider": "openai",
+  "cache_read": 900
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `input` | integer | Prompt / input tokens consumed by the LLM call. |
+| `output` | integer | Completion / output tokens produced by the LLM call. |
+| `model` | string | Optional. Model identifier reported by the SDK (e.g. `"gpt-4o"`). Omitted when not provided. |
+| `provider` | string | Optional. Provider identifier reported by the SDK (e.g. `"openai"`). Omitted when not provided. |
+| `cache_read` | integer | Optional. A finer split of `input` — never additional tokens beyond it — for providers that report prompt-cache reads (OpenAI, Anthropic, DeepSeek, Gemini). Omitted, not zero, for providers/responses that don't report cache usage. |
+| `cache_write` | integer | Optional. Same as `cache_read`, but for tokens written to cache (a real, separate cost for providers like Anthropic; most providers have no write-cost concept and never set this). |
+
+`cache_read`/`cache_write` are reporting-only, same as `model`/`provider`: enforcement always debits `input + output`, unaffected by whether either is present. They exist so a downstream cost calculator can price cache-hit tokens at their real, much cheaper rate instead of treating all input as one undifferentiated price. Every provider uses its own field name and shape for cache usage — there's no shared convention the way there is for input/output tokens — so the SDK normalizes each provider's own vocabulary into these two generic fields; see `nanny_sdk.instrument`'s module docs for the per-provider mapping.

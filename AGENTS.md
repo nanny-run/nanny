@@ -64,18 +64,12 @@ cd sdks/python && uv run ruff check .
 cd sdks/python && uv run mypy nanny_sdk
 ```
 
-### Run examples
+### Run rule pack tests
 
-All examples require API keys. Copy `.env.example` → `.env` and fill in.
+Rule packs live in `packs/`. Their tests run from `sdks/python`:
 
 ```bash
-# Rust examples (Groq free tier)
-cd examples/rust/webdingo && cargo build --release && nanny run -- "best Rust HTTP clients"
-cd examples/rust/qabud && cargo build --release && nanny run -- ./src
-
-# Python examples
-cd examples/python/dev_assist && uv sync && nanny run
-cd examples/python/metrics_crew && uv sync && nanny run
+uv run pytest ../../packs/nanny-recommended/tests
 ```
 
 ## Important constraints
@@ -119,20 +113,20 @@ cd examples/python/metrics_crew && uv sync && nanny run
 | Path | Purpose |
 |------|---------|
 | `crates/core` | Traits and types only — no implementations |
-| `crates/runtime` | Concrete impls: `LimitsPolicy`, `RuleEvaluator`, built-in tools |
-| `crates/bridge` | Local HTTP enforcement server |
+| `crates/runtime` | Concrete impls: `ToolPermissionPolicy`, `RuleEvaluator`, built-in tools |
+| `crates/bridge` | Local HTTP enforcement server. Wire protocol: `crates/bridge/PROTOCOL.md` |
 | `crates/config` | Parses `nanny.toml` |
 | `crates/macros` | `#[tool]`, `#[rule]`, `#[agent]` proc-macros |
 | `crates/cli` | `nanny` binary + Rust SDK re-export |
 | `sdks/python/` | Python SDK (`nanny-sdk` on PyPI) |
-| `examples/` | 4 complete agents (2 Rust, 2 Python) |
+| `packs/` | First-party rule packs |
 | `docs/` | Mintlify site (MDX + YAML) |
 
 ## Testing
 
 - **Rust**: `cargo test --workspace` runs in parallel; use unique temp file names
 - **Python**: `uv run pytest` uses `mock_bridge` fixture — no real bridge required
-- **Examples**: All use published crates (`nannyd`, `nanny-sdk`) — switch to path deps during active development
+- **Packs**: `uv run pytest ../../packs/nanny-recommended/tests` from `sdks/python`
 
 ## Documentation surfaces
 
@@ -140,15 +134,17 @@ cd examples/python/metrics_crew && uv sync && nanny run
 |---------|-------|----------|------|
 | Docs site | `docs/` (Mintlify) | Developers using Nanny | Commands, config, SDK usage |
 | Root docs | `README.md`, `ARCHITECTURE.md`, `CONTRIBUTING.md` | Contributors | Overview, implementation model, workflow |
-| Examples | `examples/**/README.md` | Learning by copying | Runnable integrations |
+| Wire protocol | `crates/bridge/PROTOCOL.md` | Maintainers | Endpoints, headers, event shape |
 
-**Keep each surface consistent with its audience.** User-facing docs never expose internal terms like "bridge".
+**Keep each surface consistent with its audience.** User-facing docs never expose internal terms like "bridge", nor the wire protocol.
+
+**Docs are present tense.** A removed feature is deleted from the docs, never marked deprecated, and `CHANGELOG.md` is the only place history lives. Full rules in `docs/AGENTS.md`.
 
 ## Critical gotchas
 
-1. **Build before `nanny run`** — timeout starts at process launch; if `cargo` compiles during the governed run, it fires prematurely
-2. **Direct-call pattern** — your code must drive tool calls; LLM should only reason, not dispatch tools
-3. **Passthrough mode** — decorators/macros are no-ops outside `nanny run`; zero overhead in dev/CI
-4. **Stop reasons** — use exact enum names: `BudgetExhausted`, not "budget exceeded"
-5. **Token tracking** — Python: call `nanny_sdk.instrument(client)` once at startup to auto-report LLM usage. Rust: call `nanny::report_usage(Usage { input, output, .. })` after each LLM call (Rust can't patch a client, so reporting is explicit)
-6. **Per-role limits** — named scopes inherit from base `[limits]` and override only what differs; inner scope cannot exceed outer budget
+1. **Direct-call pattern** — your code must drive tool calls; the LLM should reason, not dispatch tools
+2. **Passthrough mode** — decorators and macros are no-ops outside `nanny run`; zero overhead in dev and CI
+3. **Stop reasons** — four, and the set is closed: `ToolDenied`, `RuleDenied`, `AgentCompleted`, `ManualStop`. Only the first two are policy violations
+4. **Rules reference labels, not tool names** — a rule naming `send_outreach` governs one app; a rule reading `external_effect` governs every app whose operator labelled their tools
+5. **Token tracking** — Python: `nanny_sdk.instrument(client)` once at startup. Rust: `nanny::report_usage(...)` after each LLM call. Measured for attribution, never enforced
+6. **`--serve` is the launch mode** — one governor, many runs, one shared log. Every event carries its `run_id`

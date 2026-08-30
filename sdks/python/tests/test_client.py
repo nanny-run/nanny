@@ -4,7 +4,7 @@ import pytest
 from pytest_httpserver import HTTPServer
 
 import nanny_sdk._client as client
-from nanny_sdk.exceptions import BridgeUnavailable, BudgetExhausted, ExecutionStopped
+from nanny_sdk.exceptions import AgentCompleted, BridgeUnavailable, ExecutionStopped
 
 
 def test_passthrough_when_no_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -56,7 +56,7 @@ def test_health_ok(mock_bridge: HTTPServer) -> None:
 def test_health_not_ok(mock_bridge: HTTPServer) -> None:
     """health() returns False when bridge responds with any non-running state."""
     mock_bridge.expect_request("/health").respond_with_json(
-        {"state": "stopped", "reason": "MaxStepsReached"}
+        {"state": "stopped", "reason": "ToolDenied"}
     )
     assert client.health() is False
 
@@ -132,11 +132,11 @@ def test_get_status_raises_bridge_unavailable_when_unreachable(
 
 
 def test_call_tool_410_raises_typed_stop(mock_bridge: HTTPServer) -> None:
-    """A 410 whose reason is a known limit raises that specific stop class."""
+    """A 410 whose reason has its own class raises that class."""
     mock_bridge.expect_request("/tool/call", method="POST").respond_with_json(
-        {"error": "execution stopped", "reason": "BudgetExhausted"}, status=410
+        {"error": "execution stopped", "reason": "AgentCompleted"}, status=410
     )
-    with pytest.raises(BudgetExhausted):
+    with pytest.raises(AgentCompleted):
         client.call_tool("search", 10, {})
 
 
@@ -153,19 +153,21 @@ def test_call_tool_410_generic_reason_raises_execution_stopped(mock_bridge: HTTP
 def test_agent_enter_410_raises_typed_stop(mock_bridge: HTTPServer) -> None:
     """agent_enter on a stopped run raises a typed stop, not an HTTPStatusError."""
     mock_bridge.expect_request("/agent/enter", method="POST").respond_with_json(
-        {"error": "execution stopped", "reason": "BudgetExhausted"}, status=410
+        {"error": "execution stopped", "reason": "AgentCompleted"}, status=410
     )
-    with pytest.raises(BudgetExhausted):
+    with pytest.raises(AgentCompleted):
         client.agent_enter("researcher")
 
 
-def test_call_tool_410_from_proxy_denial_raises_execution_stopped(mock_bridge: HTTPServer) -> None:
-    """A run stopped by an HTTP proxy denial reads 'ToolDenied' as the 410
-    reason — same body shape as any other denial, no separate handling needed
-    on the SDK side. ToolDenied isn't one of the known limit classes here (that
-    class needs a tool_name, which a proxy denial that happened on an earlier,
-    unrelated call doesn't carry), so it falls through to ExecutionStopped,
-    same as any other non-limit reason.
+def test_call_tool_410_from_earlier_denial_raises_execution_stopped(
+    mock_bridge: HTTPServer,
+) -> None:
+    """A run already stopped by a denial reads 'ToolDenied' as the 410 reason.
+
+    ToolDenied does not get its own class here: that class carries a tool_name,
+    and a denial that happened on an earlier, possibly out-of-process call does
+    not carry one. It falls through to ExecutionStopped, same as any other
+    reason without its own class.
     """
     mock_bridge.expect_request("/tool/call", method="POST").respond_with_json(
         {"error": "execution stopped", "reason": "ToolDenied"}, status=410

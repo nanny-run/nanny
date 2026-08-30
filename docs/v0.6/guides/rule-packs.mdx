@@ -1,0 +1,98 @@
+---
+title: Rule packs
+description: Install curated rules with one command, pinned to a version.
+---
+
+A rule pack is a versioned set of rules you install into your project. You write
+`@rule` for your own private rules; everything else comes from a pack.
+
+## Install one
+
+```bash
+nanny rules add nanny:recommended@1.0.0 --from ./packs/nanny-recommended
+```
+
+That does two things, and neither one edits your source:
+
+1. Writes a pinned entry into `nanny.toml`:
+
+   ```toml
+   [rules]
+   extends = ["nanny:recommended@1.0.0"]
+   ```
+
+2. Vendors the pack into `.nanny/rules/nanny-recommended@1.0.0/`.
+
+**Commit both.** The config says which controls govern this app; the vendored
+pack is the code that enforces them. Committing them together is what makes
+every machine run the same rules.
+
+The rules register themselves when your agent starts, alongside any `@rule` you
+wrote. From that point a pack rule and your own rule are the same kind of thing:
+same evaluation order, same denial behaviour.
+
+## Versions are pinned, never floating
+
+`nanny:recommended` without a version is a config error, not a request for the
+newest release.
+
+A control that changes without you deciding to change it is not a control. Three
+things go wrong if it floats:
+
+- A rule that quietly weakens is invisible. Rules fail *silent*: a broken one
+  returns allow forever while everything downstream stays green. That is worse
+  than a library failing loud, and it is why this is not left to a range.
+- Compliance evidence changes meaning after the fact. A record saying "governed
+  by nanny:owasp" is worthless if the pack behind it moved.
+- Two runs of the same code stop being comparable.
+
+A pack named in `[rules] extends` but not installed **stops the run before it
+starts**. The operator declared controls that are not present, so the agent is
+less governed than the config claims, and starting anyway is the one outcome
+worse than refusing.
+
+## Inspect what is installed
+
+```bash
+nanny rules list
+```
+
+```
+nanny:recommended@1.0.0       unsigned  30 rule(s)  Application-agnostic rules every governed agent should start with.
+```
+
+Every line says whether the pack's contents were verified on install. A pack you
+built locally is unsigned, and that is reported rather than hidden.
+
+## Integrity is checked at install, not at run time
+
+`nanny rules add` verifies a pack's contents against the digest in its manifest
+before copying anything. A mismatch refuses the install and writes nothing.
+
+It happens there and nowhere else on purpose. Verifying during a run would put
+trust roots, and possibly a network call, on the path that has to stay offline
+and deterministic. Once a pack is on disk it is ordinary code in your
+repository, and what guards it from then on is your own review.
+
+The runtime never downloads a pack, never checks for a newer one, and never
+contacts anything to decide whether a rule may run.
+
+## Remove one
+
+```bash
+nanny rules remove nanny:recommended@1.0.0
+```
+
+Deletes the vendored copy and the line in `nanny.toml`.
+
+## Available packs
+
+| Pack | Rules | Covers |
+| --- | --- | --- |
+| `nanny:recommended` | 30 | Injection and taint, sequence, loops, argument safety, destructive actions, payments, operating conditions |
+| `nanny:owasp` | 15 | Controls mapped to the OWASP Agentic Top Ten |
+
+Both reference [tool labels](/v0.6/concepts/tool-labels) rather than tool names,
+so they govern your application without having been written for it. Label your
+tools and the rules apply; leave a tool unlabelled and no label-based rule can
+see it.

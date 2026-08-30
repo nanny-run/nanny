@@ -19,11 +19,7 @@ import pytest
 
 from nanny_sdk import (
     AgentCompleted,
-    AgentNotFound,
-    BudgetExhausted,
-    MaxStepsReached,
     RuleDenied,
-    TimeoutExpired,
     ToolDenied,
     agent,
     rule,
@@ -54,13 +50,9 @@ def test_all_public_symbols_importable_without_env_vars() -> None:
     assert callable(rule)
     assert callable(agent)
     stop_exceptions = (
-        BudgetExhausted,
-        MaxStepsReached,
-        TimeoutExpired,
         ToolDenied,
         RuleDenied,
         AgentCompleted,
-        AgentNotFound,
     )
     for exc in stop_exceptions:
         assert issubclass(exc, BaseException)
