@@ -971,7 +971,9 @@ impl NetworkServer {
 /// Generate a minimal test cert bundle using rcgen: called only from tests.
 #[cfg(test)]
 fn gen_certs_for_test(dir: &Path) {
-    use rcgen::{BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
+    use rcgen::{
+        BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, Issuer, KeyPair,
+    };
     use time::OffsetDateTime;
 
     let not_before = OffsetDateTime::now_utc();
@@ -987,6 +989,7 @@ fn gen_certs_for_test(dir: &Path) {
     ca_params.not_after = not_after;
     let ca_key = KeyPair::generate().unwrap();
     let ca_cert = ca_params.self_signed(&ca_key).unwrap();
+    let ca_issuer = Issuer::from_params(&ca_params, &ca_key);
 
     // Server cert
     let mut srv_dn = DistinguishedName::new();
@@ -997,7 +1000,7 @@ fn gen_certs_for_test(dir: &Path) {
     srv_params.not_before = not_before;
     srv_params.not_after = not_after;
     let srv_key = KeyPair::generate().unwrap();
-    let srv_cert = srv_params.signed_by(&srv_key, &ca_cert, &ca_key).unwrap();
+    let srv_cert = srv_params.signed_by(&srv_key, &ca_issuer).unwrap();
 
     // Client cert
     let mut cli_dn = DistinguishedName::new();
@@ -1007,7 +1010,7 @@ fn gen_certs_for_test(dir: &Path) {
     cli_params.not_before = not_before;
     cli_params.not_after = not_after;
     let cli_key = KeyPair::generate().unwrap();
-    let cli_cert = cli_params.signed_by(&cli_key, &ca_cert, &ca_key).unwrap();
+    let cli_cert = cli_params.signed_by(&cli_key, &ca_issuer).unwrap();
 
     std::fs::write(dir.join("ca.crt"), ca_cert.pem()).unwrap();
     std::fs::write(dir.join("ca.key"), ca_key.serialize_pem()).unwrap();

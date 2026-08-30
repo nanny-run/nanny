@@ -14,7 +14,7 @@
 
 use anyhow::{Context, Result};
 use clap::Subcommand;
-use rcgen::{BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
+use rcgen::{BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, Issuer, KeyPair};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Write;
@@ -245,6 +245,12 @@ fn cmd_certs_generate(
         .self_signed(&ca_key)
         .context("failed to self-sign CA cert")?;
 
+    // rcgen 0.14 signs against an `Issuer` (the CA's name, key id method and key
+    // usages) rather than against the CA certificate plus its key. Built from the
+    // same params the CA was self-signed from, so the issuer field of the leaves
+    // still matches the CA's subject exactly.
+    let ca_issuer = Issuer::from_params(&ca_params, &ca_key);
+
     // ── Server cert ───────────────────────────────────────────────────────────
     let server_sans = server_sans(sans);
     let mut server_dn = DistinguishedName::new();
@@ -257,7 +263,7 @@ fn cmd_certs_generate(
 
     let server_key = KeyPair::generate().context("failed to generate server key pair")?;
     let server_cert = server_params
-        .signed_by(&server_key, &ca_cert, &ca_key)
+        .signed_by(&server_key, &ca_issuer)
         .context("failed to sign server cert")?;
 
     // ── Client cert ───────────────────────────────────────────────────────────
@@ -271,7 +277,7 @@ fn cmd_certs_generate(
 
     let client_key = KeyPair::generate().context("failed to generate client key pair")?;
     let client_cert = client_params
-        .signed_by(&client_key, &ca_cert, &ca_key)
+        .signed_by(&client_key, &ca_issuer)
         .context("failed to sign client cert")?;
 
     // ── Write atomically ──────────────────────────────────────────────────────
@@ -505,7 +511,7 @@ fn cmd_certs_rotate(out_dir: Option<PathBuf>, sans: &[String]) -> Result<()> {
     let ca_key =
         KeyPair::from_pem(&ca_key_pem).context("failed to load CA key pair from ca.key")?;
 
-    // Reconstruct a CA cert signing object using the same fixed parameters as
+    // Reconstruct a CA signing object using the same fixed parameters as
     // `nanny certs generate` (DN: "Nanny CA", IsCa::Ca).
     //
     // We use the existing ca.key: same private key → same public key → same
@@ -521,9 +527,7 @@ fn cmd_certs_rotate(out_dir: Option<PathBuf>, sans: &[String]) -> Result<()> {
         CertificateParams::new(vec![]).context("failed to reconstruct CA cert params")?;
     ca_params.distinguished_name = ca_dn;
     ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-    let ca_cert = ca_params
-        .self_signed(&ca_key)
-        .context("failed to reconstruct CA cert for signing")?;
+    let ca_issuer = Issuer::from_params(&ca_params, &ca_key);
 
     let not_before = OffsetDateTime::now_utc();
     let not_after = not_before + time::Duration::days(365);
@@ -548,7 +552,7 @@ fn cmd_certs_rotate(out_dir: Option<PathBuf>, sans: &[String]) -> Result<()> {
 
     let server_key = KeyPair::generate().context("failed to generate server key")?;
     let server_cert = server_params
-        .signed_by(&server_key, &ca_cert, &ca_key)
+        .signed_by(&server_key, &ca_issuer)
         .context("failed to sign server cert with existing CA")?;
 
     // ── New client cert (signed by existing CA) ───────────────────────────────
@@ -562,7 +566,7 @@ fn cmd_certs_rotate(out_dir: Option<PathBuf>, sans: &[String]) -> Result<()> {
 
     let client_key = KeyPair::generate().context("failed to generate client key")?;
     let client_cert = client_params
-        .signed_by(&client_key, &ca_cert, &ca_key)
+        .signed_by(&client_key, &ca_issuer)
         .context("failed to sign client cert with existing CA")?;
 
     // ── Write atomically: CA files are NOT touched ───────────────────────────
@@ -1048,6 +1052,27 @@ mod tests {
             original_server, new_server,
             "rotated server.crt must differ from original"
         );
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rotated_certs_still_chain_to_the_untouched_ca() {
+        let dir = tmp_dir();
+        cmd_certs_generate(Some(dir.clone()), false, 365, &[]).unwrap();
+        cmd_certs_rotate(Some(dir.clone()), &[]).unwrap();
+
+        // Rotation reconstructs the CA signing object from fixed parameters plus
+        // the existing ca.key rather than reading ca.crt, so the new leaves have
+        // to be checked against the CA file on disk that rotation never rewrote.
+        // If reconstruction ever drifts, the fleet fails at the handshake rather
+        // than at the command that caused it.
+        let ca = fs::read(dir.join("ca.crt")).unwrap();
+        let server_cert = fs::read(dir.join("server.crt")).unwrap();
+        let client_cert = fs::read(dir.join("client.crt")).unwrap();
+
+        validate_chain(&ca, &server_cert).expect("rotated server.crt must be signed by the CA");
+        validate_chain(&ca, &client_cert).expect("rotated client.crt must be signed by the CA");
 
         fs::remove_dir_all(&dir).ok();
     }
