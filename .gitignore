@@ -1,4 +1,4 @@
-# Rust build output — never commit this
+# Rust build output: never commit this
 /target
 
 # macOS filesystem noise
@@ -13,7 +13,7 @@
 *.swo
 *~
 
-# Environment / secrets — never commit these
+# Environment / secrets: never commit these
 .env
 .env.local
 .env.*
@@ -28,10 +28,10 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 dist/
-# Note: uv.lock is intentionally committed — reproducible Python builds.
+# Note: uv.lock is intentionally committed: reproducible Python builds.
 
 # Note: Cargo.lock is intentionally committed.
 # This workspace produces a binary (nanny CLI). Committing Cargo.lock ensures
-# every user gets an identical, reproducible build — a direct requirement of
+# every user gets an identical, reproducible build: a direct requirement of
 # the determinism invariant in the Nanny manifesto.
 .windsurf

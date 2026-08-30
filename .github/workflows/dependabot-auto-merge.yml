@@ -13,7 +13,7 @@ name: Dependabot auto-merge
 #
 # Does not rely on branch protection to enforce "wait for CI": this repo's
 # main had none configured when this was written, and GitHub's auto-merge
-# only waits for checks marked *required* in branch protection — with none
+# only waits for checks marked *required* in branch protection: with none
 # required, auto-merge can complete before CI even finishes. So this
 # explicitly blocks on `gh pr checks --watch` itself before ever merging,
 # correct with or without branch protection. Turning on branch protection
@@ -47,15 +47,15 @@ jobs:
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
           set -euo pipefail
-          echo "Security patch-level bump (${{ steps.metadata.outputs.ghsas }}) — waiting for all checks on $PR_URL"
+          echo "Security patch-level bump (${{ steps.metadata.outputs.ghsas }}), waiting for all checks on $PR_URL"
           # Blocks until every check on the PR finishes; exits non-zero if
           # any failed. Nothing below this line runs on a red build.
           gh pr checks "$PR_URL" --watch
-          echo "All checks green — enabling auto-merge (squash)"
+          echo "All checks green, enabling auto-merge (squash)"
           gh pr merge "$PR_URL" --auto --squash
 
       - name: Leave everything else for manual review
         if: steps.metadata.outputs.update-type != 'version-update:semver-patch' || steps.metadata.outputs.ghsas == ''
         run: |
           echo "update-type='${{ steps.metadata.outputs.update-type }}', ghsas='${{ steps.metadata.outputs.ghsas }}'"
-          echo "Not a patch-level security fix — leaving for manual review, not auto-merging."
+          echo "Not a patch-level security fix, leaving for manual review, not auto-merging."
