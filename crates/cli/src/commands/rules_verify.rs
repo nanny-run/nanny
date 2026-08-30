@@ -33,7 +33,7 @@ pub fn content_digest(dir: &Path) -> Result<String> {
         hasher.update(std::fs::read(dir.join(rel))?);
         hasher.update([0u8]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hex::encode(hasher.finalize()))
 }
 
 fn collect(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
