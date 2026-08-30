@@ -139,12 +139,12 @@ All agents connected to the same governance server are evaluated against the sam
 Every run writes to the same log, and each event carries the `run_id` that tells them apart.
 
 This means:
-- If Agent A spends 400 tokens and Agent B spends 600, and the budget is 1000, the next call from either agent stops the execution — regardless of which agent makes it.
-- A loop in Agent B counts toward the global step limit alongside Agent A's steps.
+- A tool absent from `[tools] allowed` is refused for every agent, not just the one that declared it.
+- A per-tool `max_calls` cap is that agent's own: each run counts its own calls, so one agent exhausting a cap does not refuse another's.
 
-The governance server is a **shared enforcement layer** for a team of agents working on one task. Each agent is subject to the same limits as every other agent.
+The governance server is a **shared authority layer** for a team of agents working on one task. Every agent may do exactly what the config permits, and no more.
 
-**Named limits still work the same way.** When an agent activates `@agent("researcher")`, it enters the `[limits.researcher]` scope from `nanny.toml`. That scope's ceiling applies for the duration of that function. The shared token budget still tracks totals across all agents — a named scope does not isolate budget from other agents, it only sets the ceiling for that scope.
+**Named scopes still work the same way.** When an agent activates `@agent("researcher")`, every event until that function returns is attributed to that phase. A scope does not change what the agent may do; it records which phase a verdict belongs to, so an audit can tell them apart.
 
 ---
 

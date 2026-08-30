@@ -185,7 +185,7 @@ action is permitted stays a pure function of its inputs and can be tested.
 
 ---
 
-## `@agent` — activate named limits for a scope
+## `@agent`: name a phase of the run
 
 In a multi-agent system each phase does different work, and a denial in one is worth attributing to that phase rather than to the process as a whole. `@agent` names the phase, and every event between entering and exiting belongs to it.
 
@@ -199,7 +199,7 @@ def run_research(topic: str) -> list[str]:
 
 `AgentScopeEntered` and `AgentScopeExited` bracket the events in between, so the
 audit log can answer which phase a denial came from. Nesting is supported.
-Works identically for async functions. Limits revert on exit whether the function returns normally or raises.
+Works identically for async functions. A scope does not change what the agent may do; it labels which phase each verdict belongs to. The scope exits whether the function returns normally or raises.
 
 ---
 
