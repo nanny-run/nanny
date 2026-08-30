@@ -1,6 +1,6 @@
 [package]
 name        = "nanny-bridge"
-description = "HTTP sidecar bridge for the nanny execution boundary — internal runtime component"
+description = "Internal runtime component of nanny, the authorization and audit layer for AI agents"
 version.workspace   = true
 edition.workspace   = true
 license.workspace   = true
