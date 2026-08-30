@@ -18,10 +18,10 @@ Only the latest published release receives security patches. If you are running 
 
 Report these:
 
-- **Process escape** — a way for a child process to continue running after nanny has issued `SIGKILL`
-- **Limit bypass** — a mechanism by which an agent can exceed its configured step, cost, or timeout limits without nanny detecting or stopping it
-- **Bridge token forgery** — a way for a process to forge a `NANNY_SESSION_TOKEN` or hijack a bridge session belonging to another execution
-- **Event log tampering** — a way to suppress or modify events in the NDJSON log without nanny detecting it
+- **Process escape**: a way for a child process to continue running after nanny has issued `SIGKILL`
+- **Limit bypass**: a mechanism by which an agent can exceed its configured step, cost, or timeout limits without nanny detecting or stopping it
+- **Bridge token forgery**: a way for a process to forge a `NANNY_SESSION_TOKEN` or hijack a bridge session belonging to another execution
+- **Event log tampering**: a way to suppress or modify events in the NDJSON log without nanny detecting it
 - **Path traversal or arbitrary file write** in `nanny init` or any config-reading path
 - **Any crash or panic in the CLI** reachable via normal config input
 
@@ -31,10 +31,10 @@ Report these:
 
 These are design decisions, not bugs:
 
-- **An agent that calls tools not in the allowlist** — nanny stops it. That is the intended behaviour.
-- **A `nanny.toml` that sets `steps = 0` (unlimited)** — the operator configured it that way.
-- **Passthrough mode** — when running outside of `nanny run`, macros and decorators are no-ops by design.
-- **A developer choosing weak limits** — nanny enforces what it is told to enforce.
+- **An agent that calls tools not in the allowlist**: nanny stops it. That is the intended behaviour.
+- **A `nanny.toml` that sets `steps = 0` (unlimited)**: the operator configured it that way.
+- **Passthrough mode**: when running outside of `nanny run`, macros and decorators are no-ops by design.
+- **A developer choosing weak limits**: nanny enforces what it is told to enforce.
 
 ---
 

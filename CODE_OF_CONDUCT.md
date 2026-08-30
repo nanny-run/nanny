@@ -1,6 +1,6 @@
 # Code of Conduct
 
-> **Audience:** Everyone who participates in the Nanny community — contributors, users, and maintainers.
+> **Audience:** Everyone who participates in the Nanny community, contributors, users, and maintainers.
 
 Nanny is an infrastructure project. Its community should reflect the same properties as the software: predictable, honest, and focused.
 
@@ -44,4 +44,4 @@ If you witness or experience behaviour that violates this standard, report it pr
 
 ---
 
-_This Code of Conduct applies to the Nanny OSS project. It is not a legal document — it is a social contract between people who share a goal._
+_This Code of Conduct applies to the Nanny OSS project. It is not a legal document, it is a social contract between people who share a goal._
