@@ -951,7 +951,7 @@ impl NannyConfig {
         let canonical =
             serde_json::to_value(self).expect("NannyConfig is plain data and always serialises");
         let canonical = serde_json::to_string(&canonical).expect("a Value always serialises");
-        format!("{:x}", Sha256::digest(canonical.as_bytes()))
+        hex::encode(Sha256::digest(canonical.as_bytes()))
     }
 }
 
