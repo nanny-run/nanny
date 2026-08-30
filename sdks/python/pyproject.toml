@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "nanny-sdk"
 version = "0.6.0"
-description = "Python SDK for the Nanny execution boundary — @tool, @rule, @agent decorators"
+description = "Python SDK for Nanny, the authorization and audit layer for AI agents. @tool, @rule, @agent decorators"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.11"
