@@ -54,7 +54,7 @@ Every stale page on this site got there because that step was optional.
 ## Terminology
 
 - **Nanny** — the product name; capitalise in prose, lowercase as the CLI command (`nanny run`)
-- **enforcement primitive** — the correct description of what Nanny is; not "middleware", "wrapper", "proxy", or "SDK"
+- **authorization and audit layer** — the correct description of what Nanny is; not "execution boundary", "enforcement primitive", "middleware", "wrapper", "proxy", or "SDK"
 - **governed run** — a process running under `nanny run` with enforcement active
 - **passthrough mode** — when macros/decorators are no-ops because `nanny run` is not active
 - **stop reason** — the value in `ExecutionStopped.reason`; always use the exact enum name (`RuleDenied`, not "rule violation")

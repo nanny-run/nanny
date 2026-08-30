@@ -11,7 +11,7 @@ They share the same repo and version number but have no toolchain overlap.
 
 ## Architecture
 
-**Nanny is an enforcement primitive for autonomous AI agents.** It stops agents that exceed limits (steps, tokens, timeout) or violate rules.
+**Nanny is the authorization and audit layer for AI agents that take real-world actions.** It refuses tool calls the operator has not authorized, and records every decision.
 
 **Key concept**: Nanny becomes the **parent process** of your agent via `nanny run`. All enforcement happens in the parent; the child cannot bypass it.
 
