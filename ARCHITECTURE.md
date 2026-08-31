@@ -40,7 +40,7 @@ The bridge runs as a thread inside the `nanny` process. It communicates with the
 
 **Governance server (`nanny run --serve`):**
 
-The bridge runs as a long-lived standalone daemon. Agents connect to it over TCP, with mutual TLS enforced on non-loopback addresses. Multiple agents, on multiple machines, can connect to the same server simultaneously. All of their tool calls are counted against the same shared budget and step limit.
+The bridge runs as a long-lived standalone daemon. Agents connect to it over TCP, with mutual TLS enforced on non-loopback addresses. Multiple agents, on multiple machines, can connect to the same server simultaneously. All of their tool calls are governed by the same allowlist and rules, and counted against the same per-tool `max_calls`.
 
 The governance server is the right choice when:
 - Agents run in separate processes or containers and need a shared enforcement boundary

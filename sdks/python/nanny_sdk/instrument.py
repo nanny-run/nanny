@@ -2,8 +2,8 @@
 
 Call once at agent startup to automatically submit LLM token usage, plus the
 model, provider, and (auto-detected) harness, to the bridge on every call. The
-bridge debits tokens from the shared ledger and records the attribution the cloud
-uses for Fleet Intelligence (cost, model/provider/harness breakdowns).
+bridge records what was measured and the attribution the cloud reads for cost and
+model/provider/harness breakdowns. Nothing is enforced from these numbers.
 
 Usage::
 

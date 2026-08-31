@@ -277,7 +277,7 @@ def read_file(path: str) -> str:
 
 All decorators are no-ops when running outside `nanny run`, zero overhead in development and CI.
 
-**LLM token tracking:** call `nanny_sdk.instrument(client)` once at startup to automatically report LLM token usage to Nanny's budget. Works with OpenAI, Groq, Together AI, Azure OpenAI, LiteLLM, Anthropic, Mistral, Google Gemini, and Cohere v2:
+**LLM token tracking:** call `nanny_sdk.instrument(client)` once at startup to have Nanny measure LLM token usage. Measurement only, nothing is enforced from it. Works with OpenAI, Groq, Together AI, Azure OpenAI, LiteLLM, Anthropic, Mistral, Google Gemini, and Cohere v2:
 
 ```python
 import nanny_sdk, openai

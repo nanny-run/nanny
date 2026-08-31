@@ -20,13 +20,9 @@ Thank you for taking the time to contribute. Nanny is a small, focused primitive
     - [Documentation](#documentation)
   - [What belongs elsewhere](#what-belongs-elsewhere)
   - [Codebase map](#codebase-map)
+  - [Doc map](#doc-map)
   - [Reference examples](#reference-examples)
-  - [Setting up locally](#setting-up-locally)
-  - [Running tests](#running-tests)
-  - [Opening a pull request](#opening-a-pull-request)
   - [Release process](#release-process)
-  - [Reporting bugs](#reporting-bugs)
-  - [Code style](#code-style)
 
 ---
 
@@ -147,7 +143,7 @@ If your PR changes user-facing behaviour, CLI output, config schema, or event fo
 | Crate     | crates.io name  | Developer-facing | What it does                                                                                   |
 | --------- | --------------- | ---------------- | ---------------------------------------------------------------------------------------------- |
 | `cli`     | `nannyd`        | ✓                | The `nanny` binary and Rust SDK (`#[tool]`, `#[rule]`, `#[agent]`)                             |
-| `core`    | `nanny-core`    | ✗                | Traits (`Policy`, `Ledger`, `ToolExecutor`) and the `ExecutionEvent` type. No implementations. |
+| `core`    | `nanny-core`    | ✗                | Traits (`Policy`, `ToolExecutor`) and the `ExecutionEvent` type. No implementations.           |
 | `runtime` | `nanny-runtime` | ✗                | Concrete impls: `ToolPermissionPolicy`, `RuleEvaluator`, `ChainPolicy`, `ToolRegistry`, built-in tools |
 | `bridge`  | `nanny-bridge`  | ✗                | Local HTTP enforcement server (Unix socket / TCP); holds all execution state                   |
 | `config`  | `nanny-config`  | ✗                | Parses `nanny.toml`; owns `NannyConfig`                                                        |
@@ -174,5 +170,47 @@ If you are adding a new enforcement rule, it goes in `runtime`. If you are addin
 ```sh
 uv run pytest ../../packs/nanny-recommended/tests
 ```
+
+## Release process
+
+Pushing a `v*` tag is the whole release. `.github/workflows/release.yml` then
+builds four platform binaries, publishes a GitHub Release with notes extracted
+from `CHANGELOG.md`, updates the Homebrew tap, publishes six crates to
+crates.io in dependency order, and publishes the Python SDK to PyPI over OIDC.
+There is nothing to run by hand.
+
+Four things must be true before the tag, and the workflow fails if any is not:
+
+| Gate | Requirement |
+| --- | --- |
+| `nannyd` version in `Cargo.toml` | equals the tag without its `v` |
+| `version` in `sdks/python/pyproject.toml` | equals the tag without its `v` |
+| `## [<version>]` in `CHANGELOG.md` | present, and not empty |
+| the tag itself | does not already exist locally or on the remote |
+
+So a release is: land everything, bump both versions, write the CHANGELOG
+entry, then tag.
+
+```sh
+git checkout main && git pull --ff-only
+git tag v0.6.0
+git push origin v0.6.0
+```
+
+If a publish job fails after the GitHub Release already exists, re-run just the
+publishing jobs without rebuilding:
+
+```sh
+gh workflow run Release -f version=v0.6.0
+```
+
+Crate publishing is idempotent: a crate already on crates.io is skipped, so a
+re-run is safe.
+
+**Do not edit `homebrew/nannyd.rb` by hand.** The workflow rewrites its version
+and checksums when it copies the formula to the tap, so the version committed
+here is a placeholder and is expected to lag.
+
+---
 
 _Nanny is open source under the [Apache-2.0 license](LICENSE)._

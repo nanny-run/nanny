@@ -105,7 +105,7 @@ uv run pytest ../../packs/nanny-recommended/tests
 - **Fork model**: Fork → clone your fork → PR to `main`
 - **Conventional commits**: `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`
 - **Tag protection**: `v*` tags restricted to maintainers only
-- **Release checklist**: Bump workspace version → Homebrew formula → Python SDK → `CHANGELOG.md` → tests pass → clippy clean
+- **Release checklist**: Bump workspace version → Python SDK version → `CHANGELOG.md` entry → tests pass → clippy clean → tag. The Homebrew formula is rewritten by the release workflow, never by hand. See CONTRIBUTING.md's release process.
 
 ## Key directories
 
