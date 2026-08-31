@@ -642,7 +642,6 @@ fn cmd_run(
 
     // ── Resolve declared rule packs ───────────────────────────────────────────
     let declared_packs = resolve_declared_packs(&config, config_dir)?;
-    let _ = &declared_packs;
 
     // Require [start]: nanny run always reads the command from config.
     let start = config
@@ -864,6 +863,25 @@ fn cmd_run(
              ({} tool(s) were allowed). \
              The model may have ignored its tool definitions.",
             metrics.allowed_tool_count
+        );
+    }
+
+    // Warn when a pack was declared and nothing ever evaluated it.
+    //
+    // Pack rules are loaded and run by the SDK, in the agent's own process, and
+    // only the Python SDK does so today. A Rust agent declaring a pack gets it
+    // verified and pinned and then enforced by nothing, which is the one
+    // failure this project cannot let pass quietly.
+    //
+    // A warning rather than a stop: `POST /rules` is fire-and-forget by design,
+    // so a lost declaration must never take a governed run down with it.
+    if !declared_packs.is_empty() && metrics.declared_rule_count == 0 {
+        eprintln!(
+            "nanny: warning, {} rule pack(s) declared but no rule was registered by the agent. \
+             Pack rules are loaded by the SDK, and only the Python SDK loads them today. \
+             Nothing in {:?} enforced anything during this run.",
+            declared_packs.len(),
+            declared_packs.iter().map(|p| p.slug()).collect::<Vec<_>>()
         );
     }
 

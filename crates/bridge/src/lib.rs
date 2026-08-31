@@ -51,6 +51,10 @@ pub struct BridgeMetrics {
     pub tool_call_count: usize,
     /// Number of distinct tools that were allowed (configured in `[tools]`).
     pub allowed_tool_count: usize,
+    /// How many rules the SDK reported registering, pack rules included.
+    ///
+    /// Zero against a config that declares packs means nothing evaluated them.
+    pub declared_rule_count: usize,
 }
 
 // ── BridgeAddress ─────────────────────────────────────────────────────────────
@@ -311,6 +315,7 @@ impl Bridge {
             tokens_spent: guard.tokens_spent,
             tool_call_count: guard.tool_call_history.len(),
             allowed_tool_count: guard.allowed_tools.len(),
+            declared_rule_count: guard.last_rules.as_ref().map_or(0, |r| r.len()),
         }
     }
 
@@ -1914,6 +1919,17 @@ mod tests {
         let (_, body) = post(&b, "/rule/evaluate", r#"{"tool":"echo"}"#);
         let v = json_val(&body);
         assert_eq!(v["status"], "denied");
+    }
+
+    /// The count the CLI reads to tell "packs declared and enforced" apart from
+    /// "packs declared and enforced by nothing", which look identical otherwise.
+    #[test]
+    fn metrics_report_how_many_rules_the_agent_registered() {
+        let b = started(1000);
+        assert_eq!(b.metrics().declared_rule_count, 0, "nothing declared yet");
+
+        post(&b, "/rules", r#"{"rules":["a_rule","b_rule"]}"#);
+        assert_eq!(b.metrics().declared_rule_count, 2);
     }
 
     #[test]

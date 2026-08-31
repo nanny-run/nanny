@@ -6,6 +6,14 @@ description: Install curated rules with one command, pinned to a version.
 A rule pack is a versioned set of rules you install into your project. You write
 `@rule` for your own private rules; everything else comes from a pack.
 
+<Warning>
+  Packs are enforced by the Python SDK. Their rules are ordinary `@rule`
+  functions that register when your agent imports them, so something has to
+  load them, and only `nanny_sdk` does. A Rust agent can install and pin a
+  pack, and its rules will not run. `nanny run` warns at the end of any run
+  where a declared pack registered no rules.
+</Warning>
+
 ## Install one
 
 ```bash

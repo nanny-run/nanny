@@ -103,6 +103,9 @@ nanny rules add nanny:recommended@1.0.0 --from ./packs/nanny-recommended
 
 Your source is never edited. `@rule` stays for your own private rules.
 
+Pack rules are loaded and evaluated by the Python SDK. A Rust agent can install
+and pin a pack, and its rules will not run.
+
 > **Scope:** Nanny governs agents within a single process today. When all agents run in the same process, as in CrewAI, LangGraph, AutoGen, or any framework that orchestrates within one Python or Rust runtime, every agent is governed. For cross-process and cross-machine enforcement, use the governance server.
 
 ---
