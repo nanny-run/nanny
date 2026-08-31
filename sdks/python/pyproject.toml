@@ -9,7 +9,15 @@ description = "Python SDK for Nanny, the authorization and audit layer for AI ag
 readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.11"
-dependencies = ["httpx>=0.28.1"]
+dependencies = [
+    "httpx>=0.28.1",
+    # Not imported here. httpx requires idna with no lower bound of its own,
+    # so this is the only place a floor can be set for anyone installing the
+    # SDK. Below 3.15, idna.encode() walks a crafted all-codepoint label
+    # before the length check rejects it, so a long enough argument burns CPU
+    # (GHSA follow-up to CVE-2024-3651, complete only as of 3.15).
+    "idna>=3.15",
+]
 
 [dependency-groups]
 dev = [
