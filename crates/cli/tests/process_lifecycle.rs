@@ -92,31 +92,41 @@ fn write_app_identity(dir: &Path) -> String {
     id
 }
 
-/// Ask the OS for a port that is genuinely free right now.
+/// Polls until the governor for `app_id` records the address it bound, and
+/// returns it.
 ///
-/// Binding to port 0 makes the kernel pick one, then we release it and hand
-/// the number to the server the test is about to spawn.
+/// Tests ask for `127.0.0.1:0` and read the port back from here rather than
+/// picking one up front. Probing for a free port and then handing the number
+/// to a child process leaves a window in which any other process can take it,
+/// and `--addr` is exact-or-error for everything but the default address, so
+/// the governor exits with "address already in use" instead of stepping aside.
+/// Under `cargo test --workspace`, where many test binaries claim ephemeral
+/// ports at once, that window is hit often enough to matter. Asking for port 0
+/// closes it: the kernel assigns the port at bind time and cannot hand the
+/// same one to anyone else.
 ///
-/// Hardcoded port numbers do not work here. These tests run in parallel, so a
-/// reused number makes a test that passes alone fail in a suite; and across
-/// back-to-back `cargo test` runs the previous run's sockets linger in
-/// TIME_WAIT on those exact numbers. Both failure modes look like a broken
-/// server rather than a broken test, which is the worst kind of flake.
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .expect("the OS must be able to hand out an ephemeral port")
-        .local_addr()
-        .expect("a bound listener always has a local address")
-        .port()
+/// The server writes this file only after a successful bind, so its appearance
+/// is also the readiness signal a port probe used to provide.
+fn wait_for_bound_addr(home: &Path, app_id: &str, attempts: u32) -> Option<String> {
+    let addr_file = home
+        .join(".nanny")
+        .join("servers")
+        .join(app_id)
+        .join("server.addr");
+    for _ in 0..attempts {
+        // Written whole via one `write`, but read defensively anyway: an empty
+        // read here would otherwise surface as an unparseable address later.
+        if let Ok(addr) = std::fs::read_to_string(&addr_file) {
+            let addr = addr.trim().to_string();
+            if !addr.is_empty() {
+                return Some(addr);
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    None
 }
 
-/// Polls a loopback port until something accepts a connection, `attempts`
-/// times at 100 ms apart.
-///
-/// `connect_timeout`, not plain `connect`: on Windows a connect to a closed
-/// loopback port blocks for roughly two seconds on SYN retries instead of
-/// failing immediately, which stretches the poll interval from 100 ms to ~2 s
-/// and turns a short readiness window into a false negative.
 /// Polls until `path` exists, or `attempts` × 100 ms elapse.
 ///
 /// Used where "the port is listening" is not the property under test. The
@@ -125,19 +135,6 @@ fn free_port() -> u16 {
 fn wait_for_file(path: &Path, attempts: u32) -> bool {
     for _ in 0..attempts {
         if path.exists() {
-            return true;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-    false
-}
-
-fn wait_for_port(port: u16, attempts: u32) -> bool {
-    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-    for _ in 0..attempts {
-        if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(200))
-            .is_ok()
-        {
             return true;
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -410,20 +407,17 @@ log = "stdout"
 "#,
     )
     .unwrap();
-    write_app_identity(&dir);
-
-    // Pick a port for the server. We'll probe it then kill the process.
-    let port = free_port();
+    let app_id = write_app_identity(&dir);
 
     let mut child = Command::new(nanny_bin())
         .current_dir(&dir)
         .env("NANNY_HOME", &home)
-        .args(["run", "--serve", "--addr", &format!("127.0.0.1:{port}")])
+        .args(["run", "--serve", "--addr", "127.0.0.1:0"])
         .spawn()
         .expect("nanny run --serve must spawn");
 
-    // Poll until the port accepts connections (up to 5s).
-    let ready = wait_for_port(port, 50);
+    // Wait for the governor to record the address it bound (up to 5s).
+    let ready = wait_for_bound_addr(&home, &app_id, 50).is_some();
 
     // Kill the server process.
     let _ = child.kill();
@@ -466,7 +460,6 @@ log = "stdout"
 
     // Start a plain-HTTP governance server on a loopback port, with its own
     // app identity, `--serve` requires one to key its state.
-    let server_port = free_port();
     let server_toml_dir = temp_dir();
     fs::write(
         server_toml_dir.join("nanny.toml"),
@@ -483,17 +476,12 @@ log = "stdout"
     let mut server = Command::new(nanny_bin())
         .current_dir(&server_toml_dir)
         .env("NANNY_HOME", &home)
-        .args([
-            "run",
-            "--serve",
-            "--addr",
-            &format!("127.0.0.1:{server_port}"),
-        ])
+        .args(["run", "--serve", "--addr", "127.0.0.1:0"])
         .spawn()
         .expect("governance server must spawn");
 
     // Wait for the server to be ready.
-    let ready = wait_for_port(server_port, 50);
+    let ready = wait_for_bound_addr(&home, &app_id, 50).is_some();
     assert!(ready, "governance server must become ready within 5 s");
 
     // Join it explicitly by id.
@@ -572,20 +560,14 @@ cmd = "echo joined-work"
         "the two apps must be distinct for this test to mean anything"
     );
 
-    let server_port = free_port();
     let mut server = Command::new(nanny_bin())
         .current_dir(&server_dir)
         .env("NANNY_HOME", &home)
-        .args([
-            "run",
-            "--serve",
-            "--addr",
-            &format!("127.0.0.1:{server_port}"),
-        ])
+        .args(["run", "--serve", "--addr", "127.0.0.1:0"])
         .spawn()
         .expect("governance server must spawn");
 
-    let ready = wait_for_port(server_port, 50);
+    let ready = wait_for_bound_addr(&home, &governor_id, 50).is_some();
     assert!(ready, "governance server must become ready within 5 s");
 
     let output = Command::new(nanny_bin())
@@ -733,21 +715,15 @@ log = "file"
     .unwrap();
     let governor_id = write_app_identity(&server_dir);
 
-    let server_port = free_port();
     let mut server = Command::new(nanny_bin())
         .current_dir(&server_dir)
         .env("NANNY_HOME", &home)
-        .args([
-            "run",
-            "--serve",
-            "--addr",
-            &format!("127.0.0.1:{server_port}"),
-        ])
+        .args(["run", "--serve", "--addr", "127.0.0.1:0"])
         .stdout(std::process::Stdio::piped())
         .spawn()
         .expect("governor must spawn");
 
-    let ready = wait_for_port(server_port, 100);
+    let ready = wait_for_bound_addr(&home, &governor_id, 100).is_some();
     assert!(ready, "governor must become ready within 10 s");
 
     // Binding the listener and launching [start].cmd are separate steps, and
@@ -821,23 +797,17 @@ fn serve_without_a_start_section_stays_headless() {
     let home = temp_dir();
     let server_dir = temp_dir();
     fs::write(server_dir.join("nanny.toml"), r#""#).unwrap();
-    write_app_identity(&server_dir);
+    let app_id = write_app_identity(&server_dir);
 
-    let server_port = free_port();
     let mut server = Command::new(nanny_bin())
         .current_dir(&server_dir)
         .env("NANNY_HOME", &home)
-        .args([
-            "run",
-            "--serve",
-            "--addr",
-            &format!("127.0.0.1:{server_port}"),
-        ])
+        .args(["run", "--serve", "--addr", "127.0.0.1:0"])
         .stdout(std::process::Stdio::piped())
         .spawn()
         .expect("governor must spawn");
 
-    let ready = wait_for_port(server_port, 100);
+    let ready = wait_for_bound_addr(&home, &app_id, 100).is_some();
 
     let _ = server.kill();
     let out = server.wait_with_output().expect("governor must be reaped");
