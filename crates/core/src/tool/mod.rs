@@ -59,22 +59,12 @@ pub enum ToolError {
 /// The contract for a single tool.
 ///
 /// Any type that implements this can be registered and called by the executor.
-/// Tools declare their own cost: the executor charges that amount
-/// when the tool is called successfully.
 pub trait Tool: Send + Sync {
     /// The unique name used to identify this tool in config and agent output.
     /// Must be stable: changing this is a breaking change.
     fn name(&self) -> &str;
 
-    /// Cost units charged when this tool is called successfully.
-    ///
-    /// No charge on failure: the budget is only spent when work is done.
-    fn declared_cost(&self) -> u64;
-
     /// Execute the tool with the given arguments.
-    ///
-    /// Returns `Ok(ToolOutput)` on success: cost is then charged.
-    /// Returns `Err(ToolError)` on failure: no cost is charged.
     fn execute(&self, args: &ToolArgs) -> Result<ToolOutput, ToolError>;
 }
 
@@ -119,10 +109,4 @@ pub trait ToolExecutor {
     /// Returns `Err(ToolCallError::NotFound)` if the tool is not registered.
     /// Returns `Err(ToolCallError::Execution)` if the tool fails.
     fn call(&self, name: &str, args: &ToolArgs) -> Result<ToolOutput, ToolCallError>;
-
-    /// Return the declared cost for a named tool, if it exists.
-    ///
-    /// Used by the executor to charge tokens after a successful call.
-    /// Returns `None` if the tool is not registered.
-    fn declared_cost(&self, name: &str) -> Option<u64>;
 }

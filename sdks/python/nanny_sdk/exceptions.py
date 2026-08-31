@@ -47,7 +47,7 @@ class BridgeUnavailable(NannyStop):
 
 
 class ExecutionStopped(NannyStop):
-    """The run this call belongs to has already stopped (G3/G7).
+    """The run this call belongs to has already stopped.
 
     Raised when an action endpoint answers 410 Gone: the run was stopped on an
     earlier call, possibly by another process sharing the same ``NANNY_RUN_ID``.

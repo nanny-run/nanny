@@ -33,7 +33,7 @@ Mark a function as a tool that Nanny should govern:
 ```python
 from nanny_sdk import tool
 
-@tool(tokens=10)
+@tool()
 def fetch_page(url: str) -> str:
     import httpx
     return httpx.get(url).text
@@ -43,27 +43,19 @@ When the agent calls `fetch_page`:
 
 1. Nanny checks: is `fetch_page` in the `[tools] allowed` list?
 2. Nanny checks: has `fetch_page` exceeded `[tools.fetch_page] max_calls`?
-3. Nanny records 10 tokens for attribution.
+3. Nanny records the call, with the labels the operator declared for it.
 4. If any check fails, a `NannyStop` exception is raised, the function body never runs.
 
 Works identically for async functions:
 
 ```python
-@tool(tokens=10)
+@tool()
 async def fetch_page(url: str) -> str:
     import httpx
     async with httpx.AsyncClient() as client:
         return (await client.get(url)).text
 ```
 
-### Tokens
-
-The `tokens` argument is required. Set it to `0` for tools you want tracked but not charged:
-
-```python
-@tool(tokens=0)
-def log_step(msg: str) -> None: ...
-```
 
 ### Matching the tool allowlist
 
@@ -136,7 +128,7 @@ Rules are evaluated client-side on every tool call, before Nanny’s enforcement
 RuleDenied("no_spiral")
 ```
 
-The denied tool never runs and no tokens are charged.
+The denied tool never runs.
 
 ### PolicyContext fields
 
@@ -322,12 +314,12 @@ See [Long-lived processes and NannyStop](/v0.6/guides/governance-server#long-liv
 ```python
 from nanny_sdk import tool, rule, agent
 
-@tool(tokens=10)
+@tool()
 def fetch_page(url: str) -> str:
     import httpx
     return httpx.get(url).text
 
-@tool(tokens=5)
+@tool()
 def read_file(path: str) -> str:
     with open(path) as f:
         return f.read()
@@ -373,13 +365,13 @@ from collections import deque
 
 # Each tool declares its token cost. The decorator fires on every call
 # regardless of which agent invoked it.
-@tool(tokens=10)
+@tool()
 def compute_stats(metric: str, path: str) -> dict: ...
 
-@tool(tokens=10)
+@tool()
 def detect_anomalies(metric: str, path: str) -> list: ...
 
-@tool(tokens=5)
+@tool()
 def write_report(content: str, output_path: str) -> str: ...
 
 # A rule that prevents the analysis agent from looping on the same computation.
@@ -435,7 +427,7 @@ from langchain_core.tools import tool as lc_tool
 from nanny_sdk import tool as nanny_tool
 
 @lc_tool                    # outer: LangChain registers for tool dispatch
-@nanny_tool(tokens=5)         # inner: Nanny intercepts before file is opened
+@nanny_tool()         # inner: Nanny intercepts before file is opened
 def read_file(path: str) -> str:
     """Read a source file from disk."""
     with open(path) as f:
@@ -453,7 +445,7 @@ from crewai.tools import tool as crew_tool
 from nanny_sdk import tool as nanny_tool
 
 @crew_tool                  # outer: CrewAI registers for agent dispatch
-@nanny_tool(tokens=15)        # inner: Nanny intercepts before function runs
+@nanny_tool()        # inner: Nanny intercepts before function runs
 def generate_chart(metric: str, output_dir: str) -> str:
     """Generate an interactive Plotly chart for a metric."""
     # ... chart generation ...

@@ -82,15 +82,15 @@ def _token() -> str:
 
 
 def _run_id() -> str | None:
-    """Run id for this process on the governance server (G3).
+    """Run id for this process on the governance server.
 
     Checks the `run_scope()` ContextVar first (isolated per thread/task, so
     a host running several concurrent runs never races on it), then falls
     back to `NANNY_RUN_ID`, set by `nanny run` per invocation, or shared
     across processes on purpose to share one run. Absent means the
-    server's default run (shared-budget behaviour). The local bridge ignores
-    it, one process is always one run. Mirrors the Rust client
-    (`crates/cli/src/lib.rs`): run id is which budget you spend, distinct
+    server's default run, shared by every headerless client. The local bridge
+    ignores it, one process is always one run. Mirrors the Rust client
+    (`crates/cli/src/lib.rs`): run id is which run you are part of, distinct
     from `NANNY_SESSION_TOKEN` (who you are).
 
     With no scope ever entered, this resolves exactly as it did before
@@ -345,7 +345,7 @@ def _raise_stop_from_410(resp: httpx.Response) -> None:
     Mirrors the Rust client: a stopped run answers action endpoints with 410
     carrying the stop reason (``{"error":"execution stopped","reason":"…"}``).
     We surface it as a typed stop instead of letting httpx raise a raw
-    ``HTTPStatusError``, so agents and frameworks catch it cleanly (G7). The run
+    ``HTTPStatusError``, so agents and frameworks catch it cleanly. The run
     stopped on an earlier call, possibly on another process sharing the same
     ``NANNY_RUN_ID``, so the precise tool/rule detail is not on this response;
     ``AgentCompleted`` maps to its class, everything else to
@@ -436,7 +436,6 @@ def get_status() -> PolicyContext:
 
 def call_tool(
     tool_name: str,
-    tokens: int,
     args: dict[str, Any],
     cleared_by: list[str] | None = None,
 ) -> None:
@@ -446,7 +445,7 @@ def call_tool(
     reached at all: a governed tool call must fail closed, not silently run
     ungoverned because the governor happened to be down.
     """
-    payload: dict[str, Any] = {"tool": tool_name, "tokens": tokens, "args": args}
+    payload: dict[str, Any] = {"tool": tool_name, "args": args}
     # Which rules evaluated and allowed this call. Assembled here because this
     # is the only place it exists: rule bodies run in this process, before the
     # bridge is contacted, so the governor cannot observe them. Without it a

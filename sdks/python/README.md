@@ -40,7 +40,7 @@ uv run agent.py
 ```python
 from nanny_sdk import tool
 
-@tool(tokens=10)
+@tool()
 def fetch_page(url: str) -> str:
     import httpx
     return httpx.get(url).text
@@ -51,7 +51,7 @@ Before `fetch_page` runs, Nanny checks the allowlist, the per-tool call cap, and
 Async functions work identically:
 
 ```python
-@tool(tokens=10)
+@tool()
 async def fetch_page(url: str) -> str:
     async with httpx.AsyncClient() as client:
         r = await client.get(url)

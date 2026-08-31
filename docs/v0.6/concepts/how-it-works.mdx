@@ -109,7 +109,7 @@ used.
 When running outside `nanny run`, every macro becomes a no-op:
 
 ```rust
-#[tool(tokens = 10)]
+#[tool]
 fn search(query: &str) -> String {
     // runs normally, no enforcement
 }

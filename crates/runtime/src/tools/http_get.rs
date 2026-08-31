@@ -6,7 +6,7 @@
 // - URL argument is required and must start with http:// or https://
 // - Response body is capped at 1MB: fail closed on large responses
 // - Timeout is enforced: the tool cannot run forever
-// - Cost is only charged on success: failed calls do not spend budget
+// - Failure is reported as its own variant, never as an empty success
 // - Non-2xx HTTP responses are treated as failures
 
 use nanny_core::tool::{Tool, ToolArgs, ToolError, ToolOutput};
@@ -17,9 +17,6 @@ use std::time::Duration;
 /// A tool that reads unbounded data is a resource leak.
 /// Fail closed at 1MB.
 const MAX_BODY_BYTES: u64 = 1024 * 1024;
-
-/// Cost units charged for a successful http_get call.
-const HTTP_GET_COST: u64 = 10;
 
 /// Default timeout for the HTTP request.
 const DEFAULT_TIMEOUT_MS: u64 = 5_000;
@@ -59,12 +56,6 @@ impl Tool for HttpGet {
         "http_get"
     }
 
-    /// Cost charged on success only.
-    /// Tokens are never charged for a failed request.
-    fn declared_cost(&self) -> u64 {
-        HTTP_GET_COST
-    }
-
     fn execute(&self, args: &ToolArgs) -> Result<ToolOutput, ToolError> {
         // ── Step 1: Require the url argument ──────────────────────────────────
         let url = args.get("url").ok_or_else(|| ToolError::InvalidArgument {
@@ -89,7 +80,7 @@ impl Tool for HttpGet {
         // no shared state between tool executions. Each call is independent.
         //
         // `timeout_global` bounds the whole operation, not each socket read, so
-        // a server that trickles bytes forever still cannot outlive the budget.
+        // a server that trickles bytes forever still cannot outlive the deadline.
         let agent = ureq::Agent::new_with_config(
             ureq::Agent::config_builder()
                 .timeout_global(Some(Duration::from_millis(self.timeout_ms)))
@@ -100,7 +91,7 @@ impl Tool for HttpGet {
         let response = agent.get(url).call().map_err(|e| match e {
             // Non-2xx HTTP status: the server replied but with an error.
             ureq::Error::StatusCode(code) => ToolError::ExecutionFailed(format!("HTTP {code}")),
-            // A timeout is its own variant, so the budget is reported as a
+            // A timeout is its own variant, so the deadline is reported as a
             // timeout rather than guessed at from an error message.
             ureq::Error::Timeout(_) => ToolError::Timeout {
                 timeout_ms: self.timeout_ms,
@@ -226,11 +217,6 @@ mod tests {
             matches!(result, Err(ToolError::Timeout { timeout_ms: 250 })),
             "expected a timeout, got {result:?}"
         );
-    }
-
-    #[test]
-    fn declared_cost_is_ten() {
-        assert_eq!(tool().declared_cost(), 10);
     }
 
     #[test]

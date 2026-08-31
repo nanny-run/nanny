@@ -100,7 +100,7 @@ fn call_tool_allowed_returns_run() {
     let bridge = start_bridge(&["search_web"]);
     inject_env(&bridge);
 
-    let verdict = call_tool("search_web", 10);
+    let verdict = call_tool("search_web");
 
     clear_env();
     assert!(
@@ -118,7 +118,7 @@ fn call_tool_not_in_allowlist_returns_stop() {
     let bridge = start_bridge(&["search_web"]);
     inject_env(&bridge);
 
-    let verdict = call_tool("send_email", 0);
+    let verdict = call_tool("send_email");
 
     clear_env();
     assert!(

@@ -24,7 +24,7 @@ def test_governed_requests_inside_a_scope_carry_its_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """End to end: the id run_scope() sets is exactly what the next request
-    sends as X-Nanny-Run-Id, the same header G3's existing tests cover for a
+    sends as X-Nanny-Run-Id, the same header the existing tests cover for a
     manually-set NANNY_RUN_ID (see test_client.py).
     """
     monkeypatch.setenv("NANNY_SESSION_TOKEN", "tok")

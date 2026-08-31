@@ -40,7 +40,7 @@ The bridge runs as a thread inside the `nanny` process. It communicates with the
 
 **Governance server (`nanny run --serve`):**
 
-The bridge runs as a long-lived standalone daemon. Agents connect to it over TCP, with mutual TLS enforced on non-loopback addresses. Multiple agents, on multiple machines, can connect to the same server simultaneously. All of their tool calls are counted against the same shared budget and step limit.
+The bridge runs as a long-lived standalone daemon. Agents connect to it over TCP, with mutual TLS enforced on non-loopback addresses. Multiple agents, on multiple machines, can connect to the same server simultaneously. All of their tool calls are governed by the same allowlist and rules, and counted against the same per-tool `max_calls`.
 
 The governance server is the right choice when:
 - Agents run in separate processes or containers and need a shared enforcement boundary
@@ -85,7 +85,7 @@ A **tool** is a function your agent calls to do work. When you declare a functio
 
 - It is registered on the allowlist
 - Each call passes through the bridge for policy enforcement
-- Tokens are charged and the step count increments on each successful call
+- Each successful call is counted, against the tool's `max_calls` and in the audit log
 - Any rule denial stops execution before the function body runs
 
 Tools are declared in `nanny.toml` under `[tools] allowed`. The SDK decorator/macro marks the corresponding function in your code. Both are required, the config says what is permitted, the code says when it is used.
@@ -183,11 +183,11 @@ All other reasons are governance events: Nanny stopped the agent deliberately.
 Rules are evaluated on every tool call. The sequence for any tool call is:
 
 1. All registered rules are evaluated against the current execution state
-2. If any rule returns `false`, the process exits immediately, the tool never runs, no tokens are charged, no step is counted
-3. If all rules pass, the bridge evaluates the allowlist and limits
-4. If the bridge allows the call, it executes, tokens are charged, and the step count increments
+2. If any rule returns `false`, the process exits immediately, the tool never runs, and the call is never counted
+3. If all rules pass, the bridge evaluates the allowlist and the tool's `max_calls`
+4. If the bridge allows the call, it executes and the call is counted
 
-Rules fire at step 1. Everything else is downstream of that. This is why a rule denial produces `steps: 0` in the event log if it fires on the first tool call, the bridge never recorded a step because the call never reached it.
+Rules fire at step 1. Everything else is downstream of that. This is why a rule denial on the first tool call records no call at all: the bridge never saw it.
 
 Rules are evaluated in registration order. Write rules that are fast and pure, they run on every call.
 

@@ -51,6 +51,10 @@ pub struct BridgeMetrics {
     pub tool_call_count: usize,
     /// Number of distinct tools that were allowed (configured in `[tools]`).
     pub allowed_tool_count: usize,
+    /// How many rules the SDK reported registering, pack rules included.
+    ///
+    /// Zero against a config that declares packs means nothing evaluated them.
+    pub declared_rule_count: usize,
 }
 
 // ── BridgeAddress ─────────────────────────────────────────────────────────────
@@ -311,6 +315,7 @@ impl Bridge {
             tokens_spent: guard.tokens_spent,
             tool_call_count: guard.tool_call_history.len(),
             allowed_tool_count: guard.allowed_tools.len(),
+            declared_rule_count: guard.last_rules.as_ref().map_or(0, |r| r.len()),
         }
     }
 
@@ -595,17 +600,14 @@ pub(crate) fn handle_tool_call(
                 cleared_by.push(name);
             }
             // Execute tool: no lock held during execution (may be slow for http_get).
-            let cost = registry.declared_cost(&call.tool).unwrap_or(0);
             let result = registry.call(&call.tool, &call.args);
 
             match result {
                 Err(ToolCallError::NotFound { .. }) => {
                     // User-defined tool: the function body runs in the child process.
-                    // The bridge just charges the declared token cost and records the call.
-                    let cost = call.tokens.unwrap_or(0);
+                    // The bridge just records the call.
                     {
                         let mut guard = shared.lock().unwrap();
-                        guard.tokens_spent += cost;
                         *guard.tool_call_counts.entry(call.tool.clone()).or_insert(0) += 1;
                         guard.tool_call_history.push(call.tool.clone());
                         append_event(
@@ -648,7 +650,6 @@ pub(crate) fn handle_tool_call(
                 Ok(output) => {
                     {
                         let mut guard = shared.lock().unwrap();
-                        guard.tokens_spent += cost;
                         *guard.tool_call_counts.entry(call.tool.clone()).or_insert(0) += 1;
                         guard.tool_call_history.push(call.tool.clone());
                         append_event(
@@ -1138,10 +1139,6 @@ struct ToolCallRequest {
     /// pseudo-rules to the same list.
     #[serde(default)]
     cleared_by: Vec<String>,
-    /// Token cost declared by the macro at the call site.
-    /// Used when the tool is not registered in the bridge registry (user-defined tools).
-    #[serde(default)]
-    tokens: Option<u64>,
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -1458,9 +1455,6 @@ mod tests {
         fn name(&self) -> &str {
             "echo"
         }
-        fn declared_cost(&self) -> u64 {
-            10
-        }
         fn execute(&self, args: &ToolArgs) -> Result<ToolOutput, ToolError> {
             Ok(ToolOutput {
                 content: args.get("message").cloned().unwrap_or_default(),
@@ -1472,9 +1466,6 @@ mod tests {
     impl Tool for FailingTool {
         fn name(&self) -> &str {
             "fail"
-        }
-        fn declared_cost(&self) -> u64 {
-            5
         }
         fn execute(&self, _args: &ToolArgs) -> Result<ToolOutput, ToolError> {
             Err(ToolError::ExecutionFailed("simulated network error".into()))
@@ -1697,8 +1688,11 @@ mod tests {
         assert_eq!(v["result"], "hi");
     }
 
+    /// A tool call moves the call counters and nothing else. `tokens_spent`
+    /// has exactly one writer, `/llm/usage`, so the number always means
+    /// measured LLM usage rather than a figure someone declared by hand.
     #[test]
-    fn tool_call_charges_cost_and_tracks_counts() {
+    fn tool_call_tracks_counts_without_touching_tokens() {
         let b = started(1000);
         post(
             &b,
@@ -1713,16 +1707,17 @@ mod tests {
 
         let (_, body) = get(&b, "/status");
         let v = json_val(&body);
-        assert_eq!(v["tokens_spent"], 20); // 2 calls × tokens 10
+        assert_eq!(v["tool_call_counts"]["echo"], 2);
+        assert_eq!(v["tokens_spent"], 0, "a tool call measures no tokens");
     }
 
-    /// Each allowed tool call is counted and its token cost measured.
+    /// Every allowed tool call is counted in metrics().
     ///
     /// This is the bridge-level regression guard for the bug where
     /// ExecutionStopped emitted zeros. metrics() must reflect the real
-    /// accounting state so the CLI can emit accurate values.
+    /// state so the CLI can emit accurate values.
     #[test]
-    fn tool_call_is_counted_and_charged_in_metrics() {
+    fn tool_call_is_counted_in_metrics() {
         let b = started(1000);
         post(
             &b,
@@ -1737,10 +1732,7 @@ mod tests {
 
         let m = b.metrics();
         assert_eq!(m.tool_call_count, 2, "every tool call must be recorded");
-        assert_eq!(
-            m.tokens_spent, 20,
-            "each tool call must charge declared token cost"
-        );
+        assert_eq!(m.tokens_spent, 0, "a tool call measures no tokens");
     }
 
     #[test]
@@ -1787,9 +1779,9 @@ mod tests {
     }
 
     #[test]
-    fn tokens_accumulate_without_stopping_execution() {
+    fn measured_tokens_never_stop_execution() {
         // Tokens are measured, never enforced: no count ends a run.
-        let b = started(10); // echo costs 10
+        let b = started(10);
         post(
             &b,
             "/tool/call",
@@ -1801,9 +1793,11 @@ mod tests {
             r#"{"tool":"echo","args":{"message":"y"}}"#,
         );
 
+        post(&b, "/llm/usage", r#"{"input":900,"output":900}"#);
+
         assert!(matches!(b.execution_state(), ExecutionState::Running));
         let (_, status) = get(&b, "/status");
-        assert_eq!(json_val(&status)["tokens_spent"], 20);
+        assert_eq!(json_val(&status)["tokens_spent"], 1800);
     }
 
     #[test]
@@ -1815,7 +1809,7 @@ mod tests {
         assert_eq!(s, 410);
     }
 
-    /// G7: the 410 body carries the typed stop reason so the client reports the
+    /// The 410 body carries the typed stop reason so the client reports the
     /// true cause (here ToolDenied) rather than a generic "execution stopped".
     #[test]
     fn stopped_410_body_carries_typed_reason() {
@@ -1925,6 +1919,17 @@ mod tests {
         let (_, body) = post(&b, "/rule/evaluate", r#"{"tool":"echo"}"#);
         let v = json_val(&body);
         assert_eq!(v["status"], "denied");
+    }
+
+    /// The count the CLI reads to tell "packs declared and enforced" apart from
+    /// "packs declared and enforced by nothing", which look identical otherwise.
+    #[test]
+    fn metrics_report_how_many_rules_the_agent_registered() {
+        let b = started(1000);
+        assert_eq!(b.metrics().declared_rule_count, 0, "nothing declared yet");
+
+        post(&b, "/rules", r#"{"rules":["a_rule","b_rule"]}"#);
+        assert_eq!(b.metrics().declared_rule_count, 2);
     }
 
     #[test]
@@ -2133,7 +2138,7 @@ mod tests {
         assert_eq!(s, 200);
         assert_eq!(json_val(&body)["status"], "ok");
 
-        // Debited from the budget.
+        // Added to the run's measured total.
         let (_, status) = get(&b, "/status");
         assert_eq!(json_val(&status)["tokens_spent"], 42);
 
@@ -2450,7 +2455,7 @@ mod tests {
         let v = json_val(&body);
         assert_eq!(v["state"], "running");
         assert_eq!(v["tool_call_counts"]["echo"], 2);
-        assert_eq!(v["tokens_spent"], 20);
+        assert_eq!(v["tokens_spent"], 0);
     }
 
     #[test]

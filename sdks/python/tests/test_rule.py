@@ -28,7 +28,7 @@ def test_rule_allow_bridge_called(mock_bridge: HTTPServer) -> None:
     def allow_all(ctx: PolicyContext) -> bool:
         return True
 
-    @tool(tokens=10)
+    @tool()
     def my_func() -> str:
         return "result"
 
@@ -48,7 +48,7 @@ def test_rule_deny_raises_rule_denied(mock_bridge: HTTPServer) -> None:
     def no_everything(ctx: PolicyContext) -> bool:
         return False
 
-    @tool(tokens=10)
+    @tool()
     def my_func() -> str:
         return "result"
 
@@ -69,7 +69,7 @@ def test_rule_deny_tool_call_never_made(mock_bridge: HTTPServer) -> None:
     def always_deny(ctx: PolicyContext) -> bool:
         return False
 
-    @tool(tokens=10)
+    @tool()
     def my_func() -> str:
         return "result"
 
@@ -89,7 +89,7 @@ def test_rule_deny_function_body_never_runs(mock_bridge: HTTPServer) -> None:
     def deny_rule(ctx: PolicyContext) -> bool:
         return False
 
-    @tool(tokens=10)
+    @tool()
     def my_func() -> str:
         nonlocal executed
         executed = True
@@ -115,7 +115,7 @@ def test_rule_ctx_last_tool_args(mock_bridge: HTTPServer) -> None:
         captured.append(ctx)
         return True
 
-    @tool(tokens=10)
+    @tool()
     def read_file(path: str) -> str:
         return ""
 
@@ -133,7 +133,7 @@ def test_rule_ctx_requested_tool(mock_bridge: HTTPServer) -> None:
         captured.append(ctx)
         return True
 
-    @tool(tokens=10)
+    @tool()
     def search_web(query: str) -> str:
         return ""
 
@@ -165,7 +165,7 @@ def test_rule_ctx_bridge_fields_populated_from_status(mock_bridge: HTTPServer) -
         captured.append(ctx)
         return True
 
-    @tool(tokens=10)
+    @tool()
     def file_reader(path: str) -> str:
         return ""
 
@@ -200,7 +200,7 @@ def test_rule_ctx_status_failure_fails_closed(mock_bridge: HTTPServer) -> None:
     def should_not_run(ctx: PolicyContext) -> bool:  # pragma: no cover
         return True
 
-    @tool(tokens=0)
+    @tool()
     def my_func() -> str:  # pragma: no cover
         return "ok"
 
@@ -228,7 +228,7 @@ def test_multiple_rules_all_evaluated_when_passing(mock_bridge: HTTPServer) -> N
         call_log.append("b")
         return True
 
-    @tool(tokens=10)
+    @tool()
     def my_func() -> str:
         return "ok"
 
@@ -250,7 +250,7 @@ def test_multiple_rules_first_deny_stops_evaluation(mock_bridge: HTTPServer) -> 
         call_log.append("second")
         return True
 
-    @tool(tokens=10)
+    @tool()
     def my_func() -> str:
         return "ok"
 
@@ -281,7 +281,7 @@ def test_rules_evaluated_in_registration_order(mock_bridge: HTTPServer) -> None:
         call_log.append("third")
         return True
 
-    @tool(tokens=10)
+    @tool()
     def my_func() -> str:
         return "ok"
 
@@ -315,7 +315,7 @@ def test_rule_deny_stop_payload_contains_tool_and_rule_name(mock_bridge: HTTPSer
     def block_dotenv(ctx: PolicyContext) -> bool:
         return False
 
-    @tool(tokens=5)
+    @tool()
     def read_file(path: str) -> str:
         return ""
 
@@ -343,7 +343,7 @@ def test_rule_deny_stop_payload_uses_decorated_function_name(mock_bridge: HTTPSe
     def deny_all(ctx: PolicyContext) -> bool:
         return False
 
-    @tool(tokens=5)
+    @tool()
     def fetch_url(url: str) -> str:
         return ""
 
@@ -369,7 +369,7 @@ def test_passthrough_rules_not_evaluated(monkeypatch: pytest.MonkeyPatch) -> Non
 
     monkeypatch.delenv("NANNY_BRIDGE_PORT", raising=False)
 
-    @tool(tokens=10)
+    @tool()
     def my_func() -> str:
         return "direct"
 
@@ -409,7 +409,7 @@ def test_a_label_driven_rule_denies_using_history(mock_bridge: HTTPServer) -> No
             return True
         return not any(ctx.tool_has(t, "reads_untrusted") for t in ctx.tool_call_history)
 
-    @tool(tokens=10)
+    @tool()
     def send_outreach() -> str:
         return "sent"
 
@@ -439,7 +439,7 @@ def test_the_same_rule_allows_when_the_tools_are_unlabelled(mock_bridge: HTTPSer
             return True
         return not any(ctx.tool_has(t, "reads_untrusted") for t in ctx.tool_call_history)
 
-    @tool(tokens=10)
+    @tool()
     def send_outreach() -> str:
         return "sent"
 
@@ -504,7 +504,7 @@ def test_an_allowed_call_reports_the_rules_that_cleared_it(monkeypatch, mock_bri
     monkeypatch.setattr(
         _client,
         "call_tool",
-        lambda tool, tokens, args, cleared_by=None: calls.update(cleared=cleared_by),
+        lambda tool, args, cleared_by=None: calls.update(cleared=cleared_by),
     )
 
     @_decorators.tool()

@@ -21,16 +21,15 @@ They share the same repo and version number but have no toolchain overlap.
 |------|-------------|
 | **tool** | Function annotated with `#[nanny::tool]` / `@tool`, passes through bridge for enforcement |
 | **rule** | Function annotated with `#[nanny::rule]` / `@rule`, returns `false` to stop execution |
-| **agent scope** | Named limits context activated by `#[nanny::agent]` / `@agent` |
+| **agent scope** | Named phase of a run, labelled by `#[nanny::agent]` / `@agent`. Labels verdicts for the audit log; changes nothing about what is allowed |
 | **bridge** | Internal enforcement layer (Unix socket / TCP). **Never mention in user-facing docs.** |
 
-### Three limits
+### Two stop reasons
 
-Any one stops execution:
+Both are policy decisions, and they are the only ways a run is stopped:
 
-- `timeout`: wall-clock ms (no instrumentation needed)
-- `steps`: tool calls (requires SDK)
-- `tokens`: token budget (requires SDK)
+- `ToolDenied`: the tool is not in `[tools] allowed`, or it is over its `max_calls`
+- `RuleDenied`: a `@rule` returned false
 
 ## Developer workflow
 
@@ -106,7 +105,7 @@ uv run pytest ../../packs/nanny-recommended/tests
 - **Fork model**: Fork → clone your fork → PR to `main`
 - **Conventional commits**: `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`
 - **Tag protection**: `v*` tags restricted to maintainers only
-- **Release checklist**: Bump workspace version → Homebrew formula → Python SDK → `CHANGELOG.md` → tests pass → clippy clean
+- **Release checklist**: Bump workspace version → Python SDK version → `CHANGELOG.md` entry → tests pass → clippy clean → tag. The Homebrew formula is rewritten by the release workflow, never by hand. See CONTRIBUTING.md's release process.
 
 ## Key directories
 

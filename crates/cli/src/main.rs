@@ -529,8 +529,8 @@ fn build_governed_child(
         .join("certs");
 
     // Each `nanny run` is its own run on the server: a stop ends this run, not
-    // the server, so the host survives many sequential runs (G3). Set
-    // NANNY_RUN_ID yourself to make several processes share one budget and stop
+    // the server, so the host survives many sequential runs. Set
+    // NANNY_RUN_ID yourself to make several processes share one run and stop
     // together (e.g. a fleet demo); otherwise each invocation gets a fresh id.
     let run_id = std::env::var("NANNY_RUN_ID")
         .ok()
@@ -642,7 +642,6 @@ fn cmd_run(
 
     // ── Resolve declared rule packs ───────────────────────────────────────────
     let declared_packs = resolve_declared_packs(&config, config_dir)?;
-    let _ = &declared_packs;
 
     // Require [start]: nanny run always reads the command from config.
     let start = config
@@ -840,7 +839,7 @@ fn cmd_run(
 
     // ── Final event drain ─────────────────────────────────────────────────
     // Catch any events generated during the stop transition itself (e.g. a
-    // ToolDenied that caused budget exhaustion on the very last bridge call).
+    // ToolDenied raised on the very last bridge call).
     for line in bridge.drain_events() {
         let _ = log.write_raw(&line);
         if let Some(sender) = &managed {
@@ -864,6 +863,25 @@ fn cmd_run(
              ({} tool(s) were allowed). \
              The model may have ignored its tool definitions.",
             metrics.allowed_tool_count
+        );
+    }
+
+    // Warn when a pack was declared and nothing ever evaluated it.
+    //
+    // Pack rules are loaded and run by the SDK, in the agent's own process, and
+    // only the Python SDK does so today. A Rust agent declaring a pack gets it
+    // verified and pinned and then enforced by nothing, which is the one
+    // failure this project cannot let pass quietly.
+    //
+    // A warning rather than a stop: `POST /rules` is fire-and-forget by design,
+    // so a lost declaration must never take a governed run down with it.
+    if !declared_packs.is_empty() && metrics.declared_rule_count == 0 {
+        eprintln!(
+            "nanny: warning, {} rule pack(s) declared but no rule was registered by the agent. \
+             Pack rules are loaded by the SDK, and only the Python SDK loads them today. \
+             Nothing in {:?} enforced anything during this run.",
+            declared_packs.len(),
+            declared_packs.iter().map(|p| p.slug()).collect::<Vec<_>>()
         );
     }
 

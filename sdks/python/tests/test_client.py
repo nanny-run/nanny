@@ -105,7 +105,7 @@ def test_call_tool_raises_bridge_unavailable_when_unreachable(
     monkeypatch.setenv("NANNY_BRIDGE_PORT", "19999")
     monkeypatch.setenv("NANNY_SESSION_TOKEN", "test-token")
     with pytest.raises(BridgeUnavailable):
-        client.call_tool("search", 10, {})
+        client.call_tool("search", {})
 
 
 def test_health_raises_bridge_unavailable_when_unreachable(
@@ -127,7 +127,7 @@ def test_get_status_raises_bridge_unavailable_when_unreachable(
 
 
 # ---------------------------------------------------------------------------
-# G7: a 410 (this run already stopped) becomes a typed stop, not a raw HTTP error
+# A 410 (this run already stopped) becomes a typed stop, not a raw HTTP error
 # ---------------------------------------------------------------------------
 
 
@@ -137,7 +137,7 @@ def test_call_tool_410_raises_typed_stop(mock_bridge: HTTPServer) -> None:
         {"error": "execution stopped", "reason": "AgentCompleted"}, status=410
     )
     with pytest.raises(AgentCompleted):
-        client.call_tool("search", 10, {})
+        client.call_tool("search", {})
 
 
 def test_call_tool_410_generic_reason_raises_execution_stopped(mock_bridge: HTTPServer) -> None:
@@ -146,7 +146,7 @@ def test_call_tool_410_generic_reason_raises_execution_stopped(mock_bridge: HTTP
         {"error": "execution stopped", "reason": "ManualStop"}, status=410
     )
     with pytest.raises(ExecutionStopped) as excinfo:
-        client.call_tool("search", 10, {})
+        client.call_tool("search", {})
     assert excinfo.value.reason == "ManualStop"
 
 
@@ -173,12 +173,12 @@ def test_call_tool_410_from_earlier_denial_raises_execution_stopped(
         {"error": "execution stopped", "reason": "ToolDenied"}, status=410
     )
     with pytest.raises(ExecutionStopped) as excinfo:
-        client.call_tool("search", 10, {})
+        client.call_tool("search", {})
     assert excinfo.value.reason == "ToolDenied"
 
 
 # ---------------------------------------------------------------------------
-# G3: the run id (NANNY_RUN_ID) travels on every request as X-Nanny-Run-Id
+# The run id (NANNY_RUN_ID) travels on every request as X-Nanny-Run-Id
 # ---------------------------------------------------------------------------
 
 
@@ -204,5 +204,5 @@ def test_run_id_header_sent_on_tool_call(
     mock_bridge.expect_oneshot_request(
         "/tool/call", method="POST", headers={"X-Nanny-Run-Id": "team-alpha"}
     ).respond_with_json({"status": "allowed", "result": ""})
-    client.call_tool("search", 10, {})
+    client.call_tool("search", {})
     mock_bridge.check_assertions()

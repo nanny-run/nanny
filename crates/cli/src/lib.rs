@@ -13,7 +13,7 @@
 //! ```rust,ignore
 //! use nanny::{tool, rule, agent, PolicyContext};
 //!
-//! #[tool(tokens = 200)]
+//! #[tool]
 //! fn search_web(query: &str) -> String { ... }
 //!
 //! #[rule("no_spiral")]
@@ -48,9 +48,8 @@ pub use nanny_macros::agent;
 /// Fetch a URL via nanny's built-in `http_get` bridge tool.
 ///
 /// The request is executed by the nanny bridge: the calling process never
-/// opens a network connection directly. Nanny enforces the allowlist, charges
-/// tokens (200 per request), and applies the step limit before making the
-/// request.
+/// opens a network connection directly. Nanny enforces the allowlist and the
+/// tool's `max_calls` before making the request.
 ///
 /// # Passthrough mode
 ///
@@ -134,8 +133,8 @@ pub struct Usage {
 /// explicitly: after an LLM call, hand nanny the token counts already present
 /// on the response.
 ///
-/// `input + output` is debited from the active budget; `model`/`provider` (if
-/// set) are recorded as attribution labels in the audit log. Only numbers and
+/// `input + output` is added to the run's measured total; `model`/`provider`
+/// (if set) are recorded as attribution labels in the audit log. Only numbers and
 /// identifiers cross the boundary: never prompt or response content.
 ///
 /// # Passthrough mode
@@ -471,7 +470,7 @@ mod runtime {
     /// running inside a thread that also has a scope means someone asked for
     /// per-task isolation, and honouring the thread there would defeat it.
     ///
-    /// Runs stop independently, so a stop ends this run, not the server (G3).
+    /// Runs stop independently, so a stop ends this run, not the server.
     /// Absent → the server's default run. The local bridge ignores it: one
     /// process is always one run.
     /// Test-only view of the resolved run id. Not public API: tests need to
@@ -843,8 +842,8 @@ mod runtime {
     }
 
     /// POST /tool/call to the bridge.
-    pub fn call_tool(tool_name: &str, tokens: u64) -> ToolVerdict {
-        let body = format!(r#"{{"tool":"{tool_name}","tokens":{tokens}}}"#);
+    pub fn call_tool(tool_name: &str) -> ToolVerdict {
+        let body = format!(r#"{{"tool":"{tool_name}"}}"#);
         match http_post("/tool/call", &body) {
             Some(resp) if resp.status == 200 && resp.body.contains("\"allowed\"") => {
                 ToolVerdict::Run

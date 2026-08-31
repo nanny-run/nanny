@@ -27,7 +27,7 @@ hyper        = { workspace = true }
 hyper-util   = { workspace = true }
 notify       = { workspace = true }
 base64       = { workspace = true }
-# `GovernorIdentified`'s best-effort machine name (Gap G6).
+# `GovernorIdentified`'s best-effort machine name.
 hostname     = "0.4"
 
 # TCP transport: only needed on Windows (non-Unix). On macOS/Linux we use

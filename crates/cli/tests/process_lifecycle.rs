@@ -387,8 +387,8 @@ log = "stdout"
 // the governor down the moment that app exits, so a fixture like
 // `cmd = "echo hello"` leaves the listener open for only a few milliseconds.
 // This test is about the bind, not about running an app, so it keeps the
-// governor headless and therefore alive until the test kills it. T8c covers
-// the serve-plus-app path.
+// governor headless and therefore alive until the test kills it. The
+// serve-plus-app path is covered further down.
 //
 // Sandboxed via NANNY_HOME, not HOME: `dirs::home_dir()` ignores the `HOME`
 // env override on Windows, so `nanny_server_state_dir` reads `NANNY_HOME`
@@ -438,7 +438,8 @@ log = "stdout"
 // server started with `nanny run --serve` (which requires an app identity, to
 // key its state) is joined only by `nanny run --join=<that id>`.
 //
-// Sandboxed via NANNY_HOME, not HOME (see T7's comment for why).
+// Sandboxed via NANNY_HOME, not HOME, for the reason given above the
+// headless-bind test.
 
 #[test]
 fn nanny_run_joins_explicit_server_and_prints_message() {
@@ -517,14 +518,15 @@ log = "stdout"
     );
 }
 
-// ── T8b: a joined app is attributed to ITSELF, not to the governor ───────────
+// ── A joined app is attributed to ITSELF, not to the governor ───────────────
 //
 // The load-bearing property of the whole app-identity design: one governor
 // holds one credential and serves many apps, and each must still land under its
 // own name. If a joined app inherited the governor's identity, a fleet would
 // collapse into one row on the dashboard and per-app cost would be a fiction.
 //
-// Sandboxed via NANNY_HOME, not HOME (see T7's comment for why).
+// Sandboxed via NANNY_HOME, not HOME, for the reason given above the
+// headless-bind test.
 
 #[test]
 fn joined_app_is_attributed_to_its_own_identity() {
@@ -623,7 +625,8 @@ cmd = "echo joined-work"
 // instead; the new explicit-join behavior errors instead, since the caller
 // asked for a SPECIFIC governor by id.
 //
-// Sandboxed via NANNY_HOME, not HOME (see T7's comment for why).
+// Sandboxed via NANNY_HOME, not HOME, for the reason given above the
+// headless-bind test.
 
 #[test]
 fn join_to_unreachable_server_fails_loudly() {
@@ -675,7 +678,7 @@ log = "stdout"
     );
 }
 
-// ── T8c: `--serve` runs [start] under the governor, and stays joinable ───────
+// ── `--serve` runs [start] under the governor, and stays joinable ───────────
 //
 // The whole point of letting --serve launch the app: one command, no launcher
 // script. A script has to poll for readiness, runs `sh` as PID 1 so SIGTERM
@@ -790,7 +793,7 @@ cmd = "echo JOINED-WHILE-SERVING"
     );
 }
 
-// ── T8d: `--serve` with no [start] stays headless ────────────────────────────
+// ── `--serve` with no [start] stays headless ────────────────────────────────
 
 #[test]
 fn serve_without_a_start_section_stays_headless() {

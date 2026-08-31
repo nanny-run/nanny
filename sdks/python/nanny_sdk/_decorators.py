@@ -45,11 +45,11 @@ def _declare_rules_once() -> None:
     _client.declare_rules(declare_all())
 
 
-def tool(*, tokens: int = 0) -> Callable[[F], F]:
+def tool() -> Callable[[F], F]:
     """Declare a Nanny-governed tool.
 
     Contacts the bridge before each call to enforce the tool allowlist,
-    per-tool call caps, and rules. Records ``tokens`` on each allowed call.
+    per-tool call caps, and rules.
 
     In passthrough mode (no ``NANNY_BRIDGE_PORT``) the decorated function
     is returned unchanged, zero overhead, zero import errors.
@@ -104,7 +104,7 @@ def tool(*, tokens: int = 0) -> Callable[[F], F]:
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                 str_args = _str_args(args, kwargs)
                 cleared = _check_rules(str_args)
-                _client.call_tool(tool_name, tokens, str_args, cleared)
+                _client.call_tool(tool_name, str_args, cleared)
                 return await fn(*args, **kwargs)
 
             return async_wrapper  # type: ignore[return-value]
@@ -113,7 +113,7 @@ def tool(*, tokens: int = 0) -> Callable[[F], F]:
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             str_args = _str_args(args, kwargs)
             cleared = _check_rules(str_args)
-            _client.call_tool(tool_name, tokens, str_args, cleared)
+            _client.call_tool(tool_name, str_args, cleared)
             return fn(*args, **kwargs)
 
         return wrapper  # type: ignore[return-value]

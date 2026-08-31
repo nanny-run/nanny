@@ -117,7 +117,7 @@ impl Environment {
         }
     }
 
-    /// The one this run is *not*: the side C2's startup notice checks.
+    /// The one this run is *not*: the side the startup notice checks.
     fn other(self) -> Self {
         match self {
             Environment::Live => Environment::Sandbox,
@@ -359,7 +359,7 @@ impl Spool {
     }
 
     /// Same as `new`, given an already-resolved `Environment` rather than a
-    /// key to derive one from: how C2's startup notice inspects the sibling
+    /// key to derive one from: how the startup notice inspects the sibling
     /// side without a key for it.
     fn for_environment(base_dir: &Path, environment: Environment) -> Self {
         Self {
@@ -390,7 +390,7 @@ impl Spool {
         self.entries().len()
     }
 
-    /// C2's startup notice, as text: `None` when there is nothing to say. A
+    /// The startup notice, as text: `None` when there is nothing to say. A
     /// pure function so the message itself is directly assertable, with the
     /// `eprintln!` side effect kept to the one-line caller below.
     fn other_environment_notice(base_dir: &Path, environment: Environment) -> Option<String> {

@@ -30,6 +30,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   concurrent runs under `--serve` build its own per-tenant usage ledger
   from one run's buffered events, without parsing the CLI's flat NDJSON
   log, which carries no run id to filter by.
+- **`nanny run` warns when a declared rule pack enforced nothing.** Pack
+  rules are ordinary `@rule` functions loaded by the SDK in the agent's own
+  process, and only the Python SDK loads them. A Rust agent could install
+  and pin a pack, have its integrity verified, and run with nothing
+  evaluating it. The run now ends with a warning naming the packs that
+  registered no rules. A warning rather than a stop, because `POST /rules`
+  is fire-and-forget by design and a lost declaration must not take a
+  governed run down with it.
 - **A durable outbox holds undelivered Cloud sync events** instead of
   dropping them on a connectivity gap, so a brief network blip no longer
   silently loses fleet telemetry.
@@ -169,6 +177,16 @@ not to consumption, meaning how much it used.
 - **The Python SDK mirrors all of it** (breaking change): the removed stop
   reasons are no longer exported, and `instrument()` measures tokens for
   attribution without enforcing anything.
+- **The declared per-call token cost is gone** (breaking change):
+  `@tool(tokens=N)` and `#[tool(tokens = N)]` become `@tool()` and
+  `#[tool]`, the `tokens` field is gone from the `POST /tool/call` body,
+  and `Tool::declared_cost` is gone from `nanny-core`. The number was
+  hand-written, so it was a guess, and it was summed into the same
+  `tokens_spent` counter as real measured usage. That left one figure that
+  was part measurement and part fiction with no way to tell the halves
+  apart, which is the same objection that removed the token ceiling. The
+  decorators are otherwise unchanged. `tokens_spent` now has exactly one
+  source: `instrument()` and `report_usage()`.
 
 `instrument()` and the usage events it produces are unaffected. Measuring
 what a run costs is still the runtime's job; deciding that the number is

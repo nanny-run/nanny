@@ -98,10 +98,13 @@ nanny rules add nanny:recommended@1.0.0 --from ./packs/nanny-recommended
 
 | Pack | Rules | Covers |
 | --- | --- | --- |
-| `nanny:recommended` | 30 | Injection and taint, sequence, loops, argument safety, destructive actions, payments, operating conditions |
-| `nanny:owasp` | 15 | Controls mapped to the OWASP Agentic Top Ten |
+| `nanny:recommended` | 14 | Injection and taint, sequence, loops, argument safety, destructive actions, payments |
+| `nanny:owasp` | 10 | Controls mapped to the OWASP Agentic Top Ten |
 
 Your source is never edited. `@rule` stays for your own private rules.
+
+Pack rules are loaded and evaluated by the Python SDK. A Rust agent can install
+and pin a pack, and its rules will not run.
 
 > **Scope:** Nanny governs agents within a single process today. When all agents run in the same process, as in CrewAI, LangGraph, AutoGen, or any framework that orchestrates within one Python or Rust runtime, every agent is governed. For cross-process and cross-machine enforcement, use the governance server.
 
@@ -200,7 +203,7 @@ allowlist enforcement, and custom policy rules:
 use nannyd::{tool, rule, agent, PolicyContext};
 
 /// Each call charges 10 tokens and requires the tool to be in the allowlist.
-#[nanny::tool(tokens = 10)]
+#[nanny::tool]
 fn search_web(query: String) -> String {
     // ... HTTP request ...
     String::new()
@@ -235,7 +238,7 @@ For Python agents, the same model as the Rust SDK, as decorators:
 ```python
 from nanny_sdk import tool, rule, agent
 
-@tool(tokens=10)
+@tool()
 def search_web(query: str) -> str:
     import httpx
     return httpx.get(f"https://en.wikipedia.org/wiki/{query}").text
@@ -256,7 +259,7 @@ Works with any framework, LangGraph, CrewAI, LangChain, plain Python. In Python-
 ```python
 from nanny_sdk import tool as nanny_tool
 
-@nanny_tool(tokens=5)
+@nanny_tool()
 def read_file(path: str) -> str:
     with open(path) as f:
         return f.read()
@@ -269,7 +272,7 @@ from langchain_core.tools import tool as lc_tool
 from nanny_sdk import tool as nanny_tool
 
 @lc_tool                   # outer: LangChain registers this for LLM dispatch
-@nanny_tool(tokens=5)      # inner: Nanny intercepts before the function body runs
+@nanny_tool()      # inner: Nanny intercepts before the function body runs
 def read_file(path: str) -> str:
     with open(path) as f:
         return f.read()
@@ -277,7 +280,7 @@ def read_file(path: str) -> str:
 
 All decorators are no-ops when running outside `nanny run`, zero overhead in development and CI.
 
-**LLM token tracking:** call `nanny_sdk.instrument(client)` once at startup to automatically report LLM token usage to Nanny's budget. Works with OpenAI, Groq, Together AI, Azure OpenAI, LiteLLM, Anthropic, Mistral, Google Gemini, and Cohere v2:
+**LLM token tracking:** call `nanny_sdk.instrument(client)` once at startup to have Nanny measure LLM token usage. Measurement only, nothing is enforced from it. Works with OpenAI, Groq, Together AI, Azure OpenAI, LiteLLM, Anthropic, Mistral, Google Gemini, and Cohere v2:
 
 ```python
 import nanny_sdk, openai
