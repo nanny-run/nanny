@@ -1,9 +1,9 @@
 // network.rs: TCP + mTLS governance server for cross-process enforcement.
 //
 // Started by `nanny run --serve`. Multiple agents on the same or different
-// machines connect to it. All connections share one execution context,
-// shared token count, shared step count, shared tool call history. This is
-// cross-process budget enforcement without cloud dependency.
+// machines connect to it. All connections share one execution context:
+// one tool call history, one set of call counts, one stop state. This is
+// cross-process enforcement without a cloud dependency.
 //
 // Transport: axum (HTTP routing) + rustls (mTLS, both sides present certs).
 // Auth:      session token (X-Nanny-Session-Token header) + mTLS client cert.
@@ -55,9 +55,9 @@ use std::sync::mpsc::Sender;
 
 /// Run id used when a request carries no `X-Nanny-Run-Id` header.
 ///
-/// All headerless clients share this one run: preserving the single-execution,
-/// shared-budget behaviour (one team, one task). Distinct run ids get isolated
-/// budgets and stop independently (G3: "Nanny stops the run, not the host").
+/// All headerless clients share this one run: preserving the single-execution
+/// behaviour (one team, one task). Distinct run ids get isolated counters and
+/// stop independently, because Nanny stops the run, not the host.
 const DEFAULT_RUN_ID: &str = "default";
 
 /// The governor's default port. 62669 spells NANNY on a phone keypad.
@@ -227,8 +227,8 @@ impl RateLimiter {
 #[derive(Clone)]
 struct AppState {
     /// Per-run enforcement state, keyed by run id (from `X-Nanny-Run-Id`, or
-    /// [`DEFAULT_RUN_ID`] when absent). Each run has its own budget, counters,
-    /// and stop state: a stop ends that run, not the server. Runs are created
+    /// [`DEFAULT_RUN_ID`] when absent). Each run has its own counters and stop
+    /// state: a stop ends that run, not the server. Runs are created
     /// lazily on first reference from [`AppState::template`].
     runs: Arc<Mutex<HashMap<String, Arc<Mutex<BridgeState>>>>>,
     /// Template for minting a fresh run on first reference.
@@ -261,8 +261,8 @@ fn secure_compare(a: &str, b: &str) -> bool {
 impl AppState {
     /// Resolve the enforcement state for the run named in `X-Nanny-Run-Id`,
     /// creating it on first reference. A missing or empty header maps to
-    /// [`DEFAULT_RUN_ID`], so headerless clients keep the shared-budget
-    /// behaviour and every request for the same id shares one run.
+    /// [`DEFAULT_RUN_ID`], so headerless clients keep the shared-run behaviour
+    /// and every request for the same id shares one run.
     fn run_state(&self, headers: &HeaderMap) -> Arc<Mutex<BridgeState>> {
         let run_id = headers
             .get("x-nanny-run-id")
@@ -1622,10 +1622,10 @@ mod tests {
     /// sleep is not enough.  Polling is both faster on a quiet machine and
     /// robust on a loaded one.
     ///
-    /// The budget is deliberately generous. It costs nothing on a healthy run
+    /// The deadline is deliberately generous. It costs nothing on a healthy run
     /// (this returns as soon as the port answers) and only spends real time
     /// when something is actually wrong, so a slow CI box is not reported as a
-    /// broken server. The old 3 s budget was tight enough to lose a race
+    /// broken server. The old 3 s deadline was tight enough to lose a race
     /// against TLS setup on a loaded machine.
     /// The port the server actually bound, read from the address it recorded.
     ///
@@ -2125,7 +2125,7 @@ mod tests {
         let dir = test_certs_dir();
         gen_certs_for_test(&dir);
         let port = next_port();
-        let token = format!("budget-{port}");
+        let token = format!("shared-{port}");
 
         let _h = start_server_with_handle(
             test_components_with_cost(25),
@@ -2473,7 +2473,7 @@ mod tests {
         );
     }
 
-    // POST /tool/call allows a tool within budget over plain HTTP.
+    // POST /tool/call allows an allowlisted tool over plain HTTP.
     // Proves enforcement is active, not just that the socket binds.
     #[test]
     fn loopback_plain_http_tool_call_allowed() {
@@ -2496,7 +2496,7 @@ mod tests {
         let body: serde_json::Value = resp.json().unwrap();
         assert_eq!(
             body["status"], "allowed",
-            "tool within budget must be allowed; got: {body}"
+            "an allowlisted tool must be allowed; got: {body}"
         );
     }
 

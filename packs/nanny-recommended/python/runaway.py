@@ -1,11 +1,10 @@
 """Loop and runaway: bound repetition, denominated in actions.
 
-This group is what step ceilings and token budgets were reaching for, expressed
-as authority over actions instead of resource consumption. A step count could
-never be set correctly because nobody knows their agent's normal step count
-until production. "This agent may call the same tool with the same arguments at
-most twice" is a sentence an operator can write on day one and defend in a
-review.
+Repetition is bounded as authority over actions rather than as a quantity of
+resource consumed. "This agent may call the same tool with the same arguments
+at most twice" is a sentence an operator can write on day one and defend in a
+review, which is not true of any figure that has to be guessed from production
+behaviour first.
 """
 
 from nanny_sdk import rule

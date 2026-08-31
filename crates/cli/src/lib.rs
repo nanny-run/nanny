@@ -48,9 +48,8 @@ pub use nanny_macros::agent;
 /// Fetch a URL via nanny's built-in `http_get` bridge tool.
 ///
 /// The request is executed by the nanny bridge: the calling process never
-/// opens a network connection directly. Nanny enforces the allowlist, charges
-/// tokens (200 per request), and applies the step limit before making the
-/// request.
+/// opens a network connection directly. Nanny enforces the allowlist and the
+/// tool's `max_calls` before making the request.
 ///
 /// # Passthrough mode
 ///
@@ -134,8 +133,8 @@ pub struct Usage {
 /// explicitly: after an LLM call, hand nanny the token counts already present
 /// on the response.
 ///
-/// `input + output` is debited from the active budget; `model`/`provider` (if
-/// set) are recorded as attribution labels in the audit log. Only numbers and
+/// `input + output` is added to the run's measured total; `model`/`provider`
+/// (if set) are recorded as attribution labels in the audit log. Only numbers and
 /// identifiers cross the boundary: never prompt or response content.
 ///
 /// # Passthrough mode

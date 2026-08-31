@@ -88,9 +88,9 @@ def _run_id() -> str | None:
     a host running several concurrent runs never races on it), then falls
     back to `NANNY_RUN_ID`, set by `nanny run` per invocation, or shared
     across processes on purpose to share one run. Absent means the
-    server's default run (shared-budget behaviour). The local bridge ignores
-    it, one process is always one run. Mirrors the Rust client
-    (`crates/cli/src/lib.rs`): run id is which budget you spend, distinct
+    server's default run, shared by every headerless client. The local bridge
+    ignores it, one process is always one run. Mirrors the Rust client
+    (`crates/cli/src/lib.rs`): run id is which run you are part of, distinct
     from `NANNY_SESSION_TOKEN` (who you are).
 
     With no scope ever entered, this resolves exactly as it did before

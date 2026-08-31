@@ -6,7 +6,7 @@
 // - URL argument is required and must start with http:// or https://
 // - Response body is capped at 1MB: fail closed on large responses
 // - Timeout is enforced: the tool cannot run forever
-// - Cost is only charged on success: failed calls do not spend budget
+// - Failure is reported as its own variant, never as an empty success
 // - Non-2xx HTTP responses are treated as failures
 
 use nanny_core::tool::{Tool, ToolArgs, ToolError, ToolOutput};
@@ -80,7 +80,7 @@ impl Tool for HttpGet {
         // no shared state between tool executions. Each call is independent.
         //
         // `timeout_global` bounds the whole operation, not each socket read, so
-        // a server that trickles bytes forever still cannot outlive the budget.
+        // a server that trickles bytes forever still cannot outlive the deadline.
         let agent = ureq::Agent::new_with_config(
             ureq::Agent::config_builder()
                 .timeout_global(Some(Duration::from_millis(self.timeout_ms)))
@@ -91,7 +91,7 @@ impl Tool for HttpGet {
         let response = agent.get(url).call().map_err(|e| match e {
             // Non-2xx HTTP status: the server replied but with an error.
             ureq::Error::StatusCode(code) => ToolError::ExecutionFailed(format!("HTTP {code}")),
-            // A timeout is its own variant, so the budget is reported as a
+            // A timeout is its own variant, so the deadline is reported as a
             // timeout rather than guessed at from an error message.
             ureq::Error::Timeout(_) => ToolError::Timeout {
                 timeout_ms: self.timeout_ms,

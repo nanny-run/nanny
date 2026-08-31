@@ -577,9 +577,9 @@ log = "stdout"
         assert_eq!(config.tools.allowed, vec!["http_get".to_string()]);
     }
 
-    /// A config carrying nothing but [start] parses. Nothing is mandatory now
-    /// that [limits] is gone, and an undeclared allowlist denies every tool
-    /// rather than failing to load.
+    /// A config carrying nothing but [start] parses: nothing else is
+    /// mandatory, and an undeclared allowlist denies every tool rather than
+    /// failing to load.
     #[test]
     fn a_config_with_only_start_is_valid() {
         let config: NannyConfig = toml::from_str(

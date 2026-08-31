@@ -516,7 +516,7 @@ def _extract_usage(response: Any) -> UsageRecord:
             # own Usage object never has (see _extract_cache_usage), not
             # by field name alone, or a Responses-API call would silently
             # fall into Anthropic's ADDITIVE total-input formula below and
-            # double-count cached tokens, over-debiting the budget for
+            # double-count cached tokens, overstating the measured total for
             # every cache-heavy Responses call. Confirmed live: like Chat
             # Completions, input_tokens here is already INCLUSIVE of both
             # cached_tokens and cache_write_tokens, so no addition needed,
@@ -538,7 +538,7 @@ def _extract_usage(response: Any) -> UsageRecord:
             # true total, with cache_read/cache_write always a genuine
             # subset of it, never additional on top, matching what every
             # downstream consumer (enforcement, cost calculators) is told
-            # to assume. Getting this wrong would under-debit the budget for
+            # to assume. Getting this wrong would understate the total for
             # every cache-heavy Anthropic call, not just under-report cost.
             it = getattr(usage, "input_tokens", None)
             ot = getattr(usage, "output_tokens", None)

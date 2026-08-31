@@ -177,7 +177,7 @@ Emitted when a function annotated with `#[nanny::agent("name")]` returns, closin
 
 Emitted once when the agentic harness running the loop is identified, either auto-detected by the Python SDK from imported frameworks or declared explicitly with `nanny::set_harness` in Rust.
 
-Attribution only: it never affects enforcement, never carries content, and never touches the ledger. De-duplicated, so an SDK may safely re-send it on every call.
+Attribution only: it never affects enforcement and never carries content. De-duplicated, so an SDK may safely re-send it on every call.
 
 ```json
 {
@@ -318,7 +318,7 @@ Emitted when a permitted tool fails at runtime. Distinct from `ToolDenied`, the 
 
 ## LlmUsageRecorded
 
-Emitted when LLM token usage is reported to Nanny, via the Python SDK's `instrument()` or the Rust SDK's `report_usage()`. Records the measured input and output tokens debited from the budget, plus optional model, provider, and cache-usage labels.
+Emitted when LLM token usage is reported to Nanny, via the Python SDK's `instrument()` or the Rust SDK's `report_usage()`. Records the measured input and output tokens, plus optional model, provider, and cache-usage labels.
 
 ```json
 {

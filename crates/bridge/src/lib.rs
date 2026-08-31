@@ -2138,7 +2138,7 @@ mod tests {
         assert_eq!(s, 200);
         assert_eq!(json_val(&body)["status"], "ok");
 
-        // Debited from the budget.
+        // Added to the run's measured total.
         let (_, status) = get(&b, "/status");
         assert_eq!(json_val(&status)["tokens_spent"], 42);
 

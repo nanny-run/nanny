@@ -530,7 +530,7 @@ fn build_governed_child(
 
     // Each `nanny run` is its own run on the server: a stop ends this run, not
     // the server, so the host survives many sequential runs (G3). Set
-    // NANNY_RUN_ID yourself to make several processes share one budget and stop
+    // NANNY_RUN_ID yourself to make several processes share one run and stop
     // together (e.g. a fleet demo); otherwise each invocation gets a fresh id.
     let run_id = std::env::var("NANNY_RUN_ID")
         .ok()
@@ -839,7 +839,7 @@ fn cmd_run(
 
     // ── Final event drain ─────────────────────────────────────────────────
     // Catch any events generated during the stop transition itself (e.g. a
-    // ToolDenied that caused budget exhaustion on the very last bridge call).
+    // ToolDenied raised on the very last bridge call).
     for line in bridge.drain_events() {
         let _ = log.write_raw(&line);
         if let Some(sender) = &managed {

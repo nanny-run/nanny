@@ -157,10 +157,9 @@ pub enum ExecutionEvent {
     /// Emitted when LLM token usage is reported to the bridge: via
     /// `nanny::report_usage` (Rust) or `nanny.instrument()` (Python).
     ///
-    /// `input`/`output` are the measured token counts debited from the active
-    /// budget: enforcement always sums these two, regardless of what
-    /// `cache_read`/`cache_write` say, so a provider that doesn't report
-    /// cache usage behaves exactly as before. `model`/`provider` are optional
+    /// `input`/`output` are the measured token counts: the run's total always
+    /// sums these two, regardless of what `cache_read`/`cache_write` say, so a
+    /// provider that doesn't report cache usage behaves exactly as before. `model`/`provider` are optional
     /// attribution labels: identifiers only, never prompt or response
     /// content, and never pricing: cost is a hosted-layer concern, never the
     /// engine's.
