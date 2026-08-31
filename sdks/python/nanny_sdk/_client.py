@@ -82,7 +82,7 @@ def _token() -> str:
 
 
 def _run_id() -> str | None:
-    """Run id for this process on the governance server (G3).
+    """Run id for this process on the governance server.
 
     Checks the `run_scope()` ContextVar first (isolated per thread/task, so
     a host running several concurrent runs never races on it), then falls
@@ -345,7 +345,7 @@ def _raise_stop_from_410(resp: httpx.Response) -> None:
     Mirrors the Rust client: a stopped run answers action endpoints with 410
     carrying the stop reason (``{"error":"execution stopped","reason":"…"}``).
     We surface it as a typed stop instead of letting httpx raise a raw
-    ``HTTPStatusError``, so agents and frameworks catch it cleanly (G7). The run
+    ``HTTPStatusError``, so agents and frameworks catch it cleanly. The run
     stopped on an earlier call, possibly on another process sharing the same
     ``NANNY_RUN_ID``, so the precise tool/rule detail is not on this response;
     ``AgentCompleted`` maps to its class, everything else to

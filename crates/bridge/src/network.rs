@@ -2044,7 +2044,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// G3: "Nanny stops the run, not the host". Stopping one run must return
+    /// "Nanny stops the run, not the host": stopping one run must return
     /// 410 for that run only; other runs (and the server) keep working.
     #[test]
     fn stopping_one_run_does_not_affect_other_runs() {
@@ -2068,7 +2068,7 @@ mod tests {
             .expect("stop must reach server");
         assert_eq!(stop.status(), 200);
 
-        // Run "alpha" is stopped → 410 carrying the typed reason (G7 + G3).
+        // Run "alpha" is stopped → 410 carrying the typed reason.
         let a = client
             .post(format!("{base}/tool/call"))
             .header("X-Nanny-Session-Token", &token)

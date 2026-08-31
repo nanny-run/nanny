@@ -529,7 +529,7 @@ fn build_governed_child(
         .join("certs");
 
     // Each `nanny run` is its own run on the server: a stop ends this run, not
-    // the server, so the host survives many sequential runs (G3). Set
+    // the server, so the host survives many sequential runs. Set
     // NANNY_RUN_ID yourself to make several processes share one run and stop
     // together (e.g. a fleet demo); otherwise each invocation gets a fresh id.
     let run_id = std::env::var("NANNY_RUN_ID")

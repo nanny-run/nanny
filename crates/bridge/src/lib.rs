@@ -1809,7 +1809,7 @@ mod tests {
         assert_eq!(s, 410);
     }
 
-    /// G7: the 410 body carries the typed stop reason so the client reports the
+    /// The 410 body carries the typed stop reason so the client reports the
     /// true cause (here ToolDenied) rather than a generic "execution stopped".
     #[test]
     fn stopped_410_body_carries_typed_reason() {

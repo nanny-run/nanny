@@ -470,7 +470,7 @@ mod runtime {
     /// running inside a thread that also has a scope means someone asked for
     /// per-task isolation, and honouring the thread there would defeat it.
     ///
-    /// Runs stop independently, so a stop ends this run, not the server (G3).
+    /// Runs stop independently, so a stop ends this run, not the server.
     /// Absent → the server's default run. The local bridge ignores it: one
     /// process is always one run.
     /// Test-only view of the resolved run id. Not public API: tests need to

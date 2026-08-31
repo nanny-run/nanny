@@ -127,7 +127,7 @@ def test_get_status_raises_bridge_unavailable_when_unreachable(
 
 
 # ---------------------------------------------------------------------------
-# G7: a 410 (this run already stopped) becomes a typed stop, not a raw HTTP error
+# A 410 (this run already stopped) becomes a typed stop, not a raw HTTP error
 # ---------------------------------------------------------------------------
 
 
@@ -178,7 +178,7 @@ def test_call_tool_410_from_earlier_denial_raises_execution_stopped(
 
 
 # ---------------------------------------------------------------------------
-# G3: the run id (NANNY_RUN_ID) travels on every request as X-Nanny-Run-Id
+# The run id (NANNY_RUN_ID) travels on every request as X-Nanny-Run-Id
 # ---------------------------------------------------------------------------
 
 
