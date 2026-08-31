@@ -224,7 +224,7 @@ fn rule_receives_populated_tool_call_history() {
     let before = evaluate_local_rules("privileged_tool", HashMap::new());
 
     // Now make the untrusted read actually happen through the bridge.
-    call_tool("search_web", 0);
+    call_tool("search_web");
     let after = evaluate_local_rules("privileged_tool", HashMap::new());
 
     clear_env();
@@ -246,10 +246,10 @@ fn rule_receives_tool_call_counts() {
     let bridge = start_bridge(&["counted_tool"]);
     inject_env(&bridge);
 
-    call_tool("counted_tool", 0);
+    call_tool("counted_tool");
     let after_one = evaluate_local_rules("counted_tool", HashMap::new());
 
-    call_tool("counted_tool", 0);
+    call_tool("counted_tool");
     let after_two = evaluate_local_rules("counted_tool", HashMap::new());
 
     clear_env();
@@ -301,7 +301,7 @@ fn a_label_driven_rule_denies_using_history() {
     let before = evaluate_local_rules("send_outreach", HashMap::new());
 
     // The untrusted read actually happens through the bridge.
-    call_tool("search_web", 0);
+    call_tool("search_web");
     let after = evaluate_local_rules("send_outreach", HashMap::new());
 
     clear_env();
@@ -324,7 +324,7 @@ fn the_same_rule_allows_when_the_tools_are_unlabelled() {
     let bridge = start_labelled_bridge(&[("search_web", &[]), ("send_outreach", &[])]);
     inject_env(&bridge);
 
-    call_tool("search_web", 0);
+    call_tool("search_web");
     let denied = evaluate_local_rules("send_outreach", HashMap::new());
 
     clear_env();

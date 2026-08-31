@@ -2144,7 +2144,7 @@ mod tests {
                 $client
                     .post(format!("{}/tool/call", base))
                     .header("X-Nanny-Session-Token", &token)
-                    .body(r#"{"tool":"http_get","tokens":10}"#)
+                    .body(r#"{"tool":"http_get"}"#)
                     .send()
                     .expect("tool/call must reach server")
             };
@@ -2164,8 +2164,8 @@ mod tests {
             .json()
             .unwrap();
         assert_eq!(
-            status["tokens_spent"], 40,
-            "both clients must accumulate into one shared token count"
+            status["tool_call_counts"]["http_get"], 4,
+            "both clients must accumulate into one shared call count"
         );
 
         std::fs::remove_dir_all(&dir).ok();
@@ -2484,7 +2484,7 @@ mod tests {
         let resp = client
             .post(format!("http://127.0.0.1:{port}/tool/call"))
             .header("X-Nanny-Session-Token", &token)
-            .body(r#"{"tool":"echo","tokens":5}"#)
+            .body(r#"{"tool":"echo"}"#)
             .send()
             .expect("POST /tool/call must reach plain HTTP server");
 
@@ -2570,7 +2570,7 @@ mod tests {
                 $client
                     .post(format!("{}/tool/call", base))
                     .header("X-Nanny-Session-Token", &token)
-                    .body(r#"{"tool":"http_get","tokens":10}"#)
+                    .body(r#"{"tool":"http_get"}"#)
                     .send()
                     .expect("tool call must reach server")
             };
@@ -2591,8 +2591,8 @@ mod tests {
             .json()
             .unwrap();
         assert_eq!(
-            status["tokens_spent"], 40,
-            "both clients must accumulate into one shared token count"
+            status["tool_call_counts"]["http_get"], 4,
+            "both clients must accumulate into one shared call count"
         );
     }
 
@@ -2614,7 +2614,7 @@ mod tests {
         client
             .post(format!("{base}/tool/call"))
             .header("X-Nanny-Session-Token", &token)
-            .body(r#"{"tool":"echo","tokens":7,"args":{"x":"y"}}"#)
+            .body(r#"{"tool":"echo","args":{"x":"y"}}"#)
             .send()
             .expect("tool call must succeed");
 
@@ -2651,8 +2651,8 @@ mod tests {
 
         // Verify the values reflect the call we just made.
         assert_eq!(
-            body["tokens_spent"], 7,
-            "tokens_spent must equal the charged tokens; got: {body}"
+            body["tokens_spent"], 0,
+            "a tool call measures no tokens; got: {body}"
         );
         assert!(
             body["tool_call_counts"]["echo"].as_u64().unwrap_or(0) >= 1,
@@ -2717,7 +2717,7 @@ mod tests {
         client
             .post(format!("{base}/tool/call"))
             .header("X-Nanny-Session-Token", &token)
-            .body(r#"{"tool":"echo","tokens":1}"#)
+            .body(r#"{"tool":"echo"}"#)
             .send()
             .expect("tool call must reach server");
 
@@ -2752,7 +2752,7 @@ mod tests {
         client
             .post(format!("{base}/tool/call"))
             .header("X-Nanny-Session-Token", &token)
-            .body(r#"{"tool":"not_allowed_tool","tokens":0}"#)
+            .body(r#"{"tool":"not_allowed_tool"}"#)
             .send()
             .expect("tool call must reach server");
 

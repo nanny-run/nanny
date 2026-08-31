@@ -436,7 +436,6 @@ def get_status() -> PolicyContext:
 
 def call_tool(
     tool_name: str,
-    tokens: int,
     args: dict[str, Any],
     cleared_by: list[str] | None = None,
 ) -> None:
@@ -446,7 +445,7 @@ def call_tool(
     reached at all: a governed tool call must fail closed, not silently run
     ungoverned because the governor happened to be down.
     """
-    payload: dict[str, Any] = {"tool": tool_name, "tokens": tokens, "args": args}
+    payload: dict[str, Any] = {"tool": tool_name, "args": args}
     # Which rules evaluated and allowed this call. Assembled here because this
     # is the only place it exists: rule bodies run in this process, before the
     # bridge is contacted, so the governor cannot observe them. Without it a

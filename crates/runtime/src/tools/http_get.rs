@@ -18,9 +18,6 @@ use std::time::Duration;
 /// Fail closed at 1MB.
 const MAX_BODY_BYTES: u64 = 1024 * 1024;
 
-/// Cost units charged for a successful http_get call.
-const HTTP_GET_COST: u64 = 10;
-
 /// Default timeout for the HTTP request.
 const DEFAULT_TIMEOUT_MS: u64 = 5_000;
 
@@ -57,12 +54,6 @@ impl Default for HttpGet {
 impl Tool for HttpGet {
     fn name(&self) -> &str {
         "http_get"
-    }
-
-    /// Cost charged on success only.
-    /// Tokens are never charged for a failed request.
-    fn declared_cost(&self) -> u64 {
-        HTTP_GET_COST
     }
 
     fn execute(&self, args: &ToolArgs) -> Result<ToolOutput, ToolError> {
@@ -226,11 +217,6 @@ mod tests {
             matches!(result, Err(ToolError::Timeout { timeout_ms: 250 })),
             "expected a timeout, got {result:?}"
         );
-    }
-
-    #[test]
-    fn declared_cost_is_ten() {
-        assert_eq!(tool().declared_cost(), 10);
     }
 
     #[test]

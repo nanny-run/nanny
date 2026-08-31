@@ -11,9 +11,9 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{parse_macro_input, FnArg, ItemFn, LitInt, LitStr, Meta, Pat};
+use syn::{parse_macro_input, FnArg, ItemFn, LitStr, Pat};
 
-// ── #[nanny::tool(tokens = N)] ───────────────────────────────────────────────
+// ── #[nanny::tool] ──────────────────────────────────────────────────────────
 
 /// Declare a function as a governed nanny tool.
 ///
@@ -22,7 +22,7 @@ use syn::{parse_macro_input, FnArg, ItemFn, LitInt, LitStr, Meta, Pat};
 /// ```rust,ignore
 /// use nanny::tool;
 ///
-/// #[tool(tokens = 200)]
+/// #[tool]
 /// fn search_web(query: &str) -> String {
 ///     // your implementation
 /// }
@@ -30,45 +30,21 @@ use syn::{parse_macro_input, FnArg, ItemFn, LitInt, LitStr, Meta, Pat};
 ///
 /// When active (running under `nanny run`):
 /// 1. All registered `#[nanny::rule]` functions are evaluated first.
-/// 2. The bridge is called via `POST /tool/call`: policy enforced, tokens charged.
+/// 2. The bridge is called via `POST /tool/call`, which enforces the allowlist,
+///    `max_calls`, and the labels the operator declared.
 /// 3. If allowed, the original function body runs.
 /// 4. If denied or stopped, the process panics with a `nanny: stopped , ` message.
 ///
 /// When inactive (no bridge env vars), the function runs without any overhead.
 #[proc_macro_attribute]
-pub fn tool(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let tokens = parse_tokens(attr.into());
+pub fn tool(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as ItemFn);
-    expand_tool(input, tokens)
+    expand_tool(input)
         .unwrap_or_else(|e| e.into_compile_error())
         .into()
 }
 
-fn parse_tokens(attr: TokenStream2) -> u64 {
-    // Accept `tokens = N` or just `N`.
-    // Fall back to 0 if unparseable.
-    let meta: Result<Meta, _> = syn::parse2(attr.clone());
-    if let Ok(Meta::NameValue(nv)) = meta {
-        if nv.path.is_ident("tokens") {
-            if let syn::Expr::Lit(expr_lit) = &nv.value {
-                if let syn::Lit::Int(lit) = &expr_lit.lit {
-                    if let Ok(n) = lit.base10_parse::<u64>() {
-                        return n;
-                    }
-                }
-            }
-        }
-    }
-    // Try bare integer
-    if let Ok(lit) = syn::parse2::<LitInt>(attr) {
-        if let Ok(n) = lit.base10_parse::<u64>() {
-            return n;
-        }
-    }
-    0
-}
-
-fn expand_tool(input: ItemFn, tokens: u64) -> syn::Result<TokenStream2> {
+fn expand_tool(input: ItemFn) -> syn::Result<TokenStream2> {
     let vis = &input.vis;
     let sig = &input.sig;
     let attrs = &input.attrs;
@@ -124,7 +100,7 @@ fn expand_tool(input: ItemFn, tokens: u64) -> syn::Result<TokenStream2> {
                 ::std::process::exit(1);
             }
 
-            match ::nanny::__private::call_tool(#fn_str, #tokens) {
+            match ::nanny::__private::call_tool(#fn_str) {
                 ::nanny::__private::ToolVerdict::Run  => __nanny_impl(#(#forward_args),*),
                 ::nanny::__private::ToolVerdict::Stop(__reason) => {
                     ::std::eprintln!("nanny: stopped, {}", __reason);

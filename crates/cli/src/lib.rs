@@ -13,7 +13,7 @@
 //! ```rust,ignore
 //! use nanny::{tool, rule, agent, PolicyContext};
 //!
-//! #[tool(tokens = 200)]
+//! #[tool]
 //! fn search_web(query: &str) -> String { ... }
 //!
 //! #[rule("no_spiral")]
@@ -843,8 +843,8 @@ mod runtime {
     }
 
     /// POST /tool/call to the bridge.
-    pub fn call_tool(tool_name: &str, tokens: u64) -> ToolVerdict {
-        let body = format!(r#"{{"tool":"{tool_name}","tokens":{tokens}}}"#);
+    pub fn call_tool(tool_name: &str) -> ToolVerdict {
+        let body = format!(r#"{{"tool":"{tool_name}"}}"#);
         match http_post("/tool/call", &body) {
             Some(resp) if resp.status == 200 && resp.body.contains("\"allowed\"") => {
                 ToolVerdict::Run

@@ -44,7 +44,7 @@ Mark a function as a tool that Nanny should govern:
 ```rust
 use nanny::tool;
 
-#[tool(tokens = 10)]
+#[tool]
 fn fetch_page(url: &str) -> String {
     // HTTP call, file read, LLM call, or any side-effecting operation
     reqwest::blocking::get(url).unwrap().text().unwrap()
@@ -55,18 +55,8 @@ When the agent calls `fetch_page`:
 
 1. Nanny checks: is `fetch_page` in the `[tools] allowed` list?
 2. Nanny checks: has `fetch_page` exceeded `[tools.fetch_page] max_calls`?
-3. Nanny records 10 tokens for attribution.
+3. Nanny records the call, with the labels the operator declared for it.
 4. If any check fails, execution stops immediately, the function body never runs.
-
-### Tokens
-
-The `tokens` argument is required. It is the number of tokens charged per call.
-Set it to `0` for tools you want tracked but not charged:
-
-```rust
-#[tool(tokens = 0)]
-fn log_step(msg: &str) { ... }
-```
 
 ### Matching the tool allowlist
 
@@ -98,7 +88,6 @@ Governance applied automatically:
 
 - Checked against the `[tools] allowed` list (tool name: `"http_get"`)
 - Subject to `[tools.http_get] max_calls` limit
-- Reports 10 tokens per successful call, for attribution
 
 ```toml
 # nanny.toml
@@ -106,8 +95,7 @@ Governance applied automatically:
 allowed = ["http_get"]
 
 [tools.http_get]
-max_calls       = 15
-max_calls = 10
+max_calls = 15
 ```
 
 In passthrough mode (no `nanny run`), `nanny::http_get` makes the request directly with no enforcement overhead.
@@ -116,7 +104,7 @@ In passthrough mode (no `nanny run`), `nanny::http_get` makes the request direct
 
 ## `nanny::report_usage`: report LLM token usage
 
-`#[tool(tokens = N)]` records a *declared* token cost per call. To record the *actual* tokens an LLM used, report them after the call with `nanny::report_usage`. Hand Nanny the counts already present on the response.
+To record the tokens an LLM used, report them after the call with `nanny::report_usage`. Hand Nanny the counts already present on the response.
 
 Measurement only. Nothing here stops a run: tokens are recorded so you can answer what a run cost, and Nanny never makes a decision from them.
 
@@ -261,7 +249,7 @@ Mirrors `nanny_sdk.run_scope()` on the Python side.
 use nanny::{tool, rule, agent, PolicyContext};
 use std::collections::HashMap;
 
-#[tool(tokens = 10)]
+#[tool]
 fn fetch_page(url: &str) -> String {
     reqwest::blocking::get(url).unwrap().text().unwrap()
 }

@@ -200,7 +200,7 @@ allowlist enforcement, and custom policy rules:
 use nannyd::{tool, rule, agent, PolicyContext};
 
 /// Each call charges 10 tokens and requires the tool to be in the allowlist.
-#[nanny::tool(tokens = 10)]
+#[nanny::tool]
 fn search_web(query: String) -> String {
     // ... HTTP request ...
     String::new()
@@ -235,7 +235,7 @@ For Python agents, the same model as the Rust SDK, as decorators:
 ```python
 from nanny_sdk import tool, rule, agent
 
-@tool(tokens=10)
+@tool()
 def search_web(query: str) -> str:
     import httpx
     return httpx.get(f"https://en.wikipedia.org/wiki/{query}").text
@@ -256,7 +256,7 @@ Works with any framework, LangGraph, CrewAI, LangChain, plain Python. In Python-
 ```python
 from nanny_sdk import tool as nanny_tool
 
-@nanny_tool(tokens=5)
+@nanny_tool()
 def read_file(path: str) -> str:
     with open(path) as f:
         return f.read()
@@ -269,7 +269,7 @@ from langchain_core.tools import tool as lc_tool
 from nanny_sdk import tool as nanny_tool
 
 @lc_tool                   # outer: LangChain registers this for LLM dispatch
-@nanny_tool(tokens=5)      # inner: Nanny intercepts before the function body runs
+@nanny_tool()      # inner: Nanny intercepts before the function body runs
 def read_file(path: str) -> str:
     with open(path) as f:
         return f.read()

@@ -92,12 +92,6 @@ impl ToolExecutor for ToolRegistry {
                 }),
         }
     }
-
-    /// Return the declared cost of a registered tool, or `None` if it is not
-    /// registered. Reported for attribution only; no cost stops a run.
-    fn declared_cost(&self, name: &str) -> Option<u64> {
-        self.tools.get(name).map(|t| t.declared_cost())
-    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -113,9 +107,6 @@ mod tests {
         fn name(&self) -> &str {
             "echo"
         }
-        fn declared_cost(&self) -> u64 {
-            5
-        }
         fn execute(&self, args: &ToolArgs) -> Result<ToolOutput, ToolError> {
             let message = args.get("message").cloned().unwrap_or_default();
             Ok(ToolOutput { content: message })
@@ -127,9 +118,6 @@ mod tests {
     impl Tool for FailingTool {
         fn name(&self) -> &str {
             "failing"
-        }
-        fn declared_cost(&self) -> u64 {
-            1
         }
         fn execute(&self, _: &ToolArgs) -> Result<ToolOutput, ToolError> {
             Err(ToolError::ExecutionFailed("always fails".to_string()))
@@ -164,15 +152,6 @@ mod tests {
 
         let result = registry.call("failing", &ToolArgs::new());
         assert!(matches!(result, Err(ToolCallError::Execution { .. })));
-    }
-
-    #[test]
-    fn declared_cost_returns_correct_value() {
-        let mut registry = ToolRegistry::new();
-        registry.register(Box::new(EchoTool));
-
-        assert_eq!(registry.declared_cost("echo"), Some(5));
-        assert_eq!(registry.declared_cost("unknown"), None);
     }
 
     #[test]
