@@ -98,8 +98,8 @@ nanny rules add nanny:recommended@1.0.0 --from ./packs/nanny-recommended
 
 | Pack | Rules | Covers |
 | --- | --- | --- |
-| `nanny:recommended` | 30 | Injection and taint, sequence, loops, argument safety, destructive actions, payments, operating conditions |
-| `nanny:owasp` | 15 | Controls mapped to the OWASP Agentic Top Ten |
+| `nanny:recommended` | 14 | Injection and taint, sequence, loops, argument safety, destructive actions, payments |
+| `nanny:owasp` | 10 | Controls mapped to the OWASP Agentic Top Ten |
 
 Your source is never edited. `@rule` stays for your own private rules.
 

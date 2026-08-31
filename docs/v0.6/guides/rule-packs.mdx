@@ -58,7 +58,7 @@ nanny rules list
 ```
 
 ```
-nanny:recommended@1.0.0       unsigned  30 rule(s)  Application-agnostic rules every governed agent should start with.
+nanny:recommended@1.0.0      unsigned  14 rule(s)  Controls that hold for every governed agent. No thresholds, no assumptions about which tools exist.
 ```
 
 Every line says whether the pack's contents were verified on install. A pack you
@@ -89,8 +89,8 @@ Deletes the vendored copy and the line in `nanny.toml`.
 
 | Pack | Rules | Covers |
 | --- | --- | --- |
-| `nanny:recommended` | 30 | Injection and taint, sequence, loops, argument safety, destructive actions, payments, operating conditions |
-| `nanny:owasp` | 15 | Controls mapped to the OWASP Agentic Top Ten |
+| `nanny:recommended` | 14 | Injection and taint, sequence, loops, argument safety, destructive actions, payments |
+| `nanny:owasp` | 10 | Controls mapped to the OWASP Agentic Top Ten |
 
 Both reference [tool labels](/v0.6/concepts/tool-labels) rather than tool names,
 so they govern your application without having been written for it. Label your
