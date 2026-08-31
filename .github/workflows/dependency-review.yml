@@ -23,7 +23,5 @@ jobs:
         with:
           fail-on-severity: high
           # This only evaluates dependencies a PR actually changes, so a PR
-          # that doesn't touch examples/**'s lockfiles never sees their
-          # existing, pre-known alerts. It does apply the same threshold if a
-          # PR bumps something inside examples/** to a version with its own
-          # new high/critical issue: no manifest is exempted outright.
+          # inherits none of the tree's existing, pre-known alerts. Those are
+          # security-audit.yml's job. No manifest is exempted outright.

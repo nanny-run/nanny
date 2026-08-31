@@ -106,7 +106,7 @@ uv run pytest ../../packs/nanny-recommended/tests
 - **Fork model**: Fork → clone your fork → PR to `main`
 - **Conventional commits**: `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`
 - **Tag protection**: `v*` tags restricted to maintainers only
-- **Release checklist**: Bump workspace version → examples → Homebrew formula → Python SDK → `CHANGELOG.md` → tests pass → clippy clean
+- **Release checklist**: Bump workspace version → Homebrew formula → Python SDK → `CHANGELOG.md` → tests pass → clippy clean
 
 ## Key directories
 

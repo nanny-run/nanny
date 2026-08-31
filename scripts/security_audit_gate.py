@@ -3,21 +3,16 @@
 
 Reads a JSON array of Dependabot alert objects from stdin (the shape
 returned by `GET /repos/{owner}/{repo}/dependabot/alerts`). Filters to
-`state == "open"` and `severity in {critical, high}`, then further to
-manifest paths matching --scope.
+`state == "open"` and `severity in {critical, high}`.
 
---scope shipped: cross-references against .security-allowlist.jsonc by
-  alert number. An alert covered by an ACTIVE, non-expired entry is
-  reported but does not fail the gate. Anything else does. Exit 1 if any
-  unallowlisted (or allowlisted-but-expired) finding remains.
-
---scope examples: reports the same filtered set with no allowlist
-  cross-reference and always exits 0, this scope is informational only,
-  see .github/workflows/security-audit.yml's own header for why.
+Findings are cross-referenced against .security-allowlist.jsonc by alert
+number. An alert covered by an ACTIVE, non-expired entry is reported but
+does not fail the gate. Anything else does. Exit 1 if any unallowlisted
+(or allowlisted-but-expired) finding remains.
 
 Usage:
   gh api "repos/OWNER/REPO/dependabot/alerts" --paginate --slurp \
-    | python3 scripts/security_audit_gate.py --scope shipped
+    | python3 scripts/security_audit_gate.py
 """
 
 from __future__ import annotations
@@ -44,10 +39,6 @@ def load_pages(raw_stdin: str) -> list[dict]:
     return data
 
 
-def is_shipped(manifest_path: str, examples_prefix: str = "examples/") -> bool:
-    return not manifest_path.startswith(examples_prefix)
-
-
 def matching_allowlist_entry(alert_number: int, allowlist: list[dict]) -> dict | None:
     today = datetime.now(timezone.utc).date()
     for entry in allowlist:
@@ -63,9 +54,7 @@ def matching_allowlist_entry(alert_number: int, allowlist: list[dict]) -> dict |
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--scope", choices=["shipped", "examples"], required=True)
-    args = parser.parse_args()
+    argparse.ArgumentParser().parse_args()
 
     alerts = load_pages(sys.stdin.read())
     relevant = [
@@ -73,19 +62,18 @@ def main() -> int:
         for a in alerts
         if a.get("state") == "open"
         and a.get("security_vulnerability", {}).get("severity") in ("critical", "high")
-        and (is_shipped(a["dependency"]["manifest_path"]) if args.scope == "shipped" else not is_shipped(a["dependency"]["manifest_path"]))
     ]
 
     if not relevant:
-        print(f"No open critical/high alerts in scope '{args.scope}'.")
+        print("No open critical/high alerts.")
         return 0
 
-    allowlist = load_allowlist() if args.scope == "shipped" else []
+    allowlist = load_allowlist()
 
     failing: list[dict] = []
     covered: list[tuple[dict, dict]] = []
     for alert in relevant:
-        entry = matching_allowlist_entry(alert["number"], allowlist) if args.scope == "shipped" else None
+        entry = matching_allowlist_entry(alert["number"], allowlist)
         if entry:
             covered.append((alert, entry))
         else:
@@ -103,19 +91,15 @@ def main() -> int:
         print()
 
     if failing:
-        label = "Open critical/high alerts" if args.scope == "shipped" else "Open critical/high alerts (informational)"
-        marker = "::warning::" if args.scope == "examples" else ""
-        print(f"{marker}{label}, not covered by an active allowlist entry:")
+        print("Open critical/high alerts, not covered by an active allowlist entry:")
         for alert in failing:
             print(describe(alert))
-        if args.scope == "shipped":
-            print()
-            print("Fix (bump the dependency), or add a .security-allowlist.jsonc entry with a real")
-            print("expiry and traced reason if it genuinely can't be fixed right now.")
-            return 1
-        return 0
+        print()
+        print("Fix (bump the dependency), or add a .security-allowlist.jsonc entry with a real")
+        print("expiry and traced reason if it genuinely can't be fixed right now.")
+        return 1
 
-    print(f"No unallowlisted open critical/high alerts in scope '{args.scope}'.")
+    print("No unallowlisted open critical/high alerts.")
     return 0
 
 

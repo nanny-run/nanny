@@ -17,14 +17,9 @@ name: Security audit
 # controllable, shrinking the visible lag from "up to a day" (waiting for
 # the next cron) to "up to about a minute."
 #
-# Shipped code (root Cargo.lock, sdks/python) hard-fails on open
+# Everything in the tree (root Cargo.lock, sdks/python) hard-fails on open
 # critical/high alerts, UNLESS covered by an active, non-expired entry in
-# .security-allowlist.jsonc: see that file's header. examples/** is
-# reported, not blocking: nothing under examples/ is installed by a real
-# user, and gating a release on a demo app's dependency tree would be
-# disproportionate. See cloud/IMPLEMENTATION_PLAN.md's "Future: remove
-# examples/" note: that decision, once acted on, removes this split
-# entirely rather than needing the allowlist extended to cover it.
+# .security-allowlist.jsonc: see that file's header.
 
 on:
   push:
@@ -75,7 +70,7 @@ jobs:
           delay=15
           for i in $(seq 1 "$attempts"); do
             if gh api "repos/${{ github.repository }}/dependabot/alerts" --paginate --slurp \
-                | python3 scripts/security_audit_gate.py --scope shipped; then
+                | python3 scripts/security_audit_gate.py; then
               exit 0
             fi
             if [ "$i" -lt "$attempts" ]; then
@@ -88,20 +83,3 @@ jobs:
           echo ""
           echo "Still failing after $attempts attempts, treating as a real finding, not a race."
           exit 1
-
-  audit-examples:
-    name: Examples, report only, non-blocking
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Query open Dependabot alerts (informational)
-        env:
-          GH_TOKEN: ${{ secrets.NANNY_DEPENDABOT_ALERTS_TOKEN }}
-        run: |
-          if [ -z "$GH_TOKEN" ]; then
-            echo "::warning::NANNY_DEPENDABOT_ALERTS_TOKEN secret is not set, skipping (see audit-shipped job)."
-            exit 0
-          fi
-          gh api "repos/${{ github.repository }}/dependabot/alerts" --paginate --slurp \
-            | python3 scripts/security_audit_gate.py --scope examples
