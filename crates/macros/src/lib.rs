@@ -194,7 +194,7 @@ fn expand_rule(input: ItemFn, name_lit: LitStr) -> syn::Result<TokenStream2> {
 
 // ── #[nanny::agent("name")] ─────────────────────────────────────────────────
 
-/// Activate a named limits set for the duration of a function.
+/// Name a phase of the run for the duration of a function.
 ///
 /// # Usage
 ///
@@ -203,14 +203,15 @@ fn expand_rule(input: ItemFn, name_lit: LitStr) -> syn::Result<TokenStream2> {
 ///
 /// #[agent("researcher")]
 /// fn run_research(topic: &str) {
-///     // [limits.researcher] is active here
+///     // every verdict in here is attributed to "researcher"
 /// }
 /// ```
 ///
-/// On function entry: `POST /agent/enter` switches to `[limits.researcher]`.
-/// On function exit (including panics): `POST /agent/exit` reverts to global limits.
+/// A scope does not change what the agent may do. It labels which phase each
+/// verdict belongs to, so the audit log can attribute one.
 ///
-/// If the named set does not exist in `nanny.toml`, panics immediately on entry.
+/// On function entry: `POST /agent/enter`. On function exit, including panics:
+/// `POST /agent/exit`. Any name is accepted; nothing has to declare it first.
 ///
 /// When inactive (no bridge), the function runs normally: no bridge calls.
 #[proc_macro_attribute]
