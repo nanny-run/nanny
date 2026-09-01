@@ -349,8 +349,9 @@ pub enum LogTarget {
 /// environment variable cannot change in a running process while the contents
 /// of the file it points at can.
 ///
-/// **A leading `/`, `./` or `~/` means a path**, and everything else is the
-/// secret itself. The sniff is on the path form rather than the literal form,
+/// **A leading `/`, `./` or `~/` means a path** (plus the Windows forms: a
+/// drive-qualified `C:\\`, a UNC `\\\\host\\share`, a root-relative `\\`, or an
+/// explicit `.\\`), and everything else is the secret itself. The sniff is on the path form rather than the literal form,
 /// the opposite of how `NANNY_BRIDGE_CERT` decides (there, `-----BEGIN` marks
 /// the literal), because an inline certificate is unmistakable while a token is
 /// an opaque string. Inverting it keeps every existing deployment working
@@ -382,8 +383,25 @@ pub fn resolve_secret(raw: &str) -> Result<String, String> {
 }
 
 /// Whether a supplied secret should be read as a path rather than used as-is.
+///
+/// Windows forms are recognised too, and not for tidiness: a Windows operator
+/// setting `C:\secrets\token` would otherwise have that string taken as the
+/// token itself. It is well over the length floor, so nothing would refuse it,
+/// and the governor would end up authenticating processes with a filename.
 fn looks_like_path(value: &str) -> bool {
-    value.starts_with('/') || value.starts_with("./") || value.starts_with("~/")
+    if value.starts_with('/') || value.starts_with("./") || value.starts_with("~/") {
+        return true;
+    }
+    // UNC (`\\host\share`), root-relative (`\dir`), or explicitly relative.
+    if value.starts_with('\\') || value.starts_with(".\\") {
+        return true;
+    }
+    // Drive-qualified: `C:\dir` or `C:/dir`.
+    let mut chars = value.chars();
+    match (chars.next(), chars.next(), chars.next()) {
+        (Some(drive), Some(':'), Some('\\' | '/')) => drive.is_ascii_alphabetic(),
+        _ => false,
+    }
 }
 
 /// Expand a leading `~/` against the home directory, leaving every other path
@@ -855,6 +873,26 @@ reads_untrused = true
         // A bare relative name is a value, not a path: only `/`, `./` and `~/`
         // opt in, so nothing that already works changes meaning.
         assert_eq!(resolve_secret("secrets/token"), Ok("secrets/token".into()));
+    }
+
+    #[test]
+    fn windows_path_forms_are_paths_too() {
+        // Not tidiness. `C:\secrets\token` taken as the token itself is well
+        // over the length floor, so nothing would refuse it, and the governor
+        // would authenticate processes with a filename.
+        for path in [
+            "C:\\secrets\\token",
+            "c:/secrets/token",
+            "\\\\fileserver\\secrets\\token",
+            "\\secrets\\token",
+            ".\\token",
+        ] {
+            assert!(looks_like_path(path), "{path} must be read as a path");
+        }
+        // And a secret is still a secret: no colon-slash, no leading separator.
+        for secret in ["nny_live_abc123", "0123456789abcdef", "secrets/token", "a:b"] {
+            assert!(!looks_like_path(secret), "{secret} must be the secret");
+        }
     }
 
     #[test]
