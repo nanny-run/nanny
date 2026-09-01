@@ -158,19 +158,23 @@ pub fn cmd_server_start(
     // filesystem, so a token minted here could never be discovered by them and
     // would change on every restart; setting it is how a fleet deployment
     // holds still across redeploys. Local runs set nothing and are unchanged.
-    let session_token = match nanny_config::resolve_session_token(
+    // A set rather than a value: a rotation adds the new token beside the old
+    // one, rolls the joiners, then removes the old one, and nothing restarts.
+    let session_tokens = match nanny_config::resolve_session_token(
         std::env::var(nanny_config::SESSION_TOKEN_ENV)
             .ok()
             .as_deref(),
     ) {
         Ok(Some(configured)) => {
+            let plural = if configured.len() == 1 { "" } else { "s" };
             println!(
-                "nanny: session token taken from {}",
+                "nanny: {} session token{plural} taken from {}",
+                configured.len(),
                 nanny_config::SESSION_TOKEN_ENV
             );
             configured
         }
-        Ok(None) => uuid::Uuid::new_v4().to_string(),
+        Ok(None) => vec![uuid::Uuid::new_v4().to_string()],
         Err(message) => anyhow::bail!(message),
     };
     let target = crate::sync::resolve_sync(env, no_sync);
@@ -211,7 +215,13 @@ pub fn cmd_server_start(
             rx,
             target.endpoint,
             target.api_key,
-            session_token.clone(),
+            // The forwarder authenticates to this governor like any other
+            // client, so it needs one token that works rather than all of
+            // them. The first is the one published to disk and printed.
+            session_tokens
+                .first()
+                .cloned()
+                .expect("resolve_session_token never yields an empty set"),
             &cwd,
             local_log_path.clone(),
         );
@@ -282,7 +292,7 @@ pub fn cmd_server_start(
                 key_path,
                 ca_path,
                 components,
-                Some(session_token),
+                Some(session_tokens),
                 RATE_LIMIT_RPS,
                 event_sink,
                 state_dir_for_server,
@@ -299,7 +309,7 @@ pub fn cmd_server_start(
                 key_path,
                 ca_path,
                 components,
-                session_token,
+                session_tokens,
                 event_sink,
                 state_dir: state_dir_for_server,
                 local_log_path,
@@ -375,7 +385,7 @@ struct GovernorSetup {
     key_path: PathBuf,
     ca_path: PathBuf,
     components: nanny_bridge::BridgeComponents,
-    session_token: String,
+    session_tokens: Vec<String>,
     event_sink: Option<std::sync::mpsc::Sender<(String, Vec<String>)>>,
     state_dir: PathBuf,
     local_log_path: Option<PathBuf>,
@@ -453,7 +463,7 @@ fn run_governor_with_app(setup: GovernorSetup, command: Vec<String>, app_id: &st
                 setup.key_path,
                 setup.ca_path,
                 setup.components,
-                Some(setup.session_token),
+                Some(setup.session_tokens),
                 RATE_LIMIT_RPS,
                 setup.event_sink,
                 setup.state_dir,

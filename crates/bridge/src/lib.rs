@@ -470,15 +470,20 @@ fn dispatch(
 
 // ── Handlers (transport-agnostic) ─────────────────────────────────────────────
 
+/// Liveness, and deliberately nothing else.
+///
+/// **Served without the session token**, so an orchestrator can probe a
+/// governor without being handed the credential that admits a process to it.
+/// That is only safe because this reports whether the run is up and no more:
+/// the stop *reason* names a rule or a tool and belongs with the rest of the
+/// operational detail on `/status`, which stays behind the token.
 pub(crate) fn handle_health(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
     let guard = shared.lock().unwrap();
     let body = match &guard.execution {
-        ExecutionState::Running => r#"{"state":"running"}"#.to_string(),
-        ExecutionState::Stopped { reason } => {
-            format!(r#"{{"state":"stopped","reason":"{}"}}"#, reason)
-        }
+        ExecutionState::Running => r#"{"state":"running"}"#,
+        ExecutionState::Stopped { .. } => r#"{"state":"stopped"}"#,
     };
-    BridgeResp::json(200, body)
+    BridgeResp::json(200, body.to_string())
 }
 
 pub(crate) fn handle_status(shared: &Arc<Mutex<BridgeState>>) -> BridgeResp {
@@ -1669,6 +1674,24 @@ mod tests {
         assert_eq!(s, 200);
         let v = json_val(&body);
         assert_eq!(v["state"], "stopped");
+        // The reason names a rule or a tool, so it stays on /status. /health is
+        // served without the session token and must disclose nothing beyond
+        // whether the run is up.
+        assert!(
+            v.get("reason").is_none(),
+            "/health is unauthenticated and must not carry the stop reason: {body}"
+        );
+    }
+
+    #[test]
+    fn stop_reason_is_reported_on_status() {
+        let b = started(1000);
+        b.stop("ToolDenied");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let (s, body) = get(&b, "/status");
+        assert_eq!(s, 200);
+        let v = json_val(&body);
+        assert_eq!(v["state"], "stopped");
         assert_eq!(v["reason"], "ToolDenied");
     }
 
@@ -2546,8 +2569,9 @@ mod tests {
         let b = started(1000);
         b.stop("ToolDenied");
         b.stop("ManualStop"); // second call is ignored
-                              // Reason is from the first stop, not the second
-        assert_eq!(json_val(&get(&b, "/health").1)["reason"], "ToolDenied");
+                              // Reason is from the first stop, not the second.
+                              // Read from /status: /health reports liveness only.
+        assert_eq!(json_val(&get(&b, "/status").1)["reason"], "ToolDenied");
     }
 
     // ── Day 7: Security ──────────────────────────────────────────────────────

@@ -144,10 +144,17 @@ _harness_value: str | None = None
 def _detect_harness() -> str | None:
     """Best-effort harness name, cached after first detection.
 
-    Prefers the call stack (which framework actually drove this call), then falls
-    back to imported-module presence. Returns None when no known harness is found.
+    Prefers an explicit ``set_harness`` declaration, then the call stack (which
+    framework actually drove this call), then imported-module presence. Returns
+    None when nothing was declared and no known harness is found.
     Heuristic, that's why it lives in the SDK, not the engine.
     """
+    # An explicit declaration beats detection for the life of the process: an
+    # application that names itself knows better than a heuristic reading its
+    # imports, and a framework being importable does not mean it drove the call.
+    declared = _bridge.harness_override()
+    if declared:
+        return declared
     global _harness_detected, _harness_value
     if _harness_detected:
         return _harness_value

@@ -36,10 +36,12 @@ import json
 import os
 import ssl
 import tempfile
-from collections.abc import Generator
+import threading
+import time
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import httpx
 
@@ -51,6 +53,8 @@ from nanny_sdk.exceptions import (
     RuleDenied,
     ToolDenied,
 )
+
+T = TypeVar("T")
 
 # ---------------------------------------------------------------------------
 # Environment helpers, evaluated lazily so monkeypatch works in tests
@@ -309,6 +313,112 @@ def _bridge_call() -> Generator[None, None, None]:
         raise BridgeUnavailable() from exc
 
 
+# ---------------------------------------------------------------------------
+# First contact
+# ---------------------------------------------------------------------------
+
+#: Whether this process has ever reached the bridge. Flipped once, on the first
+#: successful call, and never back.
+_reached_bridge = False
+_reach_lock = threading.Lock()
+
+#: How long to keep trying to reach a governor that has never answered. Long
+#: enough to cover an orchestrator starting a joiner before the governor it
+#: joins, short enough that a genuinely absent governor is reported rather than
+#: hung on.
+FIRST_CONTACT_TIMEOUT_SECONDS = 30.0
+_FIRST_CONTACT_BACKOFF = (0.25, 0.5, 1.0, 2.0, 4.0)
+
+
+#: An explicitly declared harness, set by ``nanny_sdk.set_harness``. Held here
+#: rather than in ``instrument`` because ``nanny_sdk/__init__.py`` binds the
+#: name ``instrument`` to a function, which shadows the submodule of that name
+#: and makes the module unreachable by any import form.
+_harness_override: str | None = None
+
+
+def set_harness_override(name: str) -> None:
+    """Pin the harness, beating detection for the life of the process."""
+    global _harness_override
+    _harness_override = name
+
+
+def harness_override() -> str | None:
+    return _harness_override
+
+
+def _mark_reached() -> None:
+    global _reached_bridge
+    with _reach_lock:
+        _reached_bridge = True
+
+
+def has_reached_bridge() -> bool:
+    return _reached_bridge
+
+
+def _retry_first_contact(call: Callable[[], T]) -> T:
+    """Run *call*, retrying only while this process has never reached the bridge.
+
+    **Waiting for a first connection is patience; waiting mid-run is running
+    ungoverned.** Those are different things and must not share a code path.
+    An orchestrator gives no ordering guarantee, so a joiner that starts before
+    its governor would otherwise fail every job it is handed until something
+    restarted it, and a governor redeploy would take out the fleet rather than
+    pause it. But once a governor has answered, a later failure means the
+    governor this run is being enforced by has gone away, and retrying then
+    would let the agent keep calling tools while nothing was authorising them.
+
+    So the retry is armed exactly once, before the first success, and disarms
+    permanently the moment one call gets through.
+    """
+    if _reached_bridge:
+        result = call()
+        _mark_reached()
+        return result
+
+    deadline = time.monotonic() + FIRST_CONTACT_TIMEOUT_SECONDS
+    attempt = 0
+    while True:
+        try:
+            result = call()
+        except httpx.TransportError:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            delay = _FIRST_CONTACT_BACKOFF[min(attempt, len(_FIRST_CONTACT_BACKOFF) - 1)]
+            time.sleep(min(delay, remaining))
+            attempt += 1
+            continue
+        _mark_reached()
+        return result
+
+
+def _send(
+    method: str,
+    path: str,
+    *,
+    timeout: float,
+    json: Any | None = None,
+) -> httpx.Response:
+    """Perform one enforcement request, retrying only before first contact.
+
+    Every call that enforcement depends on goes through here, so the
+    first-contact rule is stated once rather than at four call sites that could
+    drift apart. Fire-and-forget reporting (`/app`, `/harness`, `/llm/usage`)
+    deliberately does not: it already swallows its own failures, and retrying
+    attribution would delay an agent for something that does not govern it.
+    """
+
+    def once() -> httpx.Response:
+        with _make_client(timeout=timeout) as c:
+            resp: httpx.Response = c.request(method, path, json=json, headers=_headers())
+            return resp
+
+    with _bridge_call():
+        return _retry_first_contact(once)
+
+
 def _headers() -> dict[str, str]:
     h = {"X-Nanny-Session-Token": _token()}
     run_id = _run_id()
@@ -370,8 +480,7 @@ def _raise_stop_from_410(resp: httpx.Response) -> None:
 
 def health() -> bool:
     """Connectivity check: returns True if bridge responds with state running."""
-    with _bridge_call(), _make_client(timeout=5.0) as c:
-        resp = c.get("/health", headers=_headers())
+    resp = _send("GET", "/health", timeout=5.0)
     resp.raise_for_status()
     data: dict[str, str] = resp.json()
     return data.get("state") == "running"
@@ -428,8 +537,7 @@ def get_status() -> PolicyContext:
     ``tool_labels`` arrives here too: an out-of-process SDK never reads
     nanny.toml, so ``/status`` is the only place it can learn what a tool is.
     """
-    with _bridge_call(), _make_client(timeout=5.0) as c:
-        resp = c.get("/status", headers=_headers())
+    resp = _send("GET", "/status", timeout=5.0)
     resp.raise_for_status()
     return PolicyContext.from_dict(resp.json())
 
@@ -454,8 +562,7 @@ def call_tool(
     # unprovable.
     if cleared_by:
         payload["cleared_by"] = cleared_by
-    with _bridge_call(), _make_client(timeout=10.0) as c:
-        resp = c.post("/tool/call", json=payload, headers=_headers())
+    resp = _send("POST", "/tool/call", timeout=10.0, json=payload)
     # 410 Gone: this run already stopped, raise a typed stop, not a raw HTTP error.
     if resp.status_code == 410:
         _raise_stop_from_410(resp)
@@ -478,8 +585,7 @@ def agent_enter(name: str) -> None:
     ``BridgeUnavailable`` if the bridge can't be reached at all, same reasoning
     as ``call_tool``.
     """
-    with _bridge_call(), _make_client(timeout=5.0) as c:
-        resp = c.post("/agent/enter", json={"name": name}, headers=_headers())
+    resp = _send("POST", "/agent/enter", timeout=5.0, json={"name": name})
     # 410 Gone: this run already stopped, raise a typed stop, not a raw HTTP error.
     if resp.status_code == 410:
         _raise_stop_from_410(resp)

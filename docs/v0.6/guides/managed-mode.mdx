@@ -28,6 +28,9 @@ Create a key in the dashboard under **Settings → API Keys**, then set it where
 
 ```bash
 export NANNY_API_KEY=nny_...
+
+# Or, in a deployment, a path to a mounted file holding the key:
+export NANNY_API_KEY=/run/secrets/nanny/api-key
 nanny run
 ```
 

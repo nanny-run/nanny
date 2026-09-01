@@ -18,6 +18,7 @@ from nanny_sdk.exceptions import (
     RuleDenied,
     ToolDenied,
 )
+from nanny_sdk.harness import set_harness
 from nanny_sdk.instrument import instrument
 from nanny_sdk.packs import declare_all, load_installed_packs
 from nanny_sdk.run import run_scope
@@ -35,6 +36,7 @@ __all__ = [
     "run_scope",
     # App attribution
     "set_app",
+    "set_harness",
     # Usage events
     "get_run_events",
     # Exceptions

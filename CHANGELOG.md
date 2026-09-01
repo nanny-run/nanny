@@ -5,6 +5,89 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-09-01
+
+### Added
+
+- **Every secret may be given as a path to a file.** `NANNY_SESSION_TOKEN` and
+  `NANNY_API_KEY` now accept either the secret itself or a path to a file
+  holding it, resolved by one shared function so the two cannot drift. A value
+  beginning with `/`, `./` or `~/` is read as a path; anything else is the
+  secret, so every existing deployment is untouched (the generators this
+  project recommends emit hex, and hex cannot begin with `/`). A path that
+  cannot be read is an error naming it, never a silent fall back to treating it
+  as the secret, which would authenticate a process with a filename. Contents
+  are trimmed, because `echo "$T" > file` appends a newline and a trailing
+  newline on a shared secret is a rejected request with nothing in any log
+  pointing at whitespace.
+
+  The reason this matters is not tidiness. A secret in the environment is
+  readable through `/proc/<pid>/environ`, inherited by every child process, and
+  visible to anything that can inspect the container. It also cannot rotate: an
+  environment variable does not change in a running process, while the contents
+  of a file it points at can.
+
+- **The governor accepts a set of session tokens, so one can be rotated.** A
+  token file may hold one per line, and every candidate is compared with no
+  early exit, so the timing does not reveal which entry matched or how far
+  through a rotation a fleet is. Previously a governor held exactly one token,
+  which made rotation impossible without stopping every joined process at the
+  same instant: the moment it took a new value, everything still presenting the
+  old one was refused and failed closed. Certificates never had this problem
+  because the CA keeps old and new leaves valid together; a shared secret has
+  no such authority, so the overlap is held by the governor. Rotation is now:
+  append the new token, roll the joiners, remove the old one.
+
+- **`nanny_sdk.set_harness`**, mirroring the Rust SDK's `nanny::set_harness`.
+  Harness detection recognises twelve frameworks from the call stack and
+  imported modules, so an application whose agent loop is its own code matched
+  none of them, reported nothing, and reached Cloud as `unknown` forever. A
+  first-party agent is not an unknown harness, it simply is not a framework. An
+  explicit declaration beats detection for the life of the process, because a
+  framework being importable does not mean it drove the call.
+
+### Changed
+
+- **`/health` is served without the session token**, so a container
+  orchestrator can probe a governor without being handed the credential that
+  admits a process to it. It reports `{"state":"running"}` or
+  `{"state":"stopped"}` and nothing else; the stop reason names a rule or a
+  tool and has moved to `/status`, which stays behind the token along with call
+  counts and history. Every other route is unchanged, and the rate limit still
+  applies, so an unauthenticated route cannot be used to flood the governor.
+
+- **A joining process retries its first connection**, with backoff, for 30
+  seconds. Enforcement still fails closed, and deliberately: once a governor
+  has answered, a later failure stops the run immediately, because retrying
+  then would let an agent keep calling tools while nothing was authorising
+  them. The retry is armed only before first contact and disarms permanently on
+  the first success. Without it, an orchestrator that starts a joiner before
+  its governor failed every job that joiner was handed, and redeploying a
+  governor took out the fleet rather than pausing it.
+
+### Fixed
+
+- **A governor no longer refuses to start when its state directory is not
+  writable.** `--serve` records its address, pid, token and sync destination so
+  that other processes *on the same machine* can find it through `--join`,
+  `status` and `stop`. Those writes were fatal, which made a read-only root
+  filesystem, a standard hardening baseline, incompatible with running a
+  governor at all, and meant a governor given both `--addr` and a token
+  declined to start because it could not write down what it had just been told.
+  It now says so once and serves. A process joining from another machine
+  receives the address and token as configuration and never read those files.
+
+- **Documentation described a deployment shape that gives up rotation.** The
+  governance-server guide told readers to pass certificates and tokens as
+  environment values "rather than a file", and the deploying guide's premise
+  was that nothing is written to disk. Both now lead with mounted files, say
+  plainly that only files rotate, and carry a worked two-container example with
+  every variable listed and no shell script reshaping a secret. The certificate
+  bundle is also six files rather than the five it claimed, and the hot-reload
+  section said the server watches `~/.nanny/certs/` when it watches whatever
+  directory `--cert` resolves to, which had it reading as though a mounted path
+  would not reload.
+
 ## [0.6.0] - 2026-08-31
 
 ### Added
