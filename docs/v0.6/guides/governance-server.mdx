@@ -124,14 +124,15 @@ a label.
 
 ### Step 5: Configure your agents
 
-Every secret may be given as a path to a file holding it, and that is the form
-to use in a deployment. A value beginning with `/`, `./` or `~/` is read as a
-path; anything else is the secret itself.
+Certificates may be given as a file path or as inline PEM, and a path is the
+form to use in a deployment. The session token is always the token itself: both
+ends read the same variable, so a second form to interpret is only a way for
+them to disagree.
 
 ```ini
 # .env (never commit this file: add it to .gitignore)
 NANNY_BRIDGE_ADDR=server.example.com:62669
-NANNY_SESSION_TOKEN=/run/secrets/nanny/token
+NANNY_SESSION_TOKEN=a3f9...
 NANNY_BRIDGE_CERT=/run/secrets/nanny/client.crt
 NANNY_BRIDGE_KEY=/run/secrets/nanny/client.key
 NANNY_BRIDGE_CA=/run/secrets/nanny/ca.crt
@@ -153,12 +154,13 @@ refuses connections from anything without a valid cert signed by the same CA.
 
 ### Rotating the token
 
-The governor accepts a **set** of tokens, one per line when the value is a
-path, so a rotation never needs everything to restart at the same instant:
+The governor accepts a **set** of tokens, newline-separated in the variable, so
+a rotation never needs everything to restart at the same instant:
 
-1. Append the new token to the file and restart the governor. Both are now accepted.
+1. Set the variable to the old and new token on separate lines, and restart the
+   governor. Both are now accepted.
 2. Move the joiners onto the new token, at whatever pace you like.
-3. Remove the old line and restart the governor. The old token is dead.
+3. Drop the old line and restart the governor. The old token is dead.
 
 Certificates do not need this, because the CA keeps the old and new leaves
 valid at the same time. A shared secret has no such authority, so the overlap
@@ -178,19 +180,19 @@ is made.
 
 ```bash
 nanny certs generate --san governor --days 3650
-openssl rand -hex 32 > token
+openssl rand -hex 32
 ```
 
-Mount `server.crt`, `server.key`, `ca.crt` and `token` into the governor, and
-`client.crt`, `client.key`, `ca.crt` and the same `token` into the joiner.
+Mount `server.crt`, `server.key` and `ca.crt` into the governor, and
+`client.crt`, `client.key` and `ca.crt` into the joiner. The token is an
+environment variable on both, set to the same value.
 `ca.key` never leaves your machine: it signs certificates, so anyone holding it
 can mint a client the governor will trust.
 
 **The governor:**
 
 ```ini
-NANNY_SESSION_TOKEN=/run/secrets/nanny/token
-NANNY_API_KEY=/run/secrets/nanny/api-key
+NANNY_SESSION_TOKEN=a3f9...
 ```
 
 ```dockerfile
@@ -206,7 +208,7 @@ entrypoint is left alone:
 
 ```ini
 NANNY_BRIDGE_ADDR=governor:62669
-NANNY_SESSION_TOKEN=/run/secrets/nanny/token
+NANNY_SESSION_TOKEN=a3f9...
 NANNY_BRIDGE_CERT=/run/secrets/nanny/client.crt
 NANNY_BRIDGE_KEY=/run/secrets/nanny/client.key
 NANNY_BRIDGE_CA=/run/secrets/nanny/ca.crt
