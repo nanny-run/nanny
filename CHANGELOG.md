@@ -36,6 +36,31 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   lines, each saying something the other does not, instead of two saying the
   same thing.
 
+### Documentation
+
+- **"Deploying a governed app" is the ordered path now, not a list of topics.**
+  It covered the pieces without ever saying what order to do them in, so a
+  first deployment meant assembling a sequence from two pages that are both
+  organised by subject. It runs start to finish: pick the shape, build the
+  image, set the key, generate the bundle, boot, read the log, and what each
+  failure looks like. `governance-server.md` stays the reference it already
+  was and the walkthrough links into it, so neither page restates the other.
+
+- **Two errors in that page, both found by deploying a real app.** The startup
+  block showed output the runtime no longer prints. And the build step
+  recommended `uv sync --frozen`, which skips the check that the lock still
+  agrees with `pyproject.toml`, so an image could ship an older `nanny-sdk`
+  than the one it asked for and fail at runtime on a symbol the expected
+  version has. It says `--locked`.
+
+- **How to serve both deployment shapes from one image.** A `CMD` with
+  certificate paths baked in only runs *with* certificates, so a single
+  container needed a second image. Deciding at boot from whether the
+  certificates are mounted gets both from one, and matches how the runtime
+  already picks its transport from the address. Documented with the reason
+  `exec` is what keeps it correct: the shell must be replaced, not left in
+  front, or the governor is not PID 1 and never drains.
+
 ### Removed
 
 - **`NANNY_SESSION_TOKEN` is an environment variable again**, and only that.

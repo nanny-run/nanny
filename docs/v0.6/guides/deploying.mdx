@@ -1,17 +1,25 @@
 ---
 title: Deploying a governed app
-description: Run a Nanny-governed app in a container or on a server. One command, one secret, and nothing to carry between deploys.
+description: The ordered path from a working app to a governed one running on a host, and how to read the log it prints on the way up.
 ---
 
-## The shape
+This page is the sequence. [Governance server](/v0.6/guides/governance-server)
+is the reference for everything it touches: certificate operations, token
+rotation, port behaviour, server management. Follow the steps here, and read
+that page when a step raises a question.
 
-A deployed Nanny app is one process:
+## 1. Decide the shape
 
-```dockerfile
-CMD ["nanny", "run", "--serve", "--", "discord"]
-```
+There are two, and the choice decides everything after it.
 
-`--serve` starts the governance server and launches your `[start].cmd` underneath it. Trailing arguments append to that command, exactly as with plain `nanny run`.
+| | Shape | What it needs |
+| --- | --- | --- |
+| **One container** | Your app runs under a governor in the same container. | Nothing beyond `--serve`. |
+| **Governor and joiners** | One service runs the governor, others connect to it from their own containers or machines. | mTLS certificates and a session token. |
+
+Start with one container if you can. Not everything has to move at once: a
+second process joins later without the first one changing shape, and the rule
+set it is evaluated against is the same one.
 
 <Note>
   **Always deploy with `--serve`, even for a single process.** It is the only
@@ -21,59 +29,15 @@ CMD ["nanny", "run", "--serve", "--", "discord"]
   (see [Quickstart](/v0.6/quickstart)), but production always means `--serve`.
 </Note>
 
-There is no login step and no state to carry between deploys. A fresh container behaves the same as one that has been running for a month, and twenty replicas behave the same as one.
+## 2. Install dependencies at build time
 
-A governor writes a few files recording its own address, pid and token so that other processes *on the same machine* can find it with `--join`, `status` and `stop`. None of that is required: where the directory is not writable, it says so once and serves anyway, so a read-only root filesystem runs a governor perfectly well. A process joining from another machine is given the address and token as configuration and never reads them.
-
-## One secret
-
-```bash
-NANNY_API_KEY=nny_...
-```
-
-Create it in the dashboard under **Settings → API Keys**, then set it however your platform sets secrets: a Fly secret, a Kubernetes `Secret`, a Coolify environment variable. That single variable decides whether runs sync; see [Connect to Nanny Cloud](/v0.6/guides/managed-mode).
-
-The key's prefix (`nny_live_` or `nny_sdbx_`) also decides whether this deployment writes real evidence or throwaway sandbox data, see [Live and sandbox](/v0.6/guides/environments) before deploying against a live key for the first time.
-
-Leave it unset and everything still works. Enforcement is local and never depends on the cloud.
-
-<Warning>
-  Do not bake the key into an image or commit it. It is an ordinary deployment
-  secret and belongs with the rest of them.
-</Warning>
-
-## Which command to use
-
-**In production, every row below starts with `--serve`.** The only question is
-whether it launches your process directly or a second process joins it.
-
-| Your situation | Command |
-| --- | --- |
-| One app, one process | `nanny run --serve` |
-| Several processes under one rule set | `nanny run --serve` (governor) + `nanny run --join=<appId>` |
-| A governor with no app of its own | `nanny run --serve` with no `[start]` |
-
-## Ports
-
-The governor binds `127.0.0.1:62669` by default. If that port is taken it steps to the next free one and says so, then records the real address where `--join` and `nanny status` look for it, so several apps can run on one machine without configuration.
-
-Pass `--addr` only when the governor must be reachable from another machine. A non-loopback address makes mTLS mandatory and requires a certificate bundle (`nanny certs generate`). If a port you named explicitly is busy, that is an error rather than a silent move to a different one. A governor listening somewhere the firewall does not expect is worse than one that refuses to start.
-
-## Signals and shutdown
-
-Run `nanny` as PID 1 (a plain `CMD`, not wrapped in a shell). It receives `SIGTERM` directly, drains connections for up to 10 seconds, and stops the app it launched. If the app exits, the governor shuts down with it.
-
-A shell wrapper breaks this: `sh` does not forward signals to its children, so the governor never drains, and nothing notices if one half dies while the other keeps running half-governed.
-
-## Dependencies and the allowlist
-
-Install dependencies at build time rather than at start time, so a governed run does not fail on something unrelated to its policy:
+A governed run should not fail on something unrelated to its policy. The
+allowlist governs your app's tool calls, and a package installer running inside
+a governed process is a surprising way to discover that.
 
 ```dockerfile
 RUN uv sync --locked        # or pip install -r requirements.txt, npm ci, …
 ```
-
-This is working as intended, since the allowlist is doing its job, but it is a surprising way to discover it, so it is worth getting right before the first deploy.
 
 <Warning>
   `--locked`, not `--frozen`. Both refuse to update the lock file; only
@@ -84,7 +48,109 @@ This is working as intended, since the allowlist is doing its job, but it is a s
   you had. `npm ci` and `pip install -r` already fail this way by default.
 </Warning>
 
-## Checking it worked
+## 3. Set one secret
+
+```bash
+NANNY_API_KEY=nny_...
+```
+
+Create it in the dashboard under **Settings → API Keys**, then set it however
+your platform sets secrets: a Fly secret, a Kubernetes `Secret`, a Coolify
+environment variable. That single variable decides whether runs sync; see
+[Connect to Nanny Cloud](/v0.6/guides/managed-mode).
+
+The key's prefix (`nny_live_` or `nny_sdbx_`) also decides whether this
+deployment writes real evidence or throwaway sandbox data. Read
+[Live and sandbox](/v0.6/guides/environments) before deploying against a live
+key for the first time.
+
+Leave it unset and everything still works. Enforcement is local and never
+depends on the cloud.
+
+<Warning>
+  Do not bake the key into an image or commit it. It is an ordinary deployment
+  secret and belongs with the rest of them.
+</Warning>
+
+Set it on the governor only. Joined processes report through the governor, and
+a second key would split the audit trail and count the same run twice.
+
+## 4. If anything joins from elsewhere, do this before you deploy
+
+Skip to step 6 for a single container.
+
+Generate the bundle **on your machine, never in a container**, and mint the
+token at the same time:
+
+```bash
+nanny certs generate --san governor --days 3650
+openssl rand -hex 32
+```
+
+`--san` must cover the name the joiner dials. The client verifies the name it
+dialled against that list, and a mismatch fails the handshake before any
+request is made.
+
+Then mount, rather than paste: `server.crt`, `server.key` and `ca.crt` into the
+governor, and `client.crt`, `client.key` and `ca.crt` into each joiner. A value
+in the environment is readable through `/proc/<pid>/environ` and inherited by
+every child process, where a mounted file can be `0600` and is inherited by
+nothing. Only files rotate, too: an environment variable cannot change in a
+running process, so certificates supplied that way are replaced on the next
+restart instead of in place.
+
+`ca.key` never leaves your machine. It signs certificates, so anyone holding it
+can mint a client the governor will trust.
+
+The session token is the exception and is always an environment variable, on
+both sides. Both ends read the same variable, so a second form to interpret is
+only a way for them to disagree. See
+[Rotating the token](/v0.6/guides/governance-server#rotating-the-token) for
+moving a fleet onto a new one without stopping it.
+
+## 5. One image, both shapes
+
+A `CMD` with certificate paths baked into it only runs *with* certificates, so
+a single-container deploy needs a second image. Deciding at boot from whether
+the certificates are present gets both shapes out of one:
+
+```sh
+#!/bin/sh
+set -e
+
+# Fixed here rather than configured: the deployment maps a source path it
+# chooses onto a destination this file owns, and there is no variable to set
+# wrong. Outside /app deliberately, which is build output.
+CERT_DIR=/run/secrets/nanny
+
+if [ -f "$CERT_DIR/server.crt" ]; then
+  exec nanny run --serve --addr "0.0.0.0:${NANNY_BRIDGE_PORT:-62669}" \
+    --cert "$CERT_DIR/server.crt" \
+    --key  "$CERT_DIR/server.key" \
+    --ca   "$CERT_DIR/ca.crt"
+fi
+
+echo "nanny: no certificates at $CERT_DIR, serving on loopback only"
+exec nanny run --serve
+```
+
+The two branches match how the runtime already behaves: it picks its transport
+from the address, serving plain HTTP on loopback and requiring mTLS anywhere
+else. So binding `0.0.0.0` without certificates would fail to start, and
+binding loopback in a container makes the governor unreachable by anything but
+itself. Adding the certificates is what opens it to the joiners.
+
+<Note>
+  **`exec` is what makes this safe.** Nanny must be PID 1 so it receives
+  `SIGTERM` directly, drains for up to 10 seconds, and stops the app it
+  launched. A shell that stays running as the parent breaks that: `sh` does not
+  forward signals to its children, so the governor never drains and nothing
+  notices if one half dies while the other keeps running half-governed.
+  `exec` replaces the shell rather than leaving one in front, so a script that
+  ends in `exec nanny` is exactly as correct as a plain `CMD`.
+</Note>
+
+## 6. Read the first boot
 
 ```
 nanny: mode managed, syncing to https://api.nanny.run (app: your-app)
@@ -95,13 +161,57 @@ nanny: governance server started
 nanny: running [start] under this governor (plain HTTP, loopback)
 ```
 
-The token is printed as a fingerprint, never in full: eight characters from the
-head, four from the tail, and the length. That is enough to confirm the governor
-took the token you set and not a stale one, and not enough to use, so a log
-aggregator holding it forever costs you nothing. The full value is in the token
-file named on the line below it. Under mTLS the governor also prints the
-variables a joining process needs.
+Four things worth checking, in order:
 
-Then `nanny status` from the same directory, or the dashboard, which lists the app by the name in `.nanny/app.json`.
+- **`mode managed`** means the API key was read. `mode local` means it was not,
+  and nothing will sync.
+- **`address`** is what you asked for. `127.0.0.1` when you expected `0.0.0.0`
+  means the certificate branch above did not fire.
+- **`session token`** is a fingerprint, never the token: eight characters from
+  the head, four from the tail, and the length. Enough to confirm the governor
+  took the token you set and not a stale one, and not enough to use, so a log
+  aggregator holding it forever costs you nothing. Compare it against what you
+  set on the joiners. Under mTLS the governor also prints the variables a
+  joining process needs.
+- **The launch line** names the transport. `(mTLS)` here and `(plain HTTP,
+  loopback)` are the two you will see.
 
-If the cloud is unreachable, events are held under `.nanny/spool/` (partitioned by environment) and delivered on the next run. See [Connect to Nanny Cloud](/v0.6/guides/managed-mode). If your platform gives the container a writable filesystem this is automatic; if it does not, a cloud outage costs those events, and everything else still works.
+Then `nanny status` from the same directory, or the dashboard, which lists the
+app by the name in `.nanny/app.json`.
+
+**Start order does not matter.** A joiner started before its governor retries
+its first connection for 30 seconds rather than failing the work it was handed.
+Once it has connected, a later failure stops the run immediately: waiting for a
+first connection is patience, waiting mid-run is running ungoverned.
+
+## 7. When it does not come up
+
+| What you see | What it is |
+| --- | --- |
+| Exits immediately, names a missing certificate | The governor refuses to start rather than serve a non-loopback address unprotected. Check the mount actually landed: an empty directory and a missing mount look identical from inside. |
+| Exits on a busy port | A port you named explicitly is an error, not a silent move to another one. A governor listening somewhere the firewall does not expect is worse than one that refuses to start. The default port moves on its own and says so. |
+| A joiner gets `401` | The tokens differ. Compare the governor's printed fingerprint against the joiner's value; a trailing newline in a secret manager is the usual cause. |
+| A joiner fails the handshake before any request | `--san` did not cover the name it dialled. Regenerate with the name in the list; the client checks this, so the governor's log may show nothing at all. |
+| `state directory not writable` | Not a failure. The governor records its address, pid and token so processes *on the same machine* can find it with `--join`, `status` and `stop`. It says so once and serves anyway, so a read-only root filesystem runs a governor perfectly well. A process joining from another machine is given the address and token as configuration and never reads them. |
+| The governor exits when your app does | By design. The governor's job is that process; there is nothing to govern once it is gone. |
+
+## 8. After it is up
+
+`/health` is served without the session token and reports whether the run is up
+and nothing else, so an orchestrator can probe it:
+
+```
+GET http://governor:62669/health  →  {"state":"running"}
+```
+
+`/status` carries call counts, history and the stop reason, and stays behind the
+token.
+
+There is no login step and no state to carry between deploys. A fresh container
+behaves the same as one that has been running for a month, and twenty replicas
+behave the same as one.
+
+If the cloud is unreachable, events are held under `.nanny/spool/`
+(partitioned by environment) and delivered on the next run. If your platform
+gives the container a writable filesystem this is automatic; if it does not, a
+cloud outage costs those events, and everything else still works.
