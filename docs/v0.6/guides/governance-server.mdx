@@ -292,7 +292,7 @@ nanny health
 
 Both commands default to the current directory's own `app_id` (from `.nanny/app.json`) when `--app` is omitted. `nanny stop` sends `SIGTERM` to the server process. In-flight requests complete within a 10-second grace window before the server exits. This means a running agent can finish its current tool call before the server shuts down.
 
-Set `NANNY_HOME` to move `~/.nanny/servers/` (and everything else nanny keeps) to a directory of your choice instead of the home directory. Every `--serve`/`--join`/`status`/`stop` invocation for a given governor needs the same `NANNY_HOME` to find its state.
+Set `NANNY_HOME` to move `~/.nanny/servers/` to a directory of your choice instead of the home directory. Every `--serve`/`--join`/`status`/`stop` invocation for a given governor needs the same `NANNY_HOME` to find its state. It moves the server state directory only: certificates are resolved from the home directory or from the paths you pass to `--cert`, `--key` and `--ca`, which is what a deployment mounting its bundle somewhere specific should use.
 
 ---
 
