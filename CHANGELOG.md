@@ -5,26 +5,28 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.6.1] - 2026-09-01
+## [0.6.1] - 2026-09-02
 
 ### Added
 
 - **The session token may be given as a path to a file.** `NANNY_SESSION_TOKEN`
   now accepts either the token itself or a path to a file holding it. A value
-  beginning with `/`, `./` or `~/` is read as a path; anything else is the
-  secret, so every existing deployment is untouched (the generators this
-  project recommends emit hex, and hex cannot begin with `/`). A path that
-  cannot be read is an error naming it, never a silent fall back to treating it
-  as the secret, which would authenticate a process with a filename. Contents
-  are trimmed, because `echo "$T" > file` appends a newline and a trailing
-  newline on a shared secret is a rejected request with nothing in any log
-  pointing at whitespace.
+  beginning with `/`, `./` or `~/` is read as a path, as are the Windows forms
+  (`C:\`, a UNC `\\host\share`, a root-relative `\`, an explicit `.\`);
+  anything else is the token, so every existing deployment is untouched, the
+  generators this project recommends emitting hex and hex being unable to begin
+  with a separator.
 
-  The reason this matters is not tidiness. A secret in the environment is
-  readable through `/proc/<pid>/environ`, inherited by every child process, and
-  visible to anything that can inspect the container. It also cannot rotate: an
-  environment variable does not change in a running process, while the contents
-  of a file it points at can.
+  A path that cannot be read is an error naming it, never a silent fall back to
+  treating it as the token, which would authenticate a process with a filename.
+  Contents are trimmed, because `echo "$T" > file` appends a newline and a
+  trailing newline on a shared secret is a rejected request with nothing in any
+  log pointing at whitespace.
+
+  This is what lets a deployment keep the token where it keeps its other
+  secrets. A value in the environment is readable through `/proc/<pid>/environ`,
+  inherited by every child process, and visible to anything that can inspect
+  the container; a mounted file can be `0600` and is inherited by nothing.
 
 - **The governor accepts a set of session tokens, so one can be rotated.** A
   token file may hold one per line, and every candidate is compared with no
@@ -36,6 +38,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   because the CA keeps old and new leaves valid together; a shared secret has
   no such authority, so the overlap is held by the governor. Rotation is now:
   append the new token, roll the joiners, remove the old one.
+
+  A path is also the only form that can rotate at all, in either direction: an
+  environment variable does not change in a running process, while the contents
+  of a file it points at can.
 
 - **`nanny_sdk.set_harness`**, mirroring the Rust SDK's `nanny::set_harness`.
   Harness detection recognises twelve frameworks from the call stack and
@@ -56,13 +62,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   applies, so an unauthenticated route cannot be used to flood the governor.
 
 - **A joining process retries its first connection**, with backoff, for 30
-  seconds, in both SDKs. Enforcement still fails closed, and deliberately: once a governor
-  has answered, a later failure stops the run immediately, because retrying
-  then would let an agent keep calling tools while nothing was authorising
-  them. The retry is armed only before first contact and disarms permanently on
-  the first success. Without it, an orchestrator that starts a joiner before
-  its governor failed every job that joiner was handed, and redeploying a
-  governor took out the fleet rather than pausing it.
+  seconds, in both SDKs. Enforcement still fails closed, and deliberately: once
+  a governor has answered, a later failure stops the run immediately, because
+  retrying then would let an agent keep calling tools while nothing was
+  authorising them. The retry is armed only before first contact and disarms
+  permanently on the first success. Without it, an orchestrator that starts a
+  joiner before its governor failed every job that joiner was handed, and
+  redeploying a governor took out the fleet rather than pausing it.
 
 ### Fixed
 
@@ -79,19 +85,23 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `[observability] log = "file"` still requires a writable path, deliberately:
   that setting exists so something else can tail the file, and a run that
   carried on without it would look healthy while the pipeline behind it
-  produced nothing. A read-only deployment sets `log = "stdout"`, which is the
-  default.
+  produced nothing. A read-only deployment sets `log = "stdout"`, the default.
 
 - **Documentation described a deployment shape that gives up rotation.** The
   governance-server guide told readers to pass certificates and tokens as
   environment values "rather than a file", and the deploying guide's premise
-  was that nothing is written to disk. Both now lead with mounted files, say
-  plainly that only files rotate, and carry a worked two-container example with
-  every variable listed and no shell script reshaping a secret. The certificate
-  bundle is also six files rather than the five it claimed, and the hot-reload
-  section said the server watches `~/.nanny/certs/` when it watches whatever
-  directory `--cert` resolves to, which had it reading as though a mounted path
-  would not reload.
+  was that nothing is written to disk. Both now lead with mounted files and
+  carry a worked two-container example with every variable listed and no shell
+  script reshaping a secret.
+
+  Four smaller corrections went with it. The certificate bundle is six files
+  rather than the five it claimed. The hot-reload section said the server
+  watches `~/.nanny/certs/` when it watches whatever directory `--cert`
+  resolves to, which read as though a mounted path would not reload. `NANNY_HOME`
+  was described as moving "everything else nanny keeps" when it moves the
+  server state directory alone, leaving certificates on the home directory or
+  on the paths passed to `--cert`. And `PROTOCOL.md` said the session token
+  authenticates every request, which stopped being true of `/health`.
 
 ## [0.6.0] - 2026-08-31
 
