@@ -94,7 +94,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   carry a worked two-container example with every variable listed and no shell
   script reshaping a secret.
 
-  The Python SDK guide gained a `set_harness` section, and its `set_app`
+  Both SDK guides gained `set_app` and `set_harness` sections; the Rust guide
+  documented neither, though Rust has had both longer than Python has. The
+  Python guide additionally gained a `set_harness` section, and its `set_app`
   example was corrected: it showed `set_app()` with no arguments, which raises
   a `TypeError`, since reading `.nanny/app.json` is `nanny run`'s job and not
   the function's. The stop reference now also says that a process which has
