@@ -70,19 +70,37 @@ A shell wrapper breaks this: `sh` does not forward signals to its children, so t
 Install dependencies at build time rather than at start time, so a governed run does not fail on something unrelated to its policy:
 
 ```dockerfile
-RUN uv sync --frozen        # or pip install -r requirements.txt, npm ci, …
+RUN uv sync --locked        # or pip install -r requirements.txt, npm ci, …
 ```
 
 This is working as intended, since the allowlist is doing its job, but it is a surprising way to discover it, so it is worth getting right before the first deploy.
+
+<Warning>
+  `--locked`, not `--frozen`. Both refuse to update the lock file; only
+  `--locked` first checks that the lock still agrees with `pyproject.toml`.
+  With `--frozen`, a lock left behind by an edited `pyproject.toml` installs
+  anyway, so an image can ship an older `nanny-sdk` than the one you asked
+  for and fail at runtime on a symbol that exists in the version you thought
+  you had. `npm ci` and `pip install -r` already fail this way by default.
+</Warning>
 
 ## Checking it worked
 
 ```
 nanny: mode managed, syncing to https://api.nanny.run (app: your-app)
-nanny: governance server started  (plain HTTP, loopback)
+nanny: governance server started
   address      : 127.0.0.1:62669
-nanny: running [start] under this governor
+  session token: 34e6beee…8fad (64 chars)
+  token file   : /root/.nanny/servers/app_…/server.token
+nanny: running [start] under this governor (plain HTTP, loopback)
 ```
+
+The token is printed as a fingerprint, never in full: eight characters from the
+head, four from the tail, and the length. That is enough to confirm the governor
+took the token you set and not a stale one, and not enough to use, so a log
+aggregator holding it forever costs you nothing. The full value is in the token
+file named on the line below it. Under mTLS the governor also prints the
+variables a joining process needs.
 
 Then `nanny status` from the same directory, or the dashboard, which lists the app by the name in `.nanny/app.json`.
 
