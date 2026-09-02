@@ -1,6 +1,6 @@
 ---
 title: Deploying a governed app
-description: Run a Nanny-governed app in a container or on a server. One command, one secret, no state on disk.
+description: Run a Nanny-governed app in a container or on a server. One command, one secret, and nothing to carry between deploys.
 ---
 
 ## The shape
@@ -21,7 +21,9 @@ CMD ["nanny", "run", "--serve", "--", "discord"]
   (see [Quickstart](/v0.6/quickstart)), but production always means `--serve`.
 </Note>
 
-Nothing is written to disk to make this work: no credential file, no login step, no state carried between deploys. A fresh container behaves the same as one that has been running for a month, and twenty replicas behave the same as one.
+There is no login step and no state to carry between deploys. A fresh container behaves the same as one that has been running for a month, and twenty replicas behave the same as one.
+
+A governor writes a few files recording its own address, pid and token so that other processes *on the same machine* can find it with `--join`, `status` and `stop`. None of that is required: where the directory is not writable, it says so once and serves anyway, so a read-only root filesystem runs a governor perfectly well. A process joining from another machine is given the address and token as configuration and never reads them.
 
 ## One secret
 

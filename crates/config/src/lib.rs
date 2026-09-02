@@ -336,6 +336,88 @@ pub enum LogTarget {
     File,
 }
 
+// ── Secrets ────────────────────────────────────────────────────────────────────
+
+/// Read a secret that may be supplied literally or as a path to a file.
+///
+/// **Every secret nanny accepts may be a path**, and every environment variable
+/// is therefore either a pointer or a value that is not secret. That rule
+/// exists because a literal in the environment is readable through
+/// `/proc/<pid>/environ`, inherited by every child process, and visible to
+/// anything that can inspect the container; a mounted file can be `0600` and is
+/// inherited by nothing. It is also the only form that can rotate, since an
+/// environment variable cannot change in a running process while the contents
+/// of the file it points at can.
+///
+/// **A leading `/`, `./` or `~/` means a path** (plus the Windows forms: a
+/// drive-qualified `C:\\`, a UNC `\\\\host\\share`, a root-relative `\\`, or an
+/// explicit `.\\`), and everything else is the secret itself. The sniff is on the path form rather than the literal form,
+/// the opposite of how `NANNY_BRIDGE_CERT` decides (there, `-----BEGIN` marks
+/// the literal), because an inline certificate is unmistakable while a token is
+/// an opaque string. Inverting it keeps every existing deployment working
+/// untouched: the generators this project recommends emit hex, and hex cannot
+/// begin with `/`.
+///
+/// A value that looks like a path and is not readable is an error naming the
+/// path, never a silent fall back to treating it as the secret. Guessing wrong
+/// in that direction would authenticate a process with a filename.
+///
+/// The contents are trimmed. `echo "$TOKEN" > file` appends a newline, and a
+/// trailing newline on a shared secret is a rejected request with nothing in
+/// any log pointing at whitespace.
+pub fn resolve_secret(raw: &str) -> Result<String, String> {
+    let value = raw.trim();
+    if !looks_like_path(value) {
+        return Ok(value.to_string());
+    }
+    let path = expand_home(value);
+    match std::fs::read_to_string(&path) {
+        Ok(contents) => Ok(contents.trim().to_string()),
+        Err(e) => Err(format!(
+            "cannot read the secret at {}: {e}.\n\nA value beginning with `/`, `./` or `~/` is \
+             read as a path to a file holding the secret. If this is the secret itself, it cannot \
+             begin with those characters.",
+            path.display()
+        )),
+    }
+}
+
+/// Whether a supplied secret should be read as a path rather than used as-is.
+///
+/// Windows forms are recognised too, and not for tidiness: a Windows operator
+/// setting `C:\secrets\token` would otherwise have that string taken as the
+/// token itself. It is well over the length floor, so nothing would refuse it,
+/// and the governor would end up authenticating processes with a filename.
+fn looks_like_path(value: &str) -> bool {
+    if value.starts_with('/') || value.starts_with("./") || value.starts_with("~/") {
+        return true;
+    }
+    // UNC (`\\host\share`), root-relative (`\dir`), or explicitly relative.
+    if value.starts_with('\\') || value.starts_with(".\\") {
+        return true;
+    }
+    // Drive-qualified: `C:\dir` or `C:/dir`.
+    let mut chars = value.chars();
+    match (chars.next(), chars.next(), chars.next()) {
+        (Some(drive), Some(':'), Some('\\' | '/')) => drive.is_ascii_alphabetic(),
+        _ => false,
+    }
+}
+
+/// Expand a leading `~/` against the home directory, leaving every other path
+/// untouched. Without this a mounted secret described the way an operator would
+/// naturally write it fails with a confusing "no such file" for a directory
+/// literally named `~`.
+fn expand_home(value: &str) -> std::path::PathBuf {
+    match value.strip_prefix("~/") {
+        Some(rest) => match dirs::home_dir() {
+            Some(home) => home.join(rest),
+            None => std::path::PathBuf::from(value),
+        },
+        None => std::path::PathBuf::from(value),
+    }
+}
+
 // ── Cloud sync ─────────────────────────────────────────────────────────────────
 
 /// Environment variable holding the cloud API key. **The single input that
@@ -390,10 +472,22 @@ pub const SESSION_TOKEN_ENV: &str = "NANNY_SESSION_TOKEN";
 /// 32 characters, satisfied by `uuidgen` and by `openssl rand -hex 16`.
 pub const MIN_SESSION_TOKEN_LEN: usize = 32;
 
-/// Resolve the session token a governance server should run with.
+/// Resolve the session tokens a governance server should accept.
 ///
 /// `Ok(None)` means nothing was configured and the caller should mint one, the
 /// behaviour every local run has always had.
+///
+/// **A set, not a value.** A governor that accepts exactly one token cannot be
+/// rotated: the instant it takes a new one, every joined process still
+/// presenting the old one is refused, fails closed, and dies. Certificates do
+/// not have this problem because the CA keeps old and new leaves valid at the
+/// same time; a shared secret has no such authority, so the overlap has to be
+/// held here. With a set, rotation is: add the new token, roll the joiners,
+/// remove the old one, and nothing restarts.
+///
+/// The configured value may be the token itself or a path to a file holding
+/// one token per line, resolved by [`resolve_secret`]. Blank lines are ignored
+/// so a file can be edited by appending.
 ///
 /// **A length floor, and deliberately not a format check.** "Is a UUID" is not
 /// "is unguessable": a v1 UUID is a timestamp and a MAC address and would pass
@@ -404,23 +498,35 @@ pub const MIN_SESSION_TOKEN_LEN: usize = 32;
 /// This validates rather than trusts because the token is what admits a
 /// process to a governor: a weak one is a policy bypass, so it is a guard on an
 /// authority decision, not a guard against typos.
-pub fn resolve_session_token(configured: Option<&str>) -> Result<Option<String>, String> {
+pub fn resolve_session_token(configured: Option<&str>) -> Result<Option<Vec<String>>, String> {
     let Some(raw) = configured else {
         return Ok(None);
     };
-    let token = raw.trim();
-    if token.is_empty() {
+    if raw.trim().is_empty() {
         return Ok(None);
     }
-    if token.chars().count() < MIN_SESSION_TOKEN_LEN {
-        return Err(format!(
-            "{SESSION_TOKEN_ENV} is too short ({} characters; {MIN_SESSION_TOKEN_LEN} minimum). \
-             This token is what admits a process to this governor, so a guessable one is a \
-             policy bypass. Generate one with `openssl rand -hex 16` or `uuidgen`.",
-            token.chars().count()
-        ));
+    let resolved = resolve_secret(raw)?;
+    let tokens: Vec<String> = resolved
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect();
+    if tokens.is_empty() {
+        return Ok(None);
     }
-    Ok(Some(token.to_string()))
+    for token in &tokens {
+        if token.chars().count() < MIN_SESSION_TOKEN_LEN {
+            return Err(format!(
+                "{SESSION_TOKEN_ENV} contains a token that is too short ({} characters; \
+                 {MIN_SESSION_TOKEN_LEN} minimum). This token is what admits a process to this \
+                 governor, so a guessable one is a policy bypass. Generate one with \
+                 `openssl rand -hex 32` or `uuidgen`.",
+                token.chars().count()
+            ));
+        }
+    }
+    Ok(Some(tokens))
 }
 
 /// Whether a nanny.toml still carries a `[managed]` section. That block
@@ -740,14 +846,98 @@ reads_untrused = true
         let token = "0123456789abcdef0123456789abcdef";
         assert_eq!(
             resolve_session_token(Some(token)),
-            Ok(Some(token.to_string()))
+            Ok(Some(vec![token.to_string()]))
         );
         // Trimmed, because a value pasted into a deployment UI routinely
         // carries a trailing newline and the two sides must match exactly.
         assert_eq!(
             resolve_session_token(Some("  0123456789abcdef0123456789abcdef\n")),
-            Ok(Some(token.to_string()))
+            Ok(Some(vec![token.to_string()]))
         );
+    }
+
+    // ── Secrets supplied as a path ─────────────────────────────────────────
+
+    fn write_temp(name: &str, contents: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("nanny-secret-{name}"));
+        std::fs::write(&path, contents).unwrap();
+        path
+    }
+
+    #[test]
+    fn a_secret_that_is_not_a_path_is_the_secret() {
+        assert_eq!(resolve_secret("nny_live_abc123"), Ok("nny_live_abc123".into()));
+        // A bare relative name is a value, not a path: only `/`, `./` and `~/`
+        // opt in, so nothing that already works changes meaning.
+        assert_eq!(resolve_secret("secrets/token"), Ok("secrets/token".into()));
+    }
+
+    #[test]
+    fn windows_path_forms_are_paths_too() {
+        // Not tidiness. `C:\secrets\token` taken as the token itself is well
+        // over the length floor, so nothing would refuse it, and the governor
+        // would authenticate processes with a filename.
+        for path in [
+            "C:\\secrets\\token",
+            "c:/secrets/token",
+            "\\\\fileserver\\secrets\\token",
+            "\\secrets\\token",
+            ".\\token",
+        ] {
+            assert!(looks_like_path(path), "{path} must be read as a path");
+        }
+        // And a secret is still a secret: no colon-slash, no leading separator.
+        for secret in ["nny_live_abc123", "0123456789abcdef", "secrets/token", "a:b"] {
+            assert!(!looks_like_path(secret), "{secret} must be the secret");
+        }
+    }
+
+    #[test]
+    fn a_secret_given_as_a_path_is_read_and_trimmed() {
+        // The trailing newline is the point. `echo "$T" > file` adds one, and
+        // an untrimmed shared secret is a rejected request with nothing in any
+        // log pointing at whitespace.
+        let path = write_temp("read-and-trim", "  nny_live_from_a_file\n");
+        assert_eq!(
+            resolve_secret(path.to_str().unwrap()),
+            Ok("nny_live_from_a_file".into())
+        );
+    }
+
+    #[test]
+    fn a_path_that_cannot_be_read_is_an_error_not_a_literal() {
+        // Falling back to treating it as the secret would authenticate a
+        // process with a filename.
+        let err = resolve_secret("/nanny/definitely/not/here").unwrap_err();
+        assert!(err.contains("/nanny/definitely/not/here"), "names the path: {err}");
+        assert!(err.contains("read as a path"), "explains the rule: {err}");
+    }
+
+    #[test]
+    fn a_token_file_may_hold_several_tokens() {
+        // The overlap that makes rotation possible: add the new token, roll the
+        // joiners, remove the old one, and nothing restarts.
+        let old = "0123456789abcdef0123456789abcdef";
+        let new = "fedcba9876543210fedcba9876543210";
+        let path = write_temp("two-tokens", &format!("{old}\n\n{new}\n"));
+        assert_eq!(
+            resolve_session_token(Some(path.to_str().unwrap())),
+            Ok(Some(vec![old.to_string(), new.to_string()]))
+        );
+    }
+
+    #[test]
+    fn every_token_in_a_file_must_clear_the_floor() {
+        // One weak entry admits a process just as surely as a weak lone token.
+        let path = write_temp("one-weak", "0123456789abcdef0123456789abcdef\ndev\n");
+        let err = resolve_session_token(Some(path.to_str().unwrap())).unwrap_err();
+        assert!(err.contains("too short"), "{err}");
+    }
+
+    #[test]
+    fn an_empty_token_file_means_mint_one() {
+        let path = write_temp("empty", "\n  \n");
+        assert_eq!(resolve_session_token(Some(path.to_str().unwrap())), Ok(None));
     }
 
     #[test]

@@ -236,7 +236,7 @@ struct AppState {
     registry: Arc<ToolRegistry>,
     /// Session token stored separately for fast auth check without locking.
     /// Guards every request: tool calls, status, everything.
-    session_token: String,
+    session_tokens: Vec<String>,
     /// Per-IP rate limiter: DoS protection.
     rate_limiter: RateLimiter,
 }
@@ -299,14 +299,25 @@ impl AppState {
 // must cover every request.
 
 /// Checks the `X-Nanny-Session-Token` header; guards every ordinary request.
-fn session_token_ok(headers: &HeaderMap, expected: &str) -> bool {
-    match headers
+/// Whether the request carries one of the tokens this governor accepts.
+///
+/// **Every candidate is compared, with no early exit.** Returning as soon as
+/// one matches would leak, through timing, which entry matched and therefore
+/// how far through a rotation the fleet is. The set holds two entries during a
+/// rotation and one the rest of the time, so the cost of comparing all of them
+/// is not worth an information leak.
+fn session_token_ok(headers: &HeaderMap, expected: &[String]) -> bool {
+    let Some(got) = headers
         .get("x-nanny-session-token")
         .and_then(|v| v.to_str().ok())
-    {
-        Some(got) => secure_compare(got, expected),
-        None => false,
+    else {
+        return false;
+    };
+    let mut matched = false;
+    for candidate in expected {
+        matched |= secure_compare(got, candidate);
     }
+    matched
 }
 
 fn rate_limit_ok(app: &AppState, peer: SocketAddr) -> bool {
@@ -499,7 +510,17 @@ impl TowerService<hyper::Request<Incoming>> for GovernorService {
                     .into_response());
             }
 
-            if !session_token_ok(req.headers(), &app.session_token) {
+            // Liveness is the one route served without the token, so a
+            // container orchestrator can probe a governor without being given
+            // the credential that admits a process to it. It reports whether
+            // the run is up and nothing else; every route carrying operational
+            // detail, `/status` included, stays behind the check below.
+            //
+            // The rate limit above still applies, so an unauthenticated route
+            // cannot be used to flood the governor.
+            if req.uri().path() != "/health"
+                && !session_token_ok(req.headers(), &app.session_tokens)
+            {
                 return Ok(
                     (StatusCode::UNAUTHORIZED, r#"{"error":"Unauthorized"}"#).into_response()
                 );
@@ -637,7 +658,7 @@ impl NetworkServer {
         key_path: PathBuf,
         ca_path: PathBuf,
         components: BridgeComponents,
-        session_token: Option<String>,
+        session_tokens: Option<Vec<String>>,
         rate_limit_rps: u32,
         state_dir: PathBuf,
     ) -> Result<()> {
@@ -647,7 +668,7 @@ impl NetworkServer {
             key_path,
             ca_path,
             components,
-            session_token,
+            session_tokens,
             rate_limit_rps,
             None,
             state_dir,
@@ -676,7 +697,7 @@ impl NetworkServer {
         key_path: PathBuf,
         ca_path: PathBuf,
         components: BridgeComponents,
-        session_token: Option<String>,
+        session_tokens: Option<Vec<String>>,
         rate_limit_rps: u32, // max req/s per client IP, DoS protection, default 100
         event_sink: Option<Sender<(String, Vec<String>)>>,
         state_dir: PathBuf, // ~/.nanny/servers/<app_id>/, keyed, per-app, never shared
@@ -693,7 +714,17 @@ impl NetworkServer {
             .local_addr()
             .context("bound listener has no local address")?;
 
-        let token = session_token.unwrap_or_else(|| Uuid::new_v4().to_string());
+        // Configured tokens are accepted as a set so a rotation can hold two at
+        // once; with none configured a single one is minted, unchanged.
+        let tokens =
+            session_tokens.unwrap_or_else(|| vec![Uuid::new_v4().to_string()]);
+        // The first is the one published to disk and printed: a joiner needs
+        // one that works, not all of them, and during a rotation the operator
+        // already holds the one being introduced.
+        let token = tokens
+            .first()
+            .cloned()
+            .expect("resolve_session_token never yields an empty set");
         let (template, registry) = init_run_template(components, token.clone());
         let template = Arc::new(template);
 
@@ -788,14 +819,35 @@ impl NetworkServer {
             runs,
             template,
             registry,
-            session_token: token.clone(),
+            session_tokens: tokens.clone(),
             rate_limiter: RateLimiter::new(rate_limit_rps),
         };
 
         // Write token to <state_dir>/server.token for auto-injection by
         // `nanny run --join=<id>`. Keyed per-app, never the shared ~/.nanny.
-        std::fs::create_dir_all(&state_dir)
-            .with_context(|| format!("failed to create {}", state_dir.display()))?;
+        //
+        // **None of this is fatal.** These files exist so another process on
+        // this machine can discover a governor: `--join` reads the address and
+        // token, `status` and `stop` find the pid. A process joining from
+        // another host is given all of that as configuration and never reads
+        // them, so a deployment on a read-only filesystem would otherwise be
+        // refused a governor over bookkeeping it cannot use. When the address
+        // was passed with `--addr` and the token supplied through the
+        // environment, the governor is declining to start because it cannot
+        // write down what it was just told.
+        let state_dir_ok = match std::fs::create_dir_all(&state_dir) {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!(
+                    "nanny: cannot write {} ({e}); serving anyway. \
+                     `nanny status`, `nanny stop` and `nanny run --join` cannot \
+                     discover this governor on this machine, so a joining process \
+                     needs NANNY_BRIDGE_ADDR and NANNY_SESSION_TOKEN set explicitly.",
+                    state_dir.display()
+                );
+                false
+            }
+        };
 
         // The address actually bound, which is not necessarily the one
         // requested. `nanny status --app` and `nanny run --join` read this file
@@ -804,18 +856,28 @@ impl NetworkServer {
         // address (as the CLI used to) would point every joiner at a port
         // nothing is listening on.
         let addr_file = state_dir.join("server.addr");
-        std::fs::write(&addr_file, addr.to_string())
-            .with_context(|| format!("failed to write {}", addr_file.display()))?;
+        if state_dir_ok {
+            if let Err(e) = std::fs::write(&addr_file, addr.to_string()) {
+                eprintln!("nanny: cannot write {} ({e}); continuing.", addr_file.display());
+            }
+        }
 
         // A shared secret: created owner-read-only, never merely chmod'd
         // after the fact.
         let token_file = state_dir.join("server.token");
-        write_secret_file(&token_file, &token)?;
+        if state_dir_ok {
+            if let Err(e) = write_secret_file(&token_file, &token) {
+                eprintln!("nanny: cannot write {} ({e:#}); continuing.", token_file.display());
+            }
+        }
 
         // PID file so `nanny stop --app=<id>` can send SIGTERM.
         let pid_file = state_dir.join("server.pid");
-        std::fs::write(&pid_file, std::process::id().to_string())
-            .with_context(|| format!("failed to write {}", pid_file.display()))?;
+        if state_dir_ok {
+            if let Err(e) = std::fs::write(&pid_file, std::process::id().to_string()) {
+                eprintln!("nanny: cannot write {} ({e}); continuing.", pid_file.display());
+            }
+        }
 
         if addr.ip().is_loopback() {
             println!("nanny: governance server started  (plain HTTP, loopback)");
@@ -1430,7 +1492,7 @@ mod tests {
                 key2,
                 ca2,
                 test_components(),
-                Some(token2),
+                Some(vec![token2]),
                 100,
                 server_state_dir,
             )
@@ -1502,7 +1564,7 @@ mod tests {
                 key2,
                 ca2,
                 test_components(),
-                Some(token2),
+                Some(vec![token2]),
                 100,
                 server_state_dir,
             )
@@ -1583,7 +1645,7 @@ mod tests {
                 key2,
                 ca2,
                 test_components(),
-                Some(tok2),
+                Some(vec![tok2]),
                 100,
                 server_state_dir,
             )
@@ -1606,13 +1668,27 @@ mod tests {
             .build()
             .unwrap();
 
+        // /status, not /health: liveness is served without the token on
+        // purpose, so probing it here would assert the opposite of the design.
         let resp = client
-            .get(format!("https://127.0.0.1:{port}/health"))
+            .get(format!("https://127.0.0.1:{port}/status"))
             // No token header → 401
             .send()
             .expect("request must complete");
 
         assert_eq!(resp.status(), 401);
+
+        // And the exemption itself: a valid client certificate with no token
+        // still gets liveness, which is what a container health check has.
+        let health = client
+            .get(format!("https://127.0.0.1:{port}/health"))
+            .send()
+            .expect("request must complete");
+        assert_eq!(health.status(), 200, "/health is served without a token");
+        assert!(
+            !health.text().unwrap().contains("reason"),
+            "/health must not disclose the stop reason"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1794,7 +1870,7 @@ mod tests {
                 key2,
                 ca2,
                 test_components(),
-                Some(tok2),
+                Some(vec![tok2]),
                 100,
                 server_state_dir,
             )
@@ -1882,7 +1958,7 @@ mod tests {
                 runs,
                 template,
                 registry,
-                session_token: tok,
+                session_tokens: vec![tok],
                 rate_limiter: RateLimiter::new(rps),
             };
             let rt = tokio::runtime::Builder::new_multi_thread()
@@ -2285,7 +2361,7 @@ mod tests {
                 key,
                 ca,
                 test_components(),
-                Some(tok2),
+                Some(vec![tok2]),
                 100,
                 server_state_dir,
             )
@@ -2350,7 +2426,7 @@ mod tests {
                 key,
                 ca,
                 test_components(),
-                Some(tok2),
+                Some(vec![tok2]),
                 100,
                 server_state_dir,
             )
@@ -2361,9 +2437,10 @@ mod tests {
         // Valid client cert: TLS succeeds.
         let client = make_mtls_client(&dir, port);
 
-        // Wrong token → must get 401 (token check fires after TLS).
+        // Wrong token → must get 401 (token check fires after TLS). Probed on
+        // /status: /health is deliberately exempt from the token check.
         let resp = client
-            .get(format!("https://127.0.0.1:{port}/health"))
+            .get(format!("https://127.0.0.1:{port}/status"))
             .header("X-Nanny-Session-Token", "not-the-right-token")
             .send()
             .expect("request must reach server (TLS succeeds)");
@@ -2391,9 +2468,13 @@ mod tests {
     /// Returns the bound port and the (test-scratch) state dir it wrote its
     /// token/pid files into. Token is the caller-supplied string.
     fn start_plain_http_server(token: &str) -> (u16, PathBuf) {
+        start_plain_http_server_with(vec![token.to_string()])
+    }
+
+    fn start_plain_http_server_with(tokens: Vec<String>) -> (u16, PathBuf) {
         let port = next_port();
         let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
-        let tok = token.to_string();
+        let toks = tokens;
         let state_dir = test_state_dir();
         let thread_state_dir = state_dir.clone();
         std::thread::spawn(move || {
@@ -2404,7 +2485,7 @@ mod tests {
                 PathBuf::from("/dev/null/nanny-test-dummy.key"),
                 PathBuf::from("/dev/null/nanny-test-dummy-ca.crt"),
                 test_components(),
-                Some(tok),
+                Some(toks),
                 100,
                 thread_state_dir,
             )
@@ -2452,6 +2533,84 @@ mod tests {
         );
     }
 
+    #[test]
+    fn either_token_in_the_set_authenticates() {
+        // The overlap a rotation lives in: the governor holds the outgoing and
+        // incoming tokens at once, so joiners can be rolled one at a time
+        // instead of everything restarting at the same instant.
+        let old = format!("rotate-old-{}", next_port());
+        let new = format!("rotate-new-{}", next_port());
+        let (port, _state_dir) = start_plain_http_server_with(vec![old.clone(), new.clone()]);
+        let client = plain_http_client();
+
+        for token in [&old, &new] {
+            let resp = client
+                .get(format!("http://127.0.0.1:{port}/status"))
+                .header("X-Nanny-Session-Token", token)
+                .send()
+                .expect("request must reach server");
+            assert_eq!(resp.status(), 200, "token {token} must authenticate");
+        }
+
+        // And a token that was never in the set still does not.
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/status"))
+            .header("X-Nanny-Session-Token", "never-issued")
+            .send()
+            .expect("request must reach server");
+        assert_eq!(resp.status(), 401);
+    }
+
+    #[test]
+    fn an_unwritable_state_dir_serves_anyway() {
+        // Those files exist for same-machine discovery, which a joiner on
+        // another host never uses. A governor that was given its address and
+        // token refusing to start because it cannot write them down would make
+        // a read-only root filesystem, a standard hardening baseline,
+        // incompatible with running one at all.
+        let token = format!("readonly-{}", next_port());
+        let unwritable = std::env::temp_dir()
+            .join(format!("nanny-ro-{}", next_port()))
+            .join("locked");
+        std::fs::create_dir_all(unwritable.parent().unwrap()).unwrap();
+        // A file where the state directory should be: create_dir_all fails.
+        std::fs::write(unwritable.parent().unwrap().join("locked"), b"not a dir").unwrap();
+
+        let port = next_port();
+        let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+        let tok = token.clone();
+        let dir = unwritable.clone();
+        std::thread::spawn(move || {
+            NetworkServer::start_blocking(
+                addr,
+                PathBuf::from("/dev/null/nanny-test-dummy.crt"),
+                PathBuf::from("/dev/null/nanny-test-dummy.key"),
+                PathBuf::from("/dev/null/nanny-test-dummy-ca.crt"),
+                test_components(),
+                Some(vec![tok]),
+                100,
+                dir,
+            )
+            .ok();
+        });
+
+        let client = plain_http_client();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut served = false;
+        while Instant::now() < deadline {
+            if let Ok(resp) = client.get(format!("http://127.0.0.1:{port}/health")).send() {
+                if resp.status() == 200 {
+                    served = true;
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert!(served, "the governor must serve despite an unwritable state dir");
+
+        std::fs::remove_dir_all(unwritable.parent().unwrap()).ok();
+    }
+
     // Wrong token returns 401 over plain HTTP.
     // Auth is the session token, not TLS: must still enforce on plain HTTP path.
     #[test]
@@ -2461,7 +2620,7 @@ mod tests {
         let client = plain_http_client();
 
         let resp = client
-            .get(format!("http://127.0.0.1:{port}/health"))
+            .get(format!("http://127.0.0.1:{port}/status"))
             .header("X-Nanny-Session-Token", "not-the-right-token")
             .send()
             .expect("request must reach server even with wrong token");
@@ -2551,7 +2710,7 @@ mod tests {
                     PathBuf::from("/dev/null/dummy.key"),
                     PathBuf::from("/dev/null/dummy-ca.crt"),
                     test_components_with_cost(25),
-                    Some(tok),
+                    Some(vec![tok]),
                     100,
                     test_state_dir(),
                 )

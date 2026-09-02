@@ -247,14 +247,44 @@ closed.
 ## `set_app`: declare which app this process is
 
 ```python
+import json
+from pathlib import Path
+
 from nanny_sdk import set_app
 
-set_app()   # reads .nanny/app.json
+identity = json.loads(Path(".nanny/app.json").read_text())
+set_app(identity["app_id"], identity.get("name", ""))
 ```
 
 Emits `AppIdentified`, so runs from several apps sharing one governance server
 are attributed separately. A process that declares nothing inherits the
 governor's identity.
+
+`nanny run` already does this for the process it launches, on both the plain
+run and `--join`. Call it yourself only for a process `nanny run` did not
+start, such as a worker that joins a governor from its own entrypoint.
+
+---
+
+## `set_harness`: declare what is running this agent
+
+```python
+from nanny_sdk import set_harness
+
+set_harness("my-agent-engine")            # or set_harness("crewai", "0.5.1")
+```
+
+`instrument()` detects the well-known frameworks from the call stack and the
+imported modules, and reports what it found alongside each LLM call. Call this
+when detection cannot help, which is not a rare case: an application whose
+agent loop is its own code matches no framework, so detection correctly reports
+nothing and every run arrives unattributed. A first-party agent is not an
+unknown harness, it simply is not a framework.
+
+An explicit declaration wins over detection for the life of the process, since
+a framework being importable does not mean it drove the call. Deduped
+bridge-side, so declaring on every request is safe, and a no-op in passthrough
+mode like the decorators.
 
 ---
 
@@ -289,6 +319,13 @@ except NannyStop as e:
 ```
 
 `BridgeUnavailable` is raised when Nanny’s enforcement layer is active but unreachable during rule evaluation or a tool call. Nanny fails closed, the agent does not continue ungoverned. Like all `NannyStop` subclasses it extends `BaseException`, so it propagates through broad `except Exception` handlers in agent frameworks without being swallowed.
+
+A process that has **never** reached the bridge retries for 30 seconds first,
+with backoff, so a container started before the governor it joins waits rather
+than failing the work it was handed. That retry is armed once and disarms
+permanently on the first success: after a governor has answered, a later
+failure raises immediately, because retrying then would let the agent keep
+calling tools while nothing was authorising them.
 
 Under plain `nanny run` (single process, no `--serve`), you do not need to handle stop reasons in most agent code. They propagate up the call stack and terminate the process, since `nanny run` is watching that process and exits it for you. Catching them there is useful mainly in test code and at the CLI entry point.
 

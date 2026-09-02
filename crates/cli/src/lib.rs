@@ -539,9 +539,77 @@ mod runtime {
 
     // ── HTTP transport ────────────────────────────────────────────────────────
 
-    struct BridgeResponse {
-        status: u16,
-        body: String,
+    pub(crate) struct BridgeResponse {
+        pub(crate) status: u16,
+        pub(crate) body: String,
+    }
+
+    // ── First contact ─────────────────────────────────────────────────────────
+
+    /// Whether this process has ever reached the bridge. Set once, never unset.
+    static REACHED_BRIDGE: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    /// How long to keep trying a bridge that has never answered. Long enough to
+    /// cover an orchestrator starting a joined process before the governor it
+    /// joins, short enough that an absent governor is reported rather than hung
+    /// on.
+    const FIRST_CONTACT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+    const FIRST_CONTACT_BACKOFF_MS: [u64; 5] = [250, 500, 1000, 2000, 4000];
+
+    /// Run `attempt`, retrying only while this process has never reached the
+    /// bridge.
+    ///
+    /// **Waiting for a first connection is patience; waiting mid-run is running
+    /// ungoverned.** They are different things and must not share a code path.
+    /// An orchestrator gives no ordering guarantee, so a joined process that
+    /// starts before its governor would otherwise fail everything it was handed
+    /// until something restarted it, and a governor redeploy would take out the
+    /// fleet rather than pause it. Once a governor has answered, a later failure
+    /// means the thing authorising this run has gone away, and retrying then
+    /// would let the agent keep calling tools while nothing allowed them.
+    ///
+    /// Armed exactly once, before the first success, and disarmed permanently
+    /// the moment one call gets through.
+    /// Test-only view of whether first contact has happened. Not public API,
+    /// same reasoning as `run_id_for_test`.
+    #[cfg(test)]
+    pub(crate) fn reset_first_contact_for_test() {
+        REACHED_BRIDGE.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn retry_first_contact_for_test(
+        attempt: impl FnMut() -> Option<BridgeResponse>,
+    ) -> bool {
+        with_first_contact_retry(attempt).is_some()
+    }
+
+    fn with_first_contact_retry(
+        mut attempt: impl FnMut() -> Option<BridgeResponse>,
+    ) -> Option<BridgeResponse> {
+        use std::sync::atomic::Ordering;
+
+        if REACHED_BRIDGE.load(Ordering::Relaxed) {
+            return attempt();
+        }
+        let deadline = std::time::Instant::now() + FIRST_CONTACT_TIMEOUT;
+        let mut tries = 0usize;
+        loop {
+            if let Some(resp) = attempt() {
+                REACHED_BRIDGE.store(true, Ordering::Relaxed);
+                return Some(resp);
+            }
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return None;
+            }
+            let backoff = std::time::Duration::from_millis(
+                FIRST_CONTACT_BACKOFF_MS[tries.min(FIRST_CONTACT_BACKOFF_MS.len() - 1)],
+            );
+            std::thread::sleep(backoff.min(remaining));
+            tries += 1;
+        }
     }
 
     fn http_get(path: &str) -> Option<BridgeResponse> {
@@ -558,41 +626,47 @@ mod runtime {
 
         #[cfg(unix)]
         if let Some(sock) = bridge_socket_path() {
-            use std::io::{Read, Write};
-            use std::os::unix::net::UnixStream;
-            let mut stream = UnixStream::connect(&sock).ok()?;
-            stream.write_all(req.as_bytes()).ok()?;
-            let mut raw = String::new();
-            stream.read_to_string(&mut raw).ok()?;
-            return parse_http_response(&raw);
+            return with_first_contact_retry(|| unix_roundtrip(&sock, &req));
         }
 
         if let Some(port) = bridge_tcp_port() {
-            use std::io::{Read, Write};
-            use std::net::TcpStream;
-            let mut stream = TcpStream::connect(("127.0.0.1", port)).ok()?;
-            stream.write_all(req.as_bytes()).ok()?;
-            let mut raw = String::new();
-            stream.read_to_string(&mut raw).ok()?;
-            return parse_http_response(&raw);
+            return with_first_contact_retry(|| tcp_roundtrip(&format!("127.0.0.1:{port}"), &req));
         }
 
         // Transport 3: NANNY_BRIDGE_ADDR: loopback is plain HTTP (mirrors the
         // server), non-loopback is mTLS.
         if let Some(addr) = bridge_addr() {
             if addr_is_loopback(&addr) {
-                use std::io::{Read, Write};
-                use std::net::TcpStream;
-                let mut stream = TcpStream::connect(&addr).ok()?;
-                stream.write_all(req.as_bytes()).ok()?;
-                let mut raw = String::new();
-                stream.read_to_string(&mut raw).ok()?;
-                return parse_http_response(&raw);
+                return with_first_contact_retry(|| tcp_roundtrip(&addr, &req));
             }
             return http_get_tls(&addr, path);
         }
 
         None
+    }
+
+    /// One request over a Unix socket. Every failure collapses to `None`, the
+    /// same as before; the retry above decides whether to try again.
+    #[cfg(unix)]
+    fn unix_roundtrip(sock: &std::path::Path, req: &str) -> Option<BridgeResponse> {
+        use std::io::{Read, Write};
+        use std::os::unix::net::UnixStream;
+        let mut stream = UnixStream::connect(sock).ok()?;
+        stream.write_all(req.as_bytes()).ok()?;
+        let mut raw = String::new();
+        stream.read_to_string(&mut raw).ok()?;
+        parse_http_response(&raw)
+    }
+
+    /// One request over plain TCP.
+    fn tcp_roundtrip(addr: &str, req: &str) -> Option<BridgeResponse> {
+        use std::io::{Read, Write};
+        use std::net::TcpStream;
+        let mut stream = TcpStream::connect(addr).ok()?;
+        stream.write_all(req.as_bytes()).ok()?;
+        let mut raw = String::new();
+        stream.read_to_string(&mut raw).ok()?;
+        parse_http_response(&raw)
     }
 
     fn http_post(path: &str, body: &str) -> Option<BridgeResponse> {
@@ -613,36 +687,18 @@ mod runtime {
 
         #[cfg(unix)]
         if let Some(sock) = bridge_socket_path() {
-            use std::io::{Read, Write};
-            use std::os::unix::net::UnixStream;
-            let mut stream = UnixStream::connect(&sock).ok()?;
-            stream.write_all(req.as_bytes()).ok()?;
-            let mut raw = String::new();
-            stream.read_to_string(&mut raw).ok()?;
-            return parse_http_response(&raw);
+            return with_first_contact_retry(|| unix_roundtrip(&sock, &req));
         }
 
         if let Some(port) = bridge_tcp_port() {
-            use std::io::{Read, Write};
-            use std::net::TcpStream;
-            let mut stream = TcpStream::connect(("127.0.0.1", port)).ok()?;
-            stream.write_all(req.as_bytes()).ok()?;
-            let mut raw = String::new();
-            stream.read_to_string(&mut raw).ok()?;
-            return parse_http_response(&raw);
+            return with_first_contact_retry(|| tcp_roundtrip(&format!("127.0.0.1:{port}"), &req));
         }
 
         // Transport 3: NANNY_BRIDGE_ADDR: loopback is plain HTTP (mirrors the
         // server), non-loopback is mTLS.
         if let Some(addr) = bridge_addr() {
             if addr_is_loopback(&addr) {
-                use std::io::{Read, Write};
-                use std::net::TcpStream;
-                let mut stream = TcpStream::connect(&addr).ok()?;
-                stream.write_all(req.as_bytes()).ok()?;
-                let mut raw = String::new();
-                stream.read_to_string(&mut raw).ok()?;
-                return parse_http_response(&raw);
+                return with_first_contact_retry(|| tcp_roundtrip(&addr, &req));
             }
             return http_post_tls(&addr, path, body);
         }
@@ -682,37 +738,46 @@ mod runtime {
     }
 
     fn http_get_tls(addr: &str, path: &str) -> Option<BridgeResponse> {
+        // Built once, outside the retry: a missing or unreadable certificate is
+        // a configuration error, and spending the first-contact window on one
+        // would delay the report without changing it.
         let client = build_tls_client()?;
         let url = format!("https://{addr}{path}");
-        let mut builder = client
-            .get(&url)
-            .header("X-Nanny-Session-Token", session_token());
-        if let Some(id) = run_id() {
-            builder = builder.header("X-Nanny-Run-Id", id);
-        }
-        let resp = builder.send().ok()?;
-        let status = resp.status().as_u16();
-        let body = resp.text().ok()?;
-        Some(BridgeResponse { status, body })
+        with_first_contact_retry(|| {
+            let mut builder = client
+                .get(&url)
+                .header("X-Nanny-Session-Token", session_token());
+            if let Some(id) = run_id() {
+                builder = builder.header("X-Nanny-Run-Id", id);
+            }
+            let resp = builder.send().ok()?;
+            let status = resp.status().as_u16();
+            let body = resp.text().ok()?;
+            Some(BridgeResponse { status, body })
+        })
     }
 
     fn http_post_tls(addr: &str, path: &str, body: &str) -> Option<BridgeResponse> {
+        // See http_get_tls: the client is built outside the retry because a
+        // certificate problem is configuration, not a cold start.
         let client = build_tls_client()?;
         let url = format!("https://{addr}{path}");
-        let mut builder = client
-            .post(&url)
-            .header("X-Nanny-Session-Token", session_token())
-            .header("Content-Type", "application/json")
-            .body(body.to_string());
-        if let Some(id) = run_id() {
-            builder = builder.header("X-Nanny-Run-Id", id);
-        }
-        let resp = builder.send().ok()?;
-        let status = resp.status().as_u16();
-        let resp_body = resp.text().ok()?;
-        Some(BridgeResponse {
-            status,
-            body: resp_body,
+        with_first_contact_retry(|| {
+            let mut builder = client
+                .post(&url)
+                .header("X-Nanny-Session-Token", session_token())
+                .header("Content-Type", "application/json")
+                .body(body.to_string());
+            if let Some(id) = run_id() {
+                builder = builder.header("X-Nanny-Run-Id", id);
+            }
+            let resp = builder.send().ok()?;
+            let status = resp.status().as_u16();
+            let resp_body = resp.text().ok()?;
+            Some(BridgeResponse {
+                status,
+                body: resp_body,
+            })
         })
     }
 
@@ -1091,6 +1156,47 @@ mod runtime {
 #[cfg(test)]
 mod tests {
     use super::__private::*;
+
+    /// Waiting for a first connection is patience; waiting mid-run is running
+    /// ungoverned. One test, because the flag is process-global and the two
+    /// halves only mean anything in sequence.
+    #[test]
+    fn the_retry_is_armed_before_first_contact_and_never_after() {
+        use super::runtime::{
+            reset_first_contact_for_test, retry_first_contact_for_test, BridgeResponse,
+        };
+
+        reset_first_contact_for_test();
+
+        // A governor that is not up yet: keep trying.
+        let mut attempts = 0;
+        let reached = retry_first_contact_for_test(|| {
+            attempts += 1;
+            if attempts < 3 {
+                None
+            } else {
+                Some(BridgeResponse {
+                    status: 200,
+                    body: String::new(),
+                })
+            }
+        });
+        assert!(reached, "must connect once the governor answers");
+        assert_eq!(attempts, 3, "must keep trying while it has never connected");
+
+        // A governor that has gone away mid-run: stop immediately. Retrying
+        // here would let the agent keep calling tools while nothing allowed
+        // them.
+        let mut after = 0;
+        let reached = retry_first_contact_for_test(|| {
+            after += 1;
+            None
+        });
+        assert!(!reached);
+        assert_eq!(after, 1, "exactly one attempt once the bridge has answered");
+
+        reset_first_contact_for_test();
+    }
 
     #[test]
     fn inactive_when_no_env_vars() {

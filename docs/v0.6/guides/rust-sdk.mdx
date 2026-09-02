@@ -243,6 +243,54 @@ Mirrors `nanny_sdk.run_scope()` on the Python side.
 
 ---
 
+## `nanny::set_app`: declare which app this process is
+
+```rust
+use nanny::set_app;
+
+set_app("app_3f9c2a1e...", "billing-agent");
+```
+
+Emits `AppIdentified`, so runs from several apps sharing one governance server
+are attributed separately rather than collapsing into one stream. A process
+that declares nothing inherits the governor's identity.
+
+`nanny run` already does this for the process it launches, reading the
+committed `.nanny/app.json`, on both the plain run and `--join`. Call it
+yourself only for a process `nanny run` did not start, such as one that joins a
+governor from its own entrypoint. Deduped bridge-side, so calling it on every
+request is safe. Mirrors `nanny_sdk.set_app()` on the Python side.
+
+---
+
+## `nanny::set_harness`: declare what is running this agent
+
+```rust
+use nanny::{set_harness, Harness};
+
+set_harness(Harness {
+    name: "my-agent-engine".into(),
+    ..Default::default()
+});
+```
+
+Records which harness drove a run, so executions can be compared by what ran
+them. `version` is optional:
+
+```rust
+set_harness(Harness { name: "crewai".into(), version: Some("0.5.1".into()) });
+```
+
+Rust cannot introspect the harness the way the Python SDK can, since it has no
+import graph to read at runtime, so this is the only way a Rust agent is
+attributed. Without it a run arrives as `unknown`, which is worth setting even
+for a first-party engine: an application whose agent loop is its own code is
+not an unknown harness, it simply is not a framework.
+
+Deduped bridge-side. Mirrors `nanny_sdk.set_harness()` on the Python side.
+
+---
+
 ## Complete example
 
 ```rust
