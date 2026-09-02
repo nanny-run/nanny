@@ -38,6 +38,26 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Documentation
 
+- **`--serve` is the documented way to start a governed app, everywhere.** The
+  docs taught the bare `nanny run` in the quickstart, the SDK guides, the
+  README and the CLI reference, then told you to switch to `--serve` for
+  production, so the first command anyone learned was one they had to unlearn.
+  Every command a reader would copy now carries `--serve`. On loopback it needs
+  no certificates and no setup, so there is nothing traded away by using it
+  during development, and the shape that was tested is the shape that deploys.
+  References to `nanny run` as the CLI itself are unchanged: passthrough means
+  running outside the CLI altogether, not without a flag.
+
+- **`nanny run --help` said `--serve` would not run your app.** It described a
+  headless governance server started "instead" of `[start].cmd`. It launches
+  `[start].cmd` whenever `nanny.toml` declares one and only stays headless when
+  none is declared, so the help text argued against the one command the docs
+  now lead with. Its example was the bare form too.
+
+- **"The three deployment modes" is two.** The table sold local inline as "the
+  default" beside the two `--serve` modes. There is one command, and the bind
+  address decides the rest.
+
 - **"Deploying a governed app" is the ordered path now, not a list of topics.**
   It covered the pieces without ever saying what order to do them in, so a
   first deployment meant assembling a sequence from two pages that are both

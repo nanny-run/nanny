@@ -14,11 +14,11 @@ nanny run [OPTIONS] [-- ARGS...]
 ## Examples
 
 ```bash
-# Reads [start].cmd from nanny.toml and governs it
-nanny run
-
-# Run a governance server, with the app underneath it
+# Starts a governor and runs [start].cmd from nanny.toml underneath it
 nanny run --serve
+
+# Append arguments to that command
+nanny run --serve -- --verbose
 ```
 
 ---
@@ -71,7 +71,7 @@ Every run emits [NDJSON events](/v0.6/concepts/event-log) to stdout. `ExecutionS
 Pipe to a file to keep your agent's own output separate:
 
 ```bash
-nanny run > nanny.log
+nanny run --serve > nanny.log
 ```
 
 ---
@@ -82,12 +82,15 @@ nanny run > nanny.log
 
 Whether it also runs an app of its own is decided by `nanny.toml`:
 
-- **`[start]` present.** The governor launches that command underneath itself, in one process. One container, one command, no launcher script. Trailing arguments append to it, as with plain `nanny run`.
+- **`[start]` present.** The governor launches that command underneath itself, in one process. One container, one command, no launcher script. Trailing arguments after `--` append to it.
 - **`[start]` absent.** A headless governor, for the case where the apps live elsewhere and arrive via `--join`.
 
 Launching an app does not make the governor exclusive: it is still a server, and other processes can still join it, each with its own run id. Every run writes to the same log, and each event carries the `run_id` that tells them apart.
 
-Use it when one set of rules has to cover several processes or machines. A single-process agent is fully governed by plain `nanny run`.
+Use it for everything. A single process gets a governor on loopback with no
+certificates and no setup, and several processes or machines get the same
+governor with an address and a bundle. One shape means the thing you run in
+development is the thing you run in production.
 
 Starting a server requires `nanny init` to have already run in that directory: the server's state is keyed by the app's permanent `app_id`, not a global path, so two unrelated apps' servers on one machine never collide.
 

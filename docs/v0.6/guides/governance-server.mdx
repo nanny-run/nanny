@@ -5,27 +5,37 @@ description: Run Nanny enforcement across multiple processes and machines using 
 
 ## When to use the governance server
 
-For most projects, `nanny run` is all you need. It enforces locally, inside the same process group as your agent, governs it, and exits when the agent exits. No server. No cert setup. No network.
+Every governed app runs under one: `nanny run --serve` starts a governor and
+launches your `[start].cmd` underneath it. On loopback that needs no
+certificates and no network setup, so a single process on one machine is
+already the simple case, and this page is only about what changes when there
+is more than one.
 
-Use the governance server when agents run in **separate processes or on separate machines** and you need a shared enforcement boundary across all of them. Common scenarios:
+What changes is that agents in **separate processes or on separate machines**
+share one enforcement boundary. Common scenarios:
 
 - **Microservices:** three containers, each running an agent, all governed by one rule set
 - **CI workers:** a coordinator spins up workers on different machines; you want every worker held to the same rules
 - **Development clusters:** a Kubernetes pod runs the server; a local dev agent connects to it while you iterate
 
-If your agents all run inside a single `nanny run`, even a complex CrewAI or LangGraph pipeline with many agents, you do not need the governance server.
+If your agents all run inside one process, even a complex CrewAI or LangGraph
+pipeline with many agents, the governor you already have covers them and
+nothing here applies: one `nanny run --serve` governs the whole fleet.
 
 ---
 
-## The three deployment modes
+## The two deployment modes
+
+One command, and the address decides the rest.
 
 | Mode | Command | Transport | When to use |
 |------|---------|-----------|-------------|
-| Local inline | `nanny run` | Unix socket / TCP loopback (OS-enforced) | Single process, single machine, the default |
-| Local governance server | `nanny run --serve` | Plain HTTP on loopback, no certs needed | Multiple processes on one machine |
-| Cross-machine governance server | `nanny run --serve --addr 0.0.0.0:62669` | mTLS, mandatory, certs required | Docker, Kubernetes, remote agents |
+| Same machine | `nanny run --serve` | Plain HTTP on loopback, no certs needed | One process, or several on one machine |
+| Cross-machine | `nanny run --serve --addr 0.0.0.0:62669` | mTLS, mandatory, certs required | Docker, Kubernetes, remote agents |
 
 The bind address determines the security posture. The default (`127.0.0.1:62669`) is loopback, plain HTTP, no cert setup required. Binding to a non-loopback address enables network access and makes mTLS mandatory; the server refuses to start without cert files.
+
+Going from the first row to the second is a flag and a certificate bundle. Nothing about your app, your `nanny.toml`, or the rules it is held to changes.
 
 ---
 

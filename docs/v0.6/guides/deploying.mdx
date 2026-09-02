@@ -22,11 +22,11 @@ second process joins later without the first one changing shape, and the rule
 set it is evaluated against is the same one.
 
 <Note>
-  **Always deploy with `--serve`, even for a single process.** It is the only
-  shape verified against a real container, a real port, and a real restart, so
-  it is the one guaranteed to behave the same on every platform. Plain
-  `nanny run` still works and stays the right choice for local development
-  (see [Quickstart](/v0.6/quickstart)), but production always means `--serve`.
+  **`--serve` is how a governed app starts, here and on your laptop.** On
+  loopback it needs no certificates and no setup, so there is nothing to trade
+  away by using it everywhere, and it is the shape verified against a real
+  container, a real port, and a real restart. Using it in development too means
+  the thing you tested is the thing you deploy.
 </Note>
 
 ## 2. Install dependencies at build time

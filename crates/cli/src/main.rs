@@ -50,11 +50,14 @@ enum Command {
 
     /// Run the project under nanny enforcement.
     ///
-    /// Reads [start].cmd from nanny.toml and runs it. With --serve, instead runs
-    /// a headless governance server (no child of its own) that other processes
-    /// and machines join, sharing one rule set.
+    /// `--serve` is how a governed app starts. It brings up the governor and
+    /// runs [start].cmd from nanny.toml underneath it; on loopback that needs
+    /// no certificates and no setup. Other processes and machines join the
+    /// same governor with --join, sharing one rule set. Without [start] it
+    /// stays headless, for the case where every app arrives via --join.
     ///
-    /// Example: nanny run
+    /// Example: nanny run --serve
+    ///
     /// Example: nanny run --serve --addr 0.0.0.0:62669
     Run {
         /// Do not forward events to Nanny Cloud for this run, even with a key set.
