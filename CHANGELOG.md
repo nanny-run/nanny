@@ -9,9 +9,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
-- **Every secret may be given as a path to a file.** `NANNY_SESSION_TOKEN` and
-  `NANNY_API_KEY` now accept either the secret itself or a path to a file
-  holding it, resolved by one shared function so the two cannot drift. A value
+- **The session token may be given as a path to a file.** `NANNY_SESSION_TOKEN`
+  now accepts either the token itself or a path to a file holding it. A value
   beginning with `/`, `./` or `~/` is read as a path; anything else is the
   secret, so every existing deployment is untouched (the generators this
   project recommends emit hex, and hex cannot begin with `/`). A path that
@@ -57,7 +56,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   applies, so an unauthenticated route cannot be used to flood the governor.
 
 - **A joining process retries its first connection**, with backoff, for 30
-  seconds. Enforcement still fails closed, and deliberately: once a governor
+  seconds, in both SDKs. Enforcement still fails closed, and deliberately: once a governor
   has answered, a later failure stops the run immediately, because retrying
   then would let an agent keep calling tools while nothing was authorising
   them. The retry is armed only before first contact and disarms permanently on
@@ -76,6 +75,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   declined to start because it could not write down what it had just been told.
   It now says so once and serves. A process joining from another machine
   receives the address and token as configuration and never read those files.
+
+  `[observability] log = "file"` still requires a writable path, deliberately:
+  that setting exists so something else can tail the file, and a run that
+  carried on without it would look healthy while the pipeline behind it
+  produced nothing. A read-only deployment sets `log = "stdout"`, which is the
+  default.
 
 - **Documentation described a deployment shape that gives up rotation.** The
   governance-server guide told readers to pass certificates and tokens as

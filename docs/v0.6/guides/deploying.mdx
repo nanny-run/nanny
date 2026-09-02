@@ -31,19 +31,6 @@ A governor writes a few files recording its own address, pid and token so that o
 NANNY_API_KEY=nny_...
 ```
 
-Every secret Nanny reads may instead be a path to a file holding it, and in a
-deployment that is the better form:
-
-```bash
-NANNY_API_KEY=/run/secrets/nanny/api-key
-```
-
-A value beginning with `/`, `./` or `~/` is read as a path; anything else is
-the secret itself. A secret in the environment is readable through
-`/proc/<pid>/environ`, inherited by every child process, and visible to anything
-that can inspect the container. A mounted file can be `0600` and is inherited by
-nothing.
-
 Create it in the dashboard under **Settings → API Keys**, then set it however your platform sets secrets: a Fly secret, a Kubernetes `Secret`, a Coolify environment variable. That single variable decides whether runs sync; see [Connect to Nanny Cloud](/v0.6/guides/managed-mode).
 
 The key's prefix (`nny_live_` or `nny_sdbx_`) also decides whether this deployment writes real evidence or throwaway sandbox data, see [Live and sandbox](/v0.6/guides/environments) before deploying against a live key for the first time.

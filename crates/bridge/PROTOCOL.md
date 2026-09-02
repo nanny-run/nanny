@@ -14,7 +14,11 @@ that no longer exists.
 
 - Unix domain socket on macOS and Linux, TCP loopback on Windows, never `0.0.0.0`.
 - Plain HTTP on loopback; mTLS off loopback, mirrored between server and client.
-- `X-Nanny-Session` is authentication ("who you are").
+- `X-Nanny-Session` is authentication ("who you are"). Required on every route
+  except `GET /health`, which is served unauthenticated so an orchestrator can
+  probe liveness without holding the credential that admits a process to the
+  governor. It reports `{"state":"running"|"stopped"}` and nothing more; the
+  stop reason is on `/status`, behind the token.
 - `X-Nanny-Run-Id` is the enforcement partition ("which run"). Absent means the
   default run, so a headerless client still works.
 - A stop returns `410` for that run only. The host process survives.

@@ -428,12 +428,9 @@ fn expand_home(value: &str) -> std::path::PathBuf {
 /// A secret must never live in the committable nanny.toml, so it is injected
 /// through the environment, matching both the bridge's own pattern
 /// (`NANNY_BRIDGE_CERT`, `NANNY_BRIDGE_KEY`, `NANNY_SESSION_TOKEN`) and how every
-/// comparable product ships a telemetry credential (`DD_API_KEY`, `SENTRY_DSN`).
-///
-/// The value may be the key itself or a path to a file holding it, resolved by
-/// [`resolve_secret`]. A deployment that keeps its secrets as mounted files
-/// keeps this one there too, rather than being forced to make an exception of
-/// the credential that reaches the network.
+/// comparable product ships a telemetry credential (`DD_API_KEY`, `SENTRY_DSN`):
+/// a durable secret handed to the process by its platform, identical across
+/// every replica, with nothing written to disk to make it work.
 pub const API_KEY_ENV: &str = "NANNY_API_KEY";
 
 /// Prefix on every run id, so an id is recognisable as one on sight.
