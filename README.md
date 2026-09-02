@@ -165,10 +165,7 @@ pip install nanny-sdk
 # 1. Scaffold a nanny.toml (and a permanent .nanny/app.json identity) in your project root
 nanny init
 
-# 2. Run your agent
-nanny run
-
-# 3. Or run a governance server for several processes
+# 2. Run your agent (Starts as a governance server for several processes)
 nanny run --serve
 ```
 

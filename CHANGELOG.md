@@ -5,31 +5,33 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2] - 2026-09-02
+
+### Removed
+
+- **`NANNY_SESSION_TOKEN` is an environment variable again**, and only that.
+  0.6.1 let the governor read it as a path to a file; both SDKs kept reading
+  the variable itself, so a deployment following 0.6.1's own guides set a path
+  on each side, the governor compared the file's contents against the literal
+  path the joiner sent, and every governed call was refused.
+
+  Withdrawn rather than completed on the other two sides. The token is a single
+  opaque string that both ends read from the same variable, and a second form
+  for either end to interpret is only a way for them to disagree about what the
+  value is. Certificates take a path because they are multi-line PEM the
+  governor watches for changes; a token is neither.
+
+  Rotation is unaffected, because that was never what the path was for: the
+  governor still accepts a **set**, newline-separated in the variable, so a
+  rotation sets both tokens, moves the joiners, then drops the old one. Nothing
+  has to change at the same instant.
+
 ## [0.6.1] - 2026-09-02
 
 ### Added
 
-- **The session token may be given as a path to a file.** `NANNY_SESSION_TOKEN`
-  now accepts either the token itself or a path to a file holding it. A value
-  beginning with `/`, `./` or `~/` is read as a path, as are the Windows forms
-  (`C:\`, a UNC `\\host\share`, a root-relative `\`, an explicit `.\`);
-  anything else is the token, so every existing deployment is untouched, the
-  generators this project recommends emitting hex and hex being unable to begin
-  with a separator.
-
-  A path that cannot be read is an error naming it, never a silent fall back to
-  treating it as the token, which would authenticate a process with a filename.
-  Contents are trimmed, because `echo "$T" > file` appends a newline and a
-  trailing newline on a shared secret is a rejected request with nothing in any
-  log pointing at whitespace.
-
-  This is what lets a deployment keep the token where it keeps its other
-  secrets. A value in the environment is readable through `/proc/<pid>/environ`,
-  inherited by every child process, and visible to anything that can inspect
-  the container; a mounted file can be `0600` and is inherited by nothing.
-
 - **The governor accepts a set of session tokens, so one can be rotated.** A
-  token file may hold one per line, and every candidate is compared with no
+  variable may hold one per line, and every candidate is compared with no
   early exit, so the timing does not reveal which entry matched or how far
   through a rotation a fleet is. Previously a governor held exactly one token,
   which made rotation impossible without stopping every joined process at the
@@ -38,10 +40,6 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   because the CA keeps old and new leaves valid together; a shared secret has
   no such authority, so the overlap is held by the governor. Rotation is now:
   append the new token, roll the joiners, remove the old one.
-
-  A path is also the only form that can rotate at all, in either direction: an
-  environment variable does not change in a running process, while the contents
-  of a file it points at can.
 
 - **`nanny_sdk.set_harness`**, mirroring the Rust SDK's `nanny::set_harness`.
   Harness detection recognises twelve frameworks from the call stack and
