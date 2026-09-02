@@ -784,6 +784,11 @@ cmd = "echo JOINED-WHILE-SERVING"
         server_stdout.contains("running [start] under this governor"),
         "--serve must say it is launching the app\ngot: {server_stdout}"
     );
+    assert!(
+        server_stdout.contains("under this governor: "),
+        "and must name the command, so the line is not just restating the block \
+         printed above it\ngot: {server_stdout}"
+    );
 
     let joined_stdout = String::from_utf8_lossy(&joined.stdout);
     assert!(

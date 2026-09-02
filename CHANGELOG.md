@@ -7,6 +7,33 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [0.6.2] - 2026-09-02
 
+### Changed
+
+- **The governor prints a fingerprint of its session token, not the token.**
+  It printed the value in full at startup, in both transport modes, so a
+  deployed container wrote the credential that admits processes to it into
+  stdout on every boot, and from there into whatever aggregates the logs. It is
+  still printed, because "is it using the token I set?" is a real question and
+  the line above it only says that a token was taken, not which one: enough to
+  recognise (`34e6beee…8fad (64 chars)`), not enough to use. The 32-character
+  floor means at least 20 characters stay unseen, and the full value is on disk
+  in `server.token` for anything that needs it. The token file path is now
+  printed on the loopback path too, so nothing is lost by not printing the
+  secret. During a rotation the line also says how many tokens are accepted.
+
+- **Startup output aimed at a person is skipped when nothing is reading.** "Join
+  with: nanny run --join=…" and "Press CTRL-C to stop." are instructions for
+  someone at a keyboard; in a container they are noise in a log nobody can type
+  into, and the second is not even true there. Both are now printed only when
+  stdout is a terminal. Everything that describes what the governor is doing is
+  unconditional.
+
+- **The launch line names the command it launched.** It read "running [start]
+  under this governor", directly below a block that had just said a governor
+  had started, so it restated its neighbour instead of adding to it. It now
+  ends with the command, which is the part a deployment reading its own logs
+  back actually wants.
+
 ### Removed
 
 - **`NANNY_SESSION_TOKEN` is an environment variable again**, and only that.

@@ -493,10 +493,15 @@ fn run_governor_with_app(setup: GovernorSetup, command: Vec<String>, app_id: &st
         return Err(e);
     }
 
+    let launched = command.join(" ");
     let (mut cmd, run_id) = crate::build_governed_child(command, &server)?;
     crate::declare_app_to_governor(&server, Path::new("."), &run_id);
 
-    println!("nanny: running [start] under this governor");
+    // Names the command rather than restating that a governor exists, which the
+    // block printed just above already said. A deployment reading this back
+    // wants to know what was launched under the governor, not that something
+    // was.
+    println!("nanny: running [start] under this governor: {launched}");
     println!();
 
     let mut child = cmd
