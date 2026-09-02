@@ -94,7 +94,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   carry a worked two-container example with every variable listed and no shell
   script reshaping a secret.
 
-  Four smaller corrections went with it. The certificate bundle is six files
+  The Python SDK guide gained a `set_harness` section, and its `set_app`
+  example was corrected: it showed `set_app()` with no arguments, which raises
+  a `TypeError`, since reading `.nanny/app.json` is `nanny run`'s job and not
+  the function's. The stop reference now also says that a process which has
+  never reached the bridge retries first, so fail-closed is not read as
+  fail-immediately.
+
+  Five smaller corrections went with it. The certificate reference said "five
+  files" and listed six, the same slip as the guide. The certificate bundle is six files
   rather than the five it claimed. The hot-reload section said the server
   watches `~/.nanny/certs/` when it watches whatever directory `--cert`
   resolves to, which read as though a mounted path would not reload. `NANNY_HOME`
