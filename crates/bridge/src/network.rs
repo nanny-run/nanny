@@ -915,7 +915,7 @@ impl NetworkServer {
             format!("{} (+{} more accepted)", token_fingerprint(&token), tokens.len() - 1)
         };
         if addr.ip().is_loopback() {
-            println!("nanny: governance server started  (plain HTTP, loopback)");
+            println!("nanny: governance server started");
             println!("  address      : {addr}");
             println!("  session token: {accepted}");
             if state_dir_ok {
@@ -926,7 +926,7 @@ impl NetworkServer {
                 println!("Join with: nanny run --join=<this app's id>  (see .nanny/app.json)");
             }
         } else {
-            println!("nanny: governance server started  (mTLS)");
+            println!("nanny: governance server started");
             println!("  address      : {addr}");
             println!("  session token: {accepted}");
             println!("  token file   : {}", token_file.display());

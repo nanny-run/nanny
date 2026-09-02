@@ -28,11 +28,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   stdout is a terminal. Everything that describes what the governor is doing is
   unconditional.
 
-- **The launch line names the command it launched.** It read "running [start]
-  under this governor", directly below a block that had just said a governor
-  had started, so it restated its neighbour instead of adding to it. It now
-  ends with the command, which is the part a deployment reading its own logs
-  back actually wants.
+- **The transport is stated once, on the launch line.** "running [start] under
+  this governor" sat directly below "governance server started  (plain HTTP,
+  loopback)" and restated its neighbour. The header no longer carries the
+  transport, which the `address` line under it already shows, and the launch
+  line does: `running [start] under this governor (plain HTTP, loopback)`. Two
+  lines, each saying something the other does not, instead of two saying the
+  same thing.
 
 ### Removed
 
