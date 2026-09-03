@@ -299,6 +299,26 @@ impl AppState {
 // must cover every request.
 
 /// Checks the `X-Nanny-Session-Token` header; guards every ordinary request.
+/// A session token, shortened so it can appear in a log.
+///
+/// The governor used to print the token in full at startup, in both transport
+/// modes. That is a convenience on a laptop and a credential leak in a
+/// deployment: a container writes it to stdout on every boot, straight into
+/// whatever aggregates the logs, and the one thing it admits is a process to
+/// this governor.
+///
+/// It is still printed, because "is it using the token I set?" is a real
+/// question and the line above only says that a token was taken, not which.
+/// Enough to recognise, not enough to use: the floor is 32 characters, so this
+/// leaves at least 20 of them unseen, and the full value is on disk in
+/// `server.token` for anything that actually needs it.
+fn token_fingerprint(token: &str) -> String {
+    let chars: Vec<char> = token.chars().collect();
+    let head: String = chars.iter().take(8).collect();
+    let tail: String = chars[chars.len().saturating_sub(4)..].iter().collect();
+    format!("{head}…{tail} ({} chars)", chars.len())
+}
+
 /// Whether the request carries one of the tokens this governor accepts.
 ///
 /// **Every candidate is compared, with no early exit.** Returning as soon as
@@ -879,16 +899,36 @@ impl NetworkServer {
             }
         }
 
-        if addr.ip().is_loopback() {
-            println!("nanny: governance server started  (plain HTTP, loopback)");
-            println!("  address      : {addr}");
-            println!("  session token: {token}");
-            println!();
-            println!("Join with: nanny run --join=<this app's id>  (see .nanny/app.json)");
+        // Instructions aimed at a person at a keyboard: how to join from this
+        // machine, and which key stops it. In a container both are noise in a
+        // log that nobody can type into, and "Press CTRL-C to stop" is simply
+        // untrue there. A terminal check separates the two without needing a
+        // flag or an environment variable to be set correctly.
+        let interactive = std::io::IsTerminal::is_terminal(&std::io::stdout());
+
+        // A fingerprint, never the token itself: see `token_fingerprint`. The
+        // count matters during a rotation, when the governor is deliberately
+        // holding two and an operator wants to see that it took both.
+        let accepted = if tokens.len() == 1 {
+            token_fingerprint(&token)
         } else {
-            println!("nanny: governance server started  (mTLS)");
+            format!("{} (+{} more accepted)", token_fingerprint(&token), tokens.len() - 1)
+        };
+        if addr.ip().is_loopback() {
+            println!("nanny: governance server started");
             println!("  address      : {addr}");
-            println!("  session token: {token}");
+            println!("  session token: {accepted}");
+            if state_dir_ok {
+                println!("  token file   : {}", token_file.display());
+            }
+            if interactive {
+                println!();
+                println!("Join with: nanny run --join=<this app's id>  (see .nanny/app.json)");
+            }
+        } else {
+            println!("nanny: governance server started");
+            println!("  address      : {addr}");
+            println!("  session token: {accepted}");
             println!("  token file   : {}", token_file.display());
             println!();
             println!("Join with: nanny run --join=<this app's id>  (see .nanny/app.json)");
@@ -900,8 +940,10 @@ impl NetworkServer {
                 "  NANNY_BRIDGE_CERT, NANNY_BRIDGE_KEY, NANNY_BRIDGE_CA  (from ~/.nanny/certs/)"
             );
         }
-        println!();
-        println!("Press CTRL-C to stop.");
+        if interactive {
+            println!();
+            println!("Press CTRL-C to stop.");
+        }
 
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -2530,6 +2572,34 @@ mod tests {
         assert_eq!(
             body["state"], "running",
             "health response must carry state=running; got: {body}"
+        );
+    }
+
+    #[test]
+    fn the_startup_line_shows_a_fingerprint_not_the_token() {
+        // A container writes this to stdout on every boot. The token is the
+        // one thing that admits a process to the governor, so the log gets
+        // enough to recognise it and not enough to use it.
+        let token = "34e6beeed95fe4e954bc23b9193b9fda538483aca53caec3d9003ae3d69e8fad";
+        let shown = token_fingerprint(token);
+
+        assert!(!shown.contains(token), "the full token must never be printed");
+        assert!(shown.starts_with("34e6beee"), "recognisable from the start: {shown}");
+        assert!(shown.contains("8fad"), "and from the end: {shown}");
+        assert!(shown.contains("(64 chars)"), "length is part of the check: {shown}");
+
+        // At the 32-character floor, at least 20 stay unseen. Counted off the
+        // token part alone: the trailing "(32 chars)" is full of characters
+        // that are also hex digits, which is what made the first version of
+        // this assertion measure the label rather than the secret.
+        let shortest = "0123456789abcdef0123456789abcdef";
+        let shown = token_fingerprint(shortest);
+        let token_part = shown.split(" (").next().unwrap();
+        let revealed = token_part.chars().filter(|c| *c != '…').count();
+        assert_eq!(revealed, 12, "8 from the head and 4 from the tail: {shown}");
+        assert!(
+            shortest.len() - revealed >= 20,
+            "at the floor, at least 20 characters stay unseen: {shown}"
         );
     }
 

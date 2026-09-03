@@ -17,7 +17,7 @@ When running outside `nanny run`, every decorator is a no-op. The function execu
 
 ```bash
 # Governed: enforcement active (reads [start].cmd from nanny.toml)
-nanny run
+nanny run --serve
 
 # Not governed: decorators silent, agent runs normally
 python agent.py
@@ -260,8 +260,8 @@ Emits `AppIdentified`, so runs from several apps sharing one governance server
 are attributed separately. A process that declares nothing inherits the
 governor's identity.
 
-`nanny run` already does this for the process it launches, on both the plain
-run and `--join`. Call it yourself only for a process `nanny run` did not
+`nanny run` already does this for the process it launches, under both
+`--serve` and `--join`. Call it yourself only for a process `nanny run` did not
 start, such as a worker that joins a governor from its own entrypoint.
 
 ---
@@ -381,7 +381,7 @@ if __name__ == "__main__":
 Run it under Nanny:
 
 ```bash
-nanny run
+nanny run --serve
 ```
 
 Run it without Nanny (decorators silent, agent runs normally):

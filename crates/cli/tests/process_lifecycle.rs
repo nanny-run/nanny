@@ -784,6 +784,16 @@ cmd = "echo JOINED-WHILE-SERVING"
         server_stdout.contains("running [start] under this governor"),
         "--serve must say it is launching the app\ngot: {server_stdout}"
     );
+    assert!(
+        server_stdout.contains("under this governor (plain HTTP, loopback)"),
+        "and must carry the transport, so the line adds something the block \
+         above it did not already say\ngot: {server_stdout}"
+    );
+    assert!(
+        !server_stdout.contains("governance server started  ("),
+        "the transport belongs on one line only, not on the block header too\n\
+         got: {server_stdout}"
+    );
 
     let joined_stdout = String::from_utf8_lossy(&joined.stdout);
     assert!(

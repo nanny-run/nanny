@@ -10,7 +10,7 @@ It reads `[start].cmd` from `nanny.toml`, spawns it as a child, and owns the pro
 
 ```mermaid
 flowchart TD
-    CMD(["$ nanny run"])
+    CMD(["$ nanny run --serve"])
 
     CMD --> NANNY
 
@@ -49,7 +49,7 @@ When multiple agents run in the same process, as in CrewAI, LangGraph, AutoGen, 
 
 ```mermaid
 flowchart TD
-    CMD(["$ nanny run"])
+    CMD(["$ nanny run --serve"])
     CMD --> NANNY
 
     subgraph NANNY["Nanny, parent process"]

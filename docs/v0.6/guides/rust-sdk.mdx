@@ -29,7 +29,7 @@ If your agent runs without `nanny run`, every macro is a no-op. The function exe
 
 ```bash
 # Governed: enforcement active (reads [start].cmd from nanny.toml)
-nanny run
+nanny run --serve
 
 # Not governed: macros silent, agent runs normally
 cargo run
@@ -256,7 +256,7 @@ are attributed separately rather than collapsing into one stream. A process
 that declares nothing inherits the governor's identity.
 
 `nanny run` already does this for the process it launches, reading the
-committed `.nanny/app.json`, on both the plain run and `--join`. Call it
+committed `.nanny/app.json`, under both `--serve` and `--join`. Call it
 yourself only for a process `nanny run` did not start, such as one that joins a
 governor from its own entrypoint. Deduped bridge-side, so calling it on every
 request is safe. Mirrors `nanny_sdk.set_app()` on the Python side.
@@ -332,7 +332,7 @@ fn main() {
 Run it under Nanny:
 
 ```bash
-nanny run
+nanny run --serve
 ```
 
 Run it without Nanny (macros silent, agent runs normally):

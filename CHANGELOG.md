@@ -5,6 +5,91 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.3] - 2026-09-03
+
+### Added
+
+- **How to serve both deployment shapes from one image.** A `CMD` with
+  certificate paths baked in only runs *with* certificates, so a single
+  container needed a second image. Deciding at boot from whether the
+  certificates are mounted gets both from one, and matches how the runtime
+  already picks its transport from the address. Documented with the reason
+  `exec` is what keeps it correct: the shell must be replaced, not left in
+  front, or the governor is not PID 1 and never drains.
+
+- **A failure table for deployments.** Every page showed the log of a deploy
+  that worked and none showed one that did not. Missing certificates, a busy
+  named port, a `401` from a token mismatch, a handshake that fails before any
+  request because `--san` did not cover the name dialled, and a state directory
+  that is not writable, which is not a failure at all.
+
+### Changed
+
+- **The governor prints a fingerprint of its session token, not the token.**
+  It printed the value in full at startup, in both transport modes, so a
+  deployed container wrote the credential that admits processes to it into
+  stdout on every boot, and from there into whatever aggregates the logs. It is
+  still printed, because "is it using the token I set?" is a real question and
+  the line above it only says that a token was taken, not which one: enough to
+  recognise (`34e6beee…8fad (64 chars)`), not enough to use. The 32-character
+  floor means at least 20 characters stay unseen, and the full value is on disk
+  in `server.token` for anything that needs it. The token file path is now
+  printed on the loopback path too, so nothing is lost by not printing the
+  secret. During a rotation the line also says how many tokens are accepted.
+
+- **Startup output aimed at a person is skipped when nothing is reading.** "Join
+  with: nanny run --join=…" and "Press CTRL-C to stop." are instructions for
+  someone at a keyboard; in a container they are noise in a log nobody can type
+  into, and the second is not even true there. Both are now printed only when
+  stdout is a terminal. Everything that describes what the governor is doing is
+  unconditional.
+
+- **The transport is stated once, on the launch line.** "running [start] under
+  this governor" sat directly below "governance server started  (plain HTTP,
+  loopback)" and restated its neighbour. The header no longer carries the
+  transport, which the `address` line under it already shows, and the launch
+  line does: `running [start] under this governor (plain HTTP, loopback)`. Two
+  lines, each saying something the other does not, instead of two saying the
+  same thing.
+
+- **`--serve` is the documented way to start a governed app, everywhere.** The
+  docs taught the bare `nanny run` in the quickstart, the SDK guides, the
+  README and the CLI reference, then told you to switch to `--serve` for
+  production, so the first command anyone learned was one they had to unlearn.
+  Every command a reader would copy now carries `--serve`. On loopback it needs
+  no certificates and no setup, so there is nothing traded away by using it
+  during development, and the shape that was tested is the shape that deploys.
+  References to `nanny run` as the CLI itself are unchanged: passthrough means
+  running outside the CLI altogether, not without a flag.
+
+- **"Deploying a governed app" is an ordered path, not a list of topics.**
+  It covered the pieces without ever saying what order to do them in, so a
+  first deployment meant assembling a sequence from two pages that are both
+  organised by subject. It runs start to finish: pick the shape, build the
+  image, set the key, generate the bundle, boot, read the log, and what each
+  failure looks like. `governance-server.md` stays the reference it already
+  was and the walkthrough links into it, so neither page restates the other.
+
+- **"The three deployment modes" is two.** The table sold local inline as "the
+  default" beside the two `--serve` modes. There is one command, and the bind
+  address decides the rest.
+
+### Fixed
+
+- **`nanny run --help` said `--serve` would not run your app.** It described a
+  headless governance server started "instead" of `[start].cmd`. It launches
+  `[start].cmd` whenever `nanny.toml` declares one and only stays headless when
+  none is declared, so the help text argued against the one command the docs
+  now lead with. Its example was the bare form too, and its two examples
+  collapsed into a single paragraph.
+
+- **The deployment guide recommended `uv sync --frozen`.** That flag skips the
+  check that the lock still agrees with `pyproject.toml`, so an image could
+  ship an older `nanny-sdk` than the one it asked for and fail at runtime on a
+  symbol the expected version has. It says `--locked`.
+
+- **The same page's startup block showed output the runtime no longer prints.**
+
 ## [0.6.2] - 2026-09-02
 
 ### Removed

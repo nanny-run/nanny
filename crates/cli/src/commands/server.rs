@@ -452,6 +452,7 @@ fn run_governor_with_app(setup: GovernorSetup, command: Vec<String>, app_id: &st
     let governor_result: Arc<std::sync::Mutex<Option<anyhow::Error>>> =
         Arc::new(std::sync::Mutex::new(None));
 
+    let serve_addr = setup.addr;
     let finished = governor_finished.clone();
     let result_slot = governor_result.clone();
     let governor = std::thread::Builder::new()
@@ -481,6 +482,15 @@ fn run_governor_with_app(setup: GovernorSetup, command: Vec<String>, app_id: &st
     // readiness signal, and it carries the port actually bound, which may not
     // be the one requested if the default fell forward.
     let addr_file = state_dir.join("server.addr");
+    // Decided by the address, not by the certificates: the runtime serves plain
+    // HTTP on loopback and requires mTLS anywhere else. Captured before `setup`
+    // is consumed by the governor thread.
+    let transport = if serve_addr.ip().is_loopback() {
+        "plain HTTP, loopback"
+    } else {
+        "mTLS"
+    };
+
     let server = wait_for_governor(&addr_file, &governor_finished, app_id)?;
 
     // If the governor died during startup, surface its error rather than a
@@ -496,7 +506,11 @@ fn run_governor_with_app(setup: GovernorSetup, command: Vec<String>, app_id: &st
     let (mut cmd, run_id) = crate::build_governed_child(command, &server)?;
     crate::declare_app_to_governor(&server, Path::new("."), &run_id);
 
-    println!("nanny: running [start] under this governor");
+    // Carries the transport, which is the one thing the block above cannot say
+    // in a line of its own without saying it twice. Not the command: it is
+    // whatever `[start].cmd` holds, routinely long, and already in nanny.toml
+    // where anyone asking has better access to it than a log line gives them.
+    println!("nanny: running [start] under this governor ({transport})");
     println!();
 
     let mut child = cmd

@@ -7,7 +7,7 @@ description: Set one environment variable and Nanny forwards your runs to Nanny 
 
 By default, Nanny runs **local-only**: it enforces your limits and rules on your machine and writes an event log. Nothing leaves the box.
 
-Set `NANNY_API_KEY` and `nanny run` additionally forwards a copy of the run's event log to [Nanny Cloud](https://nanny.run/cloud). In return you get, per organization:
+Set `NANNY_API_KEY` and the governor additionally forwards a copy of the run's event log to [Nanny Cloud](https://nanny.run/cloud). In return you get, per organization:
 
 - A dashboard of every run: verdicts, tokens, stop reasons, models, and which app it came from
 - Real dollar cost, priced per model and per token type
@@ -28,7 +28,7 @@ Create a key in the dashboard under **Settings → API Keys**, then set it where
 
 ```bash
 export NANNY_API_KEY=nny_...
-nanny run
+nanny run --serve
 ```
 
 That is the whole setup. There is no config field, no credential file, no login command, and nothing written to disk. That is what makes it behave identically on a laptop, in CI, on a read-only filesystem, and across twenty replicas sharing one key.
@@ -82,7 +82,7 @@ This matters most with a governance server: one governor holds one key but can s
 ## Turning it off
 
 ```bash
-nanny run --no-sync      # this run only
+nanny run --serve --no-sync   # this run only
 export NANNY_NO_SYNC=1   # this machine
 ```
 
