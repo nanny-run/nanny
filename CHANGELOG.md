@@ -7,6 +7,22 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [0.6.3] - 2026-09-03
 
+### Added
+
+- **How to serve both deployment shapes from one image.** A `CMD` with
+  certificate paths baked in only runs *with* certificates, so a single
+  container needed a second image. Deciding at boot from whether the
+  certificates are mounted gets both from one, and matches how the runtime
+  already picks its transport from the address. Documented with the reason
+  `exec` is what keeps it correct: the shell must be replaced, not left in
+  front, or the governor is not PID 1 and never drains.
+
+- **A failure table for deployments.** Every page showed the log of a deploy
+  that worked and none showed one that did not. Missing certificates, a busy
+  named port, a `401` from a token mismatch, a handshake that fails before any
+  request because `--san` did not cover the name dialled, and a state directory
+  that is not writable, which is not a failure at all.
+
 ### Changed
 
 - **The governor prints a fingerprint of its session token, not the token.**
@@ -36,8 +52,6 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   lines, each saying something the other does not, instead of two saying the
   same thing.
 
-### Documentation
-
 - **`--serve` is the documented way to start a governed app, everywhere.** The
   docs taught the bare `nanny run` in the quickstart, the SDK guides, the
   README and the CLI reference, then told you to switch to `--serve` for
@@ -48,17 +62,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   References to `nanny run` as the CLI itself are unchanged: passthrough means
   running outside the CLI altogether, not without a flag.
 
-- **`nanny run --help` said `--serve` would not run your app.** It described a
-  headless governance server started "instead" of `[start].cmd`. It launches
-  `[start].cmd` whenever `nanny.toml` declares one and only stays headless when
-  none is declared, so the help text argued against the one command the docs
-  now lead with. Its example was the bare form too.
-
-- **"The three deployment modes" is two.** The table sold local inline as "the
-  default" beside the two `--serve` modes. There is one command, and the bind
-  address decides the rest.
-
-- **"Deploying a governed app" is the ordered path now, not a list of topics.**
+- **"Deploying a governed app" is an ordered path, not a list of topics.**
   It covered the pieces without ever saying what order to do them in, so a
   first deployment meant assembling a sequence from two pages that are both
   organised by subject. It runs start to finish: pick the shape, build the
@@ -66,20 +70,25 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   failure looks like. `governance-server.md` stays the reference it already
   was and the walkthrough links into it, so neither page restates the other.
 
-- **Two errors in that page, both found by deploying a real app.** The startup
-  block showed output the runtime no longer prints. And the build step
-  recommended `uv sync --frozen`, which skips the check that the lock still
-  agrees with `pyproject.toml`, so an image could ship an older `nanny-sdk`
-  than the one it asked for and fail at runtime on a symbol the expected
-  version has. It says `--locked`.
+- **"The three deployment modes" is two.** The table sold local inline as "the
+  default" beside the two `--serve` modes. There is one command, and the bind
+  address decides the rest.
 
-- **How to serve both deployment shapes from one image.** A `CMD` with
-  certificate paths baked in only runs *with* certificates, so a single
-  container needed a second image. Deciding at boot from whether the
-  certificates are mounted gets both from one, and matches how the runtime
-  already picks its transport from the address. Documented with the reason
-  `exec` is what keeps it correct: the shell must be replaced, not left in
-  front, or the governor is not PID 1 and never drains.
+### Fixed
+
+- **`nanny run --help` said `--serve` would not run your app.** It described a
+  headless governance server started "instead" of `[start].cmd`. It launches
+  `[start].cmd` whenever `nanny.toml` declares one and only stays headless when
+  none is declared, so the help text argued against the one command the docs
+  now lead with. Its example was the bare form too, and its two examples
+  collapsed into a single paragraph.
+
+- **The deployment guide recommended `uv sync --frozen`.** That flag skips the
+  check that the lock still agrees with `pyproject.toml`, so an image could
+  ship an older `nanny-sdk` than the one it asked for and fail at runtime on a
+  symbol the expected version has. It says `--locked`.
+
+- **The same page's startup block showed output the runtime no longer prints.**
 
 ## [0.6.2] - 2026-09-02
 
