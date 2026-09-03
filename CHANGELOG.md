@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.6.2] - 2026-09-02
+## [0.6.3] - 2026-09-03
 
 ### Changed
 
@@ -80,6 +80,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   already picks its transport from the address. Documented with the reason
   `exec` is what keeps it correct: the shell must be replaced, not left in
   front, or the governor is not PID 1 and never drains.
+
+## [0.6.2] - 2026-09-02
 
 ### Removed
 
