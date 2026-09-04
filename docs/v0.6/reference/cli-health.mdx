@@ -19,7 +19,7 @@ nanny health
 |-----------|------------|----------------------|
 | Local enforcement | `NANNY_BRIDGE_SOCKET` or `NANNY_BRIDGE_PORT` is set | A TCP connection succeeds |
 | Network server | `NANNY_BRIDGE_ADDR` is set | A TCP connection to the server address succeeds |
-| Certificates | `~/.nanny/certs/` exists | Cert files are present and not expired |
+| Certificates | both bundles, sandbox and live | Cert files are present and not expired |
 
 A component that was never started is **not checked** and does not cause a non-zero exit. `nanny health` only reports on what is active.
 
@@ -42,7 +42,8 @@ certs            : valid  (expires 2027-05-01T09:00:00Z)
 ```
 local enforcement: running
 network server   : not running
-certs            : not found  (run `nanny certs generate`)
+certs (sandbox) : valid  (expires 2027-09-03T00:00:00Z)
+certs (live   ) : not found
 ```
 
 **Server unreachable:**
@@ -62,7 +63,7 @@ Exit code is `1` when any active component is unreachable.
 When certs exist and are valid but expire within 30 days, `nanny health` prints a warning to stderr:
 
 ```
-nanny health  : warning, certs expire in 14 day(s). Run `nanny certs rotate` to renew.
+nanny health  : warning, the live certs expire in 14 day(s). Run `nanny certs rotate --live` to renew.
 ```
 
 The exit code is still `0`, a near-expiry cert is healthy, just worth knowing about.

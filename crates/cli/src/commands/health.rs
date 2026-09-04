@@ -16,7 +16,7 @@ use std::path::Path;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
-use super::certs::{default_certs_dir, read_meta};
+use super::certs::{certs_dir_opt, env_dir_name, read_meta};
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
@@ -60,33 +60,50 @@ pub fn cmd_health() -> Result<()> {
     }
 
     // ── 3. Certs ──────────────────────────────────────────────────────────────
-    let cert_dir = default_certs_dir();
-    let cert_status = check_certs(&cert_dir);
-    match &cert_status {
-        CertStatus::NotFound => {
-            println!("certs            : not found  (run `nanny certs generate`)");
-        }
-        CertStatus::Valid { expires } => {
-            let formatted = expires.format(&Rfc3339).unwrap_or_else(|_| "?".to_string());
-            println!("certs            : valid  (expires {formatted})");
-
-            // Warn 30 days before expiry: still healthy, but worth flagging.
-            let days_left = (*expires - OffsetDateTime::now_utc()).whole_days();
-            if days_left <= 30 {
-                eprintln!(
-                    "nanny health  : warning, certs expire in {days_left} day(s). \
-                     Run `nanny certs rotate` to renew."
-                );
+    // Both environments, each labelled. A bundle per environment means the
+    // interesting question is no longer "are the certs valid" but "which of
+    // them is about to expire", and reporting only the default would hide a
+    // live bundle running out.
+    for live in [false, true] {
+        let label = env_dir_name(live);
+        let Some(dir) = certs_dir_opt(live) else {
+            // No project here, so there is no bundle to name. Said once.
+            if !live {
+                println!("certs            : no app in this directory  (run `nanny init`)");
             }
-        }
-        CertStatus::Expired { expires } => {
-            let formatted = expires.format(&Rfc3339).unwrap_or_else(|_| "?".to_string());
-            println!("certs            : EXPIRED  (expired {formatted})");
-            all_healthy = false;
-        }
-        CertStatus::Unreadable(detail) => {
-            println!("certs            : unreadable, {detail}");
-            all_healthy = false;
+            break;
+        };
+        let renew = if live {
+            "nanny certs rotate --live"
+        } else {
+            "nanny certs rotate"
+        };
+        match check_certs(&dir) {
+            CertStatus::NotFound => {
+                println!("certs ({label:<7}) : not found");
+            }
+            CertStatus::Valid { expires } => {
+                let formatted = expires.format(&Rfc3339).unwrap_or_else(|_| "?".to_string());
+                println!("certs ({label:<7}) : valid  (expires {formatted})");
+
+                // Warn 30 days before expiry: still healthy, but worth flagging.
+                let days_left = (expires - OffsetDateTime::now_utc()).whole_days();
+                if days_left <= 30 {
+                    eprintln!(
+                        "nanny health  : warning, the {label} certs expire in \
+                         {days_left} day(s). Run `{renew}` to renew."
+                    );
+                }
+            }
+            CertStatus::Expired { expires } => {
+                let formatted = expires.format(&Rfc3339).unwrap_or_else(|_| "?".to_string());
+                println!("certs ({label:<7}) : EXPIRED  (expired {formatted}, run `{renew}`)");
+                all_healthy = false;
+            }
+            CertStatus::Unreadable(detail) => {
+                println!("certs ({label:<7}) : unreadable, {detail}");
+                all_healthy = false;
+            }
         }
     }
 
@@ -149,12 +166,20 @@ fn check_network_server() -> ServerStatus {
     // Prefer a full mTLS health check (actual HTTPS request with client cert)
     // over a raw TCP probe: it validates the TLS handshake, CA trust, and the
     // /health response in one shot.
-    let cert_dir = default_certs_dir();
-    let client_cert = cert_dir.join("client.crt");
-    let client_key = cert_dir.join("client.key");
-    let ca_cert = cert_dir.join("ca.crt");
+    // Whichever bundle has a complete client set. Sandbox first, since that is
+    // what an unflagged governor serves, then live. Probing is a read, so an
+    // absent project is not an error here: it falls through to the TCP ping.
+    let bundle = [false, true]
+        .into_iter()
+        .filter_map(certs_dir_opt)
+        .find(|d| {
+            d.join("client.crt").exists() && d.join("client.key").exists() && d.join("ca.crt").exists()
+        });
 
-    if client_cert.exists() && client_key.exists() && ca_cert.exists() {
+    if let Some(cert_dir) = bundle {
+        let client_cert = cert_dir.join("client.crt");
+        let client_key = cert_dir.join("client.key");
+        let ca_cert = cert_dir.join("ca.crt");
         match mtls_health_check(&addr, &client_cert, &client_key, &ca_cert) {
             MtlsResult::Running => ServerStatus::Reachable(addr, "mTLS ok"),
             MtlsResult::Stopped => ServerStatus::Reachable(addr, "mTLS ok, server stopped"),

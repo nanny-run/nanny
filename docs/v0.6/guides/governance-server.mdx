@@ -78,7 +78,9 @@ When your agents run on different machines, the server must verify that only you
 nanny certs generate
 ```
 
-This creates six files in `~/.nanny/certs/`:
+This creates six files in `~/.nanny/servers/<app_id>/certs/sandbox/`. Run it
+inside the project: a bundle belongs to one app, and the app id comes from the
+committed `.nanny/app.json`.
 
 ```
 ca.crt      CA certificate (the trust anchor, share with all agents)
@@ -101,7 +103,10 @@ nanny certs show
 nanny run --serve --addr 0.0.0.0:62669
 ```
 
-The server automatically reads `server.crt`, `server.key`, and `ca.crt` from `~/.nanny/certs/`. Pass explicit paths if your certs are elsewhere:
+The server reads `server.crt`, `server.key` and `ca.crt` from the same bundle
+`nanny certs generate` wrote, so a governor started in the project finds them
+with no flags. Pass explicit paths when the certificates are mounted somewhere
+else, which is the normal case in a container:
 
 ```bash
 nanny run --serve --addr 0.0.0.0:62669 \
@@ -308,6 +313,36 @@ Set `NANNY_HOME` to move `~/.nanny/servers/` to a directory of your choice inste
 
 ---
 
+## Sandbox and live
+
+Every `nanny certs` command targets **sandbox** unless you pass `--live`:
+
+```bash
+nanny certs generate --san staging.example.com --days 3650   # sandbox
+nanny certs generate --live --san app.example.com --days 3650
+nanny certs rotate            # sandbox
+nanny certs rotate --live
+```
+
+```
+~/.nanny/servers/<app_id>/certs/sandbox/
+~/.nanny/servers/<app_id>/certs/live/
+```
+
+**Two environments means two certificate authorities, and that is the point.**
+A CA is what a governor trusts. Share one across your environments and a client
+certificate issued for staging is admitted to production, because the
+production governor cannot tell them apart: it verifies the signature, and the
+signature is valid. Separate CAs make that impossible rather than discouraged.
+
+Production is typed every time because `rotate` takes no confirmation, and
+reissuing a live bundle stops every joiner still holding the old client
+certificate.
+
+This flag chooses the trust anchor and nothing else. It does not read your API
+key, and the `nny_sdbx_`/`nny_live_` prefix does not choose your certificates:
+the same words, two independent axes.
+
 ## Certificate operations
 
 ```bash
@@ -320,7 +355,7 @@ nanny certs show
 # Import externally-issued certs (BYOC: HashiCorp Vault, AWS ACM, etc.)
 nanny certs import ca=@/path/to/ca.crt cert=@/path/to/server.crt key=@/path/to/server.key
 
-# Remove all certs from ~/.nanny/certs/ (asks for confirmation)
+# Remove this app's sandbox bundle (asks for confirmation)
 nanny certs remove
 ```
 

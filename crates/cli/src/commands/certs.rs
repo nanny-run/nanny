@@ -1,6 +1,22 @@
 // nanny certs: TLS certificate management for the network server.
 //
-// All certificates live in ~/.nanny/certs/ by default:
+// A bundle belongs to one app and one environment, and lives beside that app's
+// governor state:
+//
+//   ~/.nanny/servers/<app_id>/certs/sandbox/     (the default)
+//   ~/.nanny/servers/<app_id>/certs/live/        (--live)
+//
+// So every certs command has to run inside the project, the same way `--serve`
+// does: the app id comes from the committed .nanny/app.json and there is no
+// path flag to point somewhere else. A bundle that cannot be found by the
+// command that rotates it is how one ends up unrotatable.
+//
+// The two environments are nanny's existing public vocabulary, the one already
+// carried by nny_sdbx_/nny_live_ keys, rather than a second set of words for
+// the same idea. They are separate axes: this flag chooses the trust anchor,
+// the key prefix chooses the cloud, and neither reads the other.
+//
+// Each bundle holds:
 //   ca.crt      : CA certificate (self-signed)
 //   ca.key      : CA private key  (kept for nanny certs rotate)
 //   server.crt  : Server certificate (signed by CA)
@@ -38,9 +54,13 @@ pub enum CertsCommand {
     ///
     /// Distribute client.crt + client.key to agents running on other machines.
     Generate {
-        /// Output directory. Defaults to ~/.nanny/certs/
+        /// Operate on the live bundle instead of the sandbox one.
+        ///
+        /// Omitted, every certs command targets sandbox. Production is typed,
+        /// every time, because `rotate` has no confirmation and reissuing a
+        /// live bundle stops every joiner still holding the old client cert.
         #[arg(long)]
-        out_dir: Option<PathBuf>,
+        live: bool,
 
         /// Overwrite existing certificates without prompting.
         #[arg(long)]
@@ -76,6 +96,14 @@ pub enum CertsCommand {
     ///
     /// If the governance server is running, it hot-reloads the new certs automatically.
     Import {
+        /// Operate on the live bundle instead of the sandbox one.
+        ///
+        /// Omitted, every certs command targets sandbox. Production is typed,
+        /// every time, because `rotate` has no confirmation and reissuing a
+        /// live bundle stops every joiner still holding the old client cert.
+        #[arg(long)]
+        live: bool,
+
         /// key=value pairs: ca=, cert=, key=. Values are PEM or @file.
         #[arg(required = true)]
         pairs: Vec<String>,
@@ -89,6 +117,14 @@ pub enum CertsCommand {
     ///
     /// To replace the CA as well, use `nanny certs generate --force`.
     Rotate {
+        /// Operate on the live bundle instead of the sandbox one.
+        ///
+        /// Omitted, every certs command targets sandbox. Production is typed,
+        /// every time, because `rotate` has no confirmation and reissuing a
+        /// live bundle stops every joiner still holding the old client cert.
+        #[arg(long)]
+        live: bool,
+
         /// Additional hostname or IP the new server certificate is valid for.
         /// Repeatable.
         ///
@@ -100,10 +136,26 @@ pub enum CertsCommand {
     },
 
     /// Delete all certificates from the certs directory.
-    Remove,
+    Remove {
+        /// Operate on the live bundle instead of the sandbox one.
+        ///
+        /// Omitted, every certs command targets sandbox. Production is typed,
+        /// every time, because `rotate` has no confirmation and reissuing a
+        /// live bundle stops every joiner still holding the old client cert.
+        #[arg(long)]
+        live: bool,
+    },
 
     /// Show certificate expiry dates and subject alternative names.
-    Show,
+    Show {
+        /// Operate on the live bundle instead of the sandbox one.
+        ///
+        /// Omitted, every certs command targets sandbox. Production is typed,
+        /// every time, because `rotate` has no confirmation and reissuing a
+        /// live bundle stops every joiner still holding the old client cert.
+        #[arg(long)]
+        live: bool,
+    },
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -111,26 +163,53 @@ pub enum CertsCommand {
 pub fn cmd_certs(action: CertsCommand) -> Result<()> {
     match action {
         CertsCommand::Generate {
-            out_dir,
+            live,
             force,
             days,
             sans,
-        } => cmd_certs_generate(out_dir, force, days, &sans),
-        CertsCommand::Import { pairs } => cmd_certs_import(pairs),
-        CertsCommand::Rotate { sans } => cmd_certs_rotate(None, &sans),
-        CertsCommand::Remove => cmd_certs_remove(),
-        CertsCommand::Show => cmd_certs_show(),
+        } => cmd_certs_generate(certs_dir(live)?, force, days, &sans),
+        CertsCommand::Import { live, pairs } => cmd_certs_import(certs_dir(live)?, pairs),
+        CertsCommand::Rotate { live, sans } => cmd_certs_rotate(certs_dir(live)?, &sans),
+        CertsCommand::Remove { live } => cmd_certs_remove(certs_dir(live)?),
+        CertsCommand::Show { live } => cmd_certs_show(certs_dir(live)?),
     }
 }
 
 // ── Cert directory ────────────────────────────────────────────────────────────
 
 /// Default certificate directory: ~/.nanny/certs/
-pub fn default_certs_dir() -> PathBuf {
-    dirs::home_dir()
-        .expect("cannot determine home directory")
-        .join(".nanny")
+/// Where this app's bundle for `live`/sandbox lives.
+///
+/// Requires a project, deliberately. `nanny certs` outside one has no app to
+/// belong to, and guessing a shared location is what let a second app's
+/// `generate` overwrite the first app's CA, silently invalidating every
+/// certificate already deployed from it.
+///
+/// Respects `NANNY_HOME` through `nanny_server_state_dir`, so a bundle sits
+/// beside the governor state of the app it belongs to rather than in a second
+/// place that has to be kept in step.
+pub fn certs_dir(live: bool) -> Result<PathBuf> {
+    let cwd = std::env::current_dir().context("failed to read the current directory")?;
+    let app = crate::identity::AppIdentity::load_required(&cwd)?;
+    let dir = crate::commands::server::nanny_server_state_dir(&app.app_id)?
         .join("certs")
+        .join(env_dir_name(live));
+    Ok(dir)
+}
+
+/// The bundle directory when there is a project, `None` when there is not.
+///
+/// For readers rather than writers: `nanny health` reports on whatever it can
+/// see and must not fail because it was run outside a checkout, where a
+/// command that *writes* a bundle should refuse.
+pub fn certs_dir_opt(live: bool) -> Option<PathBuf> {
+    certs_dir(live).ok()
+}
+
+/// Nanny's existing public vocabulary for the two environments, the same one
+/// the `nny_sdbx_`/`nny_live_` key prefixes use. Not a second set of words.
+pub fn env_dir_name(live: bool) -> &'static str {
+    if live { "live" } else { "sandbox" }
 }
 
 // ── Meta ──────────────────────────────────────────────────────────────────────
@@ -187,17 +266,10 @@ pub fn read_meta(dir: &Path) -> Result<CertsMeta> {
 
 // ── nanny certs generate ──────────────────────────────────────────────────────
 
-fn cmd_certs_generate(
-    out_dir: Option<PathBuf>,
-    force: bool,
-    days: u32,
-    sans: &[String],
-) -> Result<()> {
-    let dir = out_dir.unwrap_or_else(default_certs_dir);
-
+fn cmd_certs_generate(dir: PathBuf, force: bool, days: u32, sans: &[String]) -> Result<()> {
     // Warn if the certs dir happens to be inside a git-tracked tree: certs
-    // should never be committed. ~/.nanny/certs/ is outside any project dir
-    // by default, so this only fires for unusual --out-dir overrides.
+    // should never be committed. The bundle lives under the home directory,
+    // so this only fires when NANNY_HOME points inside a checkout.
     check_git_warning(&dir);
 
     // Guard: refuse to overwrite without --force.
@@ -340,8 +412,7 @@ fn cmd_certs_generate(
 
 // ── nanny certs import ────────────────────────────────────────────────────────
 
-fn cmd_certs_import(pairs: Vec<String>) -> Result<()> {
-    let dir = default_certs_dir();
+fn cmd_certs_import(dir: PathBuf, pairs: Vec<String>) -> Result<()> {
 
     // Parse key=value pairs. Values are PEM strings or @file references.
     let mut map: HashMap<String, String> = HashMap::new();
@@ -460,8 +531,7 @@ fn cmd_certs_import(pairs: Vec<String>) -> Result<()> {
 
 // ── nanny certs rotate ────────────────────────────────────────────────────────
 
-fn cmd_certs_rotate(out_dir: Option<PathBuf>, sans: &[String]) -> Result<()> {
-    let dir = out_dir.unwrap_or_else(default_certs_dir);
+fn cmd_certs_rotate(dir: PathBuf, sans: &[String]) -> Result<()> {
 
     let ca_crt_path = dir.join("ca.crt");
     let ca_key_path = dir.join("ca.key");
@@ -614,8 +684,7 @@ fn cmd_certs_rotate(out_dir: Option<PathBuf>, sans: &[String]) -> Result<()> {
 
 // ── nanny certs remove ────────────────────────────────────────────────────────
 
-fn cmd_certs_remove() -> Result<()> {
-    let dir = default_certs_dir();
+fn cmd_certs_remove(dir: PathBuf) -> Result<()> {
 
     if !dir.exists() {
         println!(
@@ -665,8 +734,7 @@ fn cmd_certs_remove() -> Result<()> {
 
 // ── nanny certs show ──────────────────────────────────────────────────────────
 
-fn cmd_certs_show() -> Result<()> {
-    let dir = default_certs_dir();
+fn cmd_certs_show(dir: PathBuf) -> Result<()> {
 
     if !dir.exists() {
         println!("nanny certs: no certificates found, run `nanny certs generate`");
@@ -891,7 +959,7 @@ mod tests {
     #[test]
     fn generate_creates_all_files() {
         let dir = tmp_dir();
-        cmd_certs_generate(Some(dir.clone()), false, 365, &[]).expect("generate must succeed");
+        cmd_certs_generate(dir.clone(), false, 365, &[]).expect("generate must succeed");
 
         for name in &[
             "ca.crt",
@@ -911,9 +979,9 @@ mod tests {
     #[test]
     fn generate_refuses_overwrite_without_force() {
         let dir = tmp_dir();
-        cmd_certs_generate(Some(dir.clone()), false, 365, &[]).unwrap();
+        cmd_certs_generate(dir.clone(), false, 365, &[]).unwrap();
 
-        let result = cmd_certs_generate(Some(dir.clone()), false, 365, &[]);
+        let result = cmd_certs_generate(dir.clone(), false, 365, &[]);
         assert!(result.is_err(), "second generate without --force must fail");
         assert!(
             result.unwrap_err().to_string().contains("already exist"),
@@ -926,15 +994,15 @@ mod tests {
     #[test]
     fn generate_force_overwrites() {
         let dir = tmp_dir();
-        cmd_certs_generate(Some(dir.clone()), false, 365, &[]).unwrap();
-        cmd_certs_generate(Some(dir.clone()), true, 365, &[]).expect("--force must overwrite");
+        cmd_certs_generate(dir.clone(), false, 365, &[]).unwrap();
+        cmd_certs_generate(dir.clone(), true, 365, &[]).expect("--force must overwrite");
         fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn generated_certs_have_valid_chain() {
         let dir = tmp_dir();
-        cmd_certs_generate(Some(dir.clone()), false, 365, &[]).unwrap();
+        cmd_certs_generate(dir.clone(), false, 365, &[]).unwrap();
 
         let ca = fs::read(dir.join("ca.crt")).unwrap();
         let server_cert = fs::read(dir.join("server.crt")).unwrap();
@@ -949,7 +1017,7 @@ mod tests {
     #[test]
     fn meta_json_contains_expiry() {
         let dir = tmp_dir();
-        cmd_certs_generate(Some(dir.clone()), false, 90, &[]).unwrap();
+        cmd_certs_generate(dir.clone(), false, 90, &[]).unwrap();
 
         let meta = read_meta(&dir).expect("meta.json must be readable");
         assert!(!meta.expires.is_empty(), "expires must be set");
@@ -989,7 +1057,7 @@ mod tests {
     #[test]
     fn a_generated_cert_carries_the_requested_hostname() {
         let dir = tmp_dir();
-        cmd_certs_generate(Some(dir.clone()), false, 365, &["agents-host".to_string()]).unwrap();
+        cmd_certs_generate(dir.clone(), false, 365, &["agents-host".to_string()]).unwrap();
         let meta = read_meta(&dir).unwrap();
         assert!(
             meta.san.contains(&"agents-host".to_string()),
@@ -1010,9 +1078,9 @@ mod tests {
         // starts failing its handshake hours later, with nothing in the
         // rotation output to suggest why.
         let dir = tmp_dir();
-        cmd_certs_generate(Some(dir.clone()), false, 365, &["agents-host".to_string()]).unwrap();
+        cmd_certs_generate(dir.clone(), false, 365, &["agents-host".to_string()]).unwrap();
 
-        cmd_certs_rotate(Some(dir.clone()), &[]).unwrap();
+        cmd_certs_rotate(dir.clone(), &[]).unwrap();
         let kept = read_meta(&dir).unwrap();
         assert!(
             kept.san.contains(&"agents-host".to_string()),
@@ -1022,7 +1090,7 @@ mod tests {
 
         // Passing names explicitly replaces the list rather than appending to
         // it, so a host that is decommissioned can actually be removed.
-        cmd_certs_rotate(Some(dir.clone()), &["other-host".to_string()]).unwrap();
+        cmd_certs_rotate(dir.clone(), &["other-host".to_string()]).unwrap();
         let replaced = read_meta(&dir).unwrap();
         assert!(
             replaced.san.contains(&"other-host".to_string()),
@@ -1039,12 +1107,12 @@ mod tests {
     #[test]
     fn rotate_regenerates_certs() {
         let dir = tmp_dir();
-        cmd_certs_generate(Some(dir.clone()), false, 365, &[]).unwrap();
+        cmd_certs_generate(dir.clone(), false, 365, &[]).unwrap();
 
         let original_server = fs::read(dir.join("server.crt")).unwrap();
         // Rotate the test dir specifically (not the default ~/.nanny/certs) so
         // the test is hermetic and actually exercises rotation against these certs.
-        cmd_certs_rotate(Some(dir.clone()), &[]).unwrap();
+        cmd_certs_rotate(dir.clone(), &[]).unwrap();
 
         let new_server = fs::read(dir.join("server.crt")).unwrap();
         // Certs are regenerated: the PEM bytes differ (a fresh key each rotate).
@@ -1059,8 +1127,8 @@ mod tests {
     #[test]
     fn rotated_certs_still_chain_to_the_untouched_ca() {
         let dir = tmp_dir();
-        cmd_certs_generate(Some(dir.clone()), false, 365, &[]).unwrap();
-        cmd_certs_rotate(Some(dir.clone()), &[]).unwrap();
+        cmd_certs_generate(dir.clone(), false, 365, &[]).unwrap();
+        cmd_certs_rotate(dir.clone(), &[]).unwrap();
 
         // Rotation reconstructs the CA signing object from fixed parameters plus
         // the existing ca.key rather than reading ca.crt, so the new leaves have
@@ -1080,7 +1148,7 @@ mod tests {
     #[test]
     fn import_file_reference_works() {
         let dir = tmp_dir();
-        cmd_certs_generate(Some(dir.clone()), false, 365, &[]).unwrap();
+        cmd_certs_generate(dir.clone(), false, 365, &[]).unwrap();
 
         // Import using @file syntax: re-import the same certs.
         let ca_path = dir.join("ca.crt");
@@ -1113,8 +1181,8 @@ mod tests {
         ));
         fs::create_dir_all(&dir_b).unwrap();
 
-        cmd_certs_generate(Some(dir_a.clone()), false, 365, &[]).unwrap();
-        cmd_certs_generate(Some(dir_b.clone()), false, 365, &[]).unwrap();
+        cmd_certs_generate(dir_a.clone(), false, 365, &[]).unwrap();
+        cmd_certs_generate(dir_b.clone(), false, 365, &[]).unwrap();
 
         let ca_a = fs::read(dir_a.join("ca.crt")).unwrap();
         let cert_b = fs::read(dir_b.join("server.crt")).unwrap();
@@ -1130,7 +1198,7 @@ mod tests {
     #[test]
     fn cert_expiry_is_parseable() {
         let dir = tmp_dir();
-        cmd_certs_generate(Some(dir.clone()), false, 30, &[]).unwrap();
+        cmd_certs_generate(dir.clone(), false, 30, &[]).unwrap();
 
         let pem = fs::read(dir.join("server.crt")).unwrap();
         let expiry = cert_expiry_from_pem(&pem).expect("expiry must parse");
@@ -1169,5 +1237,77 @@ mod tests {
         );
 
         fs::remove_dir_all(&dir).ok();
+    }
+
+    // ── Environment scoping ───────────────────────────────────────────────
+
+    /// Serialises the NANNY_HOME writes below. Env vars are process-global, so
+    /// two of these running at once would read each other's home directory.
+    static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn the_two_environments_use_nannys_existing_words() {
+        // Not a second vocabulary for the same idea: these are the words the
+        // nny_sdbx_/nny_live_ key prefixes already put in front of users.
+        assert_eq!(env_dir_name(false), "sandbox");
+        assert_eq!(env_dir_name(true), "live");
+    }
+
+    #[test]
+    fn sandbox_and_live_never_resolve_to_the_same_place() {
+        // The whole point of the split. If these collided, rotating one would
+        // reissue the other's certificates and admit its clients.
+        let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = tmp_dir();
+        std::env::set_var("NANNY_HOME", &home);
+
+        let bundle = |live: bool| {
+            crate::commands::server::nanny_server_state_dir("app_x")
+                .unwrap()
+                .join("certs")
+                .join(env_dir_name(live))
+        };
+        let (sandbox, live) = (bundle(false), bundle(true));
+        std::env::remove_var("NANNY_HOME");
+        fs::remove_dir_all(&home).ok();
+
+        assert_ne!(sandbox, live);
+        assert!(sandbox.ends_with("certs/sandbox"), "{}", sandbox.display());
+        assert!(live.ends_with("certs/live"), "{}", live.display());
+    }
+
+    #[test]
+    fn two_apps_never_share_a_bundle() {
+        // The defect this scoping removes: one shared directory meant a second
+        // app's `generate` overwrote the first app's CA, silently invalidating
+        // every certificate already deployed from it.
+        let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = tmp_dir();
+        std::env::set_var("NANNY_HOME", &home);
+
+        let a = crate::commands::server::nanny_server_state_dir("app_aaa").unwrap();
+        let b = crate::commands::server::nanny_server_state_dir("app_bbb").unwrap();
+        std::env::remove_var("NANNY_HOME");
+        fs::remove_dir_all(&home).ok();
+
+        assert_ne!(a.join("certs"), b.join("certs"));
+    }
+
+    #[test]
+    fn a_bundle_is_written_and_read_at_the_same_path() {
+        // Generate, then rotate and show, against one resolved directory. The
+        // original defect was that `generate --out-dir` could write somewhere
+        // `rotate` and `show` could not see, leaving a bundle unrotatable.
+        let bundle = tmp_dir().join("certs").join("live");
+        fs::create_dir_all(&bundle).unwrap();
+
+        cmd_certs_generate(bundle.clone(), false, 365, &["example.test".to_string()])
+            .expect("generate must succeed");
+        assert!(bundle.join("ca.key").exists(), "the CA must land in the bundle");
+
+        cmd_certs_rotate(bundle.clone(), &[]).expect("rotate must find what generate wrote");
+        cmd_certs_show(bundle.clone()).expect("show must find it too");
+
+        fs::remove_dir_all(bundle.parent().unwrap().parent().unwrap()).ok();
     }
 }

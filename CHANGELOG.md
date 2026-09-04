@@ -5,6 +5,60 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Certificate bundles are per app and per environment.** They all shared
+  `~/.nanny/certs`, so a second app's `generate` refused to run, and `--force`
+  would have replaced the first app's certificate authority, silently
+  invalidating every certificate already deployed from it. A bundle now lives
+  at `~/.nanny/servers/<app_id>/certs/{sandbox,live}/`, beside the governor
+  state of the app it belongs to.
+
+- **`--live` on every `nanny certs` command, and on `nanny run --serve`.**
+  Omitted, everything targets sandbox. Two environments means two certificate
+  authorities, which is the point: a CA is what a governor trusts, so one
+  authority spanning both means a client certificate issued for sandbox is
+  admitted to production, and the production governor cannot tell, because the
+  signature really is valid. Production is typed every time, because `rotate`
+  takes no confirmation and reissuing a live bundle stops every joiner still
+  holding the old client certificate. The flag selects the trust anchor and
+  reads nothing else: the `nny_sdbx_`/`nny_live_` key prefix still selects the
+  cloud, and neither consults the other.
+
+- **`nanny health` reports both bundles**, labelled, so a live bundle running
+  out of validity is visible from a machine whose sandbox one is fine. Outside
+  a project it says so instead of failing.
+
+- **The deployment guide says how to install the runtime into an image.** It
+  covered application dependencies and skipped the binary, which is how a
+  Dockerfile ends up running `install.nanny.run`, fetching *latest*, and
+  shipping a different runtime on every rebuild.
+
+### Removed
+
+- **`--config`.** A project has exactly one `nanny.toml` and it sits at the
+  root, which the runtime already enforces. The flag was global, so it appeared
+  in every subcommand's help, and was read by exactly one code path: plain
+  `nanny run`. `nanny run --serve` accepted it and silently ignored it, reading
+  `./nanny.toml` regardless, which matters more now that `--serve` is the
+  documented way to start an app. Both paths resolve from the working
+  directory. The integration tests that used it to target a temporary project
+  set the child's working directory instead, which is per-process and so is
+  actually safe under a parallel run.
+
+- **`--out-dir`.** It existed only on `generate`, while `rotate`, `show`,
+  `import` and `remove` hardcoded the default directory, so a bundle written
+  with it could not be rotated or inspected afterwards. Environment scoping
+  replaces the reason to reach for it.
+
+### Fixed
+
+- **`nanny certs` said to keep `ca.key` "on the server machine".** Backwards:
+  it signs certificates, so whoever holds it can mint a client any governor
+  trusting that CA will admit. It never leaves the machine that generated it.
+
 ## [0.6.3] - 2026-09-03
 
 ### Added
