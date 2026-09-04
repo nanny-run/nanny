@@ -91,6 +91,24 @@ To preview doc changes locally, run `mint dev` from the `docs/` directory. If yo
 
 ---
 
+
+## Pull requests
+
+`.github/pull_request_template.md` carries the shape. Two rules matter more
+than the rest:
+
+**Name sections after the problem, not the change.** "The token was printed in
+full" tells a reviewer what to look for. "Logging changes" makes them read the
+diff to find out. Number them when there are several.
+
+**`## Verification` is always last and always present.** What you ran, what you
+added, and anything you found and chose not to fix. A PR that says the tests
+pass without saying which ones ran is asking to be taken on trust.
+
+Open with how the problem was found. A reviewer who knows it came out of a
+staging log reads the change differently from one who thinks it came out of a
+refactor.
+
 ## What belongs elsewhere
 
 Do not open pull requests that add:
