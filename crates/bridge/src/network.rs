@@ -701,15 +701,14 @@ impl NetworkServer {
     /// `(run_id, lines)` to it. This is the ONLY hook cloud sync uses; the engine
     /// stays auth free: it never talks to the cloud, it just hands off strings.
     ///
-    /// `local_log_path`: when `Some`, the same drain thread also appends each
-    /// drained line to this file, flushed per write. This is what makes
-    /// `[observability] log = "file"` behave identically whether the process
-    /// is local `nanny run` or `nanny run --serve`: before this, `nanny.toml`
-    /// promised a log file and `--serve` silently never wrote one, the config
-    /// was only ever honored by the local, single-process run path. The
-    /// caller (`commands/server.rs`) resolves this from the server's own
-    /// `nanny.toml`, the same `[observability]` table local `nanny run`
-    /// already reads via `EventWriter::from_config`.
+    /// `local_log`: when `Some`, the same drain thread also writes each drained
+    /// line to it, flushed per write. The caller resolves it from
+    /// `[observability]`, so `log = "stdout"` (the default) and `log = "file"`
+    /// both arrive here as a sink and are honoured identically. Taking a writer
+    /// rather than a path is what lets stdout reach this at all: a path cannot
+    /// name it, and the governor writing nowhere under the default config would
+    /// mean the local event stream disappears for anyone who never set
+    /// `log = "file"`.
     #[allow(clippy::too_many_arguments)]
     pub fn start_blocking_synced(
         addr: SocketAddr,
@@ -721,7 +720,7 @@ impl NetworkServer {
         rate_limit_rps: u32, // max req/s per client IP, DoS protection, default 100
         event_sink: Option<Sender<(String, Vec<String>)>>,
         state_dir: PathBuf, // ~/.nanny/servers/<app_id>/, keyed, per-app, never shared
-        local_log_path: Option<PathBuf>,
+        local_log: Option<Box<dyn std::io::Write + Send>>,
     ) -> Result<()> {
         // Install ring crypto provider: safe to call multiple times.
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -783,29 +782,12 @@ impl NetworkServer {
         // copy of the same drained lines, neither steals from the other.
         // Cloud sink: hands `(run_id, lines)` to the cli-layer forwarder, no
         // cloud code lives here. Local log: appends each line to
-        // `local_log_path`, flushed per write, same guarantee
-        // `EventWriter` (the local `nanny run` path) already gives: this is
-        // what makes `[observability] log = "file"` behave the same whether
-        // the process is local `nanny run` or `nanny run --serve`.
-        if event_sink.is_some() || local_log_path.is_some() {
+        // `local_log`, flushed per write, the same guarantee `EventWriter`
+        // gives. Whatever `[observability]` resolved to, stdout or a file,
+        // arrives here already open, so both are honoured by one code path.
+        if event_sink.is_some() || local_log.is_some() {
             let drain_runs = Arc::clone(&runs);
-            let mut local_log_file = match &local_log_path {
-                Some(path) => match std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(path)
-                {
-                    Ok(f) => Some(f),
-                    Err(e) => {
-                        eprintln!(
-                            "nanny: failed to open local log file '{}': {e}",
-                            path.display()
-                        );
-                        None
-                    }
-                },
-                None => None,
-            };
+            let mut local_log_file = local_log;
             std::thread::spawn(move || loop {
                 std::thread::sleep(std::time::Duration::from_millis(250));
                 let ids: Vec<String> = {

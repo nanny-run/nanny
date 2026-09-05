@@ -228,6 +228,25 @@ pub fn cmd_server_start(
     // `log = "stdout"`, which is a deliberate no-op for `--serve` (see below).
     let local_log_path = config.observability.resolve_log_path(&cwd)?;
 
+    // The same sink `EventWriter::from_config` opens for a local run: stdout
+    // when `[observability] log` is the default, the resolved file otherwise.
+    // Opened here rather than resolved to a path, because stdout has no path
+    // and the governor writing nowhere under the default config would mean the
+    // local event stream simply vanishes for anyone who never set
+    // `log = "file"`.
+    let local_log_sink: Option<Box<dyn std::io::Write + Send>> = match &local_log_path {
+        None => Some(Box::new(std::io::stdout())),
+        Some(path) => match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            Ok(file) => Some(Box::new(file)),
+            Err(e) => {
+                // Loud, then continue: a governor that refuses to start because
+                // a log file could not be opened takes the app down with it.
+                eprintln!("nanny: cannot open the event log '{}' ({e})", path.display());
+                None
+            }
+        },
+    };
+
     let event_sink = target.ok().map(|target| {
         let (tx, rx) = std::sync::mpsc::channel();
         crate::sync::ServerForwarder::spawn(
@@ -315,7 +334,7 @@ pub fn cmd_server_start(
                 RATE_LIMIT_RPS,
                 event_sink,
                 state_dir_for_server,
-                local_log_path,
+                local_log_sink,
             )?;
             Ok(())
         }
@@ -331,7 +350,7 @@ pub fn cmd_server_start(
                 session_tokens,
                 event_sink,
                 state_dir: state_dir_for_server,
-                local_log_path,
+                local_log_sink,
             },
             command,
             &app.app_id,
@@ -407,7 +426,7 @@ struct GovernorSetup {
     session_tokens: Vec<String>,
     event_sink: Option<std::sync::mpsc::Sender<(String, Vec<String>)>>,
     state_dir: PathBuf,
-    local_log_path: Option<PathBuf>,
+    local_log_sink: Option<Box<dyn std::io::Write + Send>>,
 }
 
 /// Run the governance server and, underneath it, the app from `[start]`.
@@ -487,7 +506,7 @@ fn run_governor_with_app(setup: GovernorSetup, command: Vec<String>, app_id: &st
                 RATE_LIMIT_RPS,
                 setup.event_sink,
                 setup.state_dir,
-                setup.local_log_path,
+                setup.local_log_sink,
             );
             if let Err(e) = outcome {
                 *result_slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(e);
