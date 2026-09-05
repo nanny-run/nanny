@@ -94,20 +94,15 @@ To preview doc changes locally, run `mint dev` from the `docs/` directory. If yo
 
 ## Pull requests
 
-`.github/pull_request_template.md` carries the shape. Two rules matter more
-than the rest:
+`.github/PULL_REQUEST_TEMPLATE.md` carries the shape: a summary, the context
+behind it, and a test plan naming the exact commands you ran. Delete a section
+that does not apply rather than leaving it unanswered.
 
-**Name sections after the problem, not the change.** "The token was printed in
-full" tells a reviewer what to look for. "Logging changes" makes them read the
-diff to find out. Number them when there are several.
-
-**`## Verification` is always last and always present.** What you ran, what you
-added, and anything you found and chose not to fix. A PR that says the tests
-pass without saying which ones ran is asking to be taken on trust.
-
-Open with how the problem was found. A reviewer who knows it came out of a
-staging log reads the change differently from one who thinks it came out of a
-refactor.
+Two things the checklist cannot enforce and reviewers rely on. **Say how the
+problem was found.** A change that came out of a deploy log reads differently
+from one that came out of a refactor. And **name what you chose not to do**,
+where a decision could reasonably have gone the other way, because the reviewer
+cannot see the option you rejected.
 
 ## What belongs elsewhere
 
