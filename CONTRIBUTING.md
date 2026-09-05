@@ -91,6 +91,19 @@ To preview doc changes locally, run `mint dev` from the `docs/` directory. If yo
 
 ---
 
+
+## Pull requests
+
+`.github/PULL_REQUEST_TEMPLATE.md` carries the shape: a summary, the context
+behind it, and a test plan naming the exact commands you ran. Delete a section
+that does not apply rather than leaving it unanswered.
+
+Two things the checklist cannot enforce and reviewers rely on. **Say how the
+problem was found.** A change that came out of a deploy log reads differently
+from one that came out of a refactor. And **name what you chose not to do**,
+where a decision could reasonably have gone the other way, because the reviewer
+cannot see the option you rejected.
+
 ## What belongs elsewhere
 
 Do not open pull requests that add:

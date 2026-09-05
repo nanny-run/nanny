@@ -32,10 +32,6 @@ use std::time::{Duration, Instant};
     version
 )]
 struct Cli {
-    /// Path to the nanny.toml config file. Defaults to ./nanny.toml
-    #[arg(long, global = true, default_value = "nanny.toml")]
-    config: PathBuf,
-
     #[command(subcommand)]
     command: Command,
 }
@@ -95,15 +91,20 @@ enum Command {
         #[arg(long, default_value_t = nanny_bridge::network::default_governor_addr())]
         addr: SocketAddr,
 
-        /// (with --serve) Server certificate PEM. Defaults to ~/.nanny/certs/server.crt.
+        /// (with --serve) Use this app's live certificate bundle rather than
+        /// its sandbox one. Ignored when --cert/--key/--ca are given.
+        #[arg(long)]
+        live: bool,
+
+        /// (with --serve) Server certificate PEM. Defaults to the app's sandbox bundle.
         #[arg(long)]
         cert: Option<PathBuf>,
 
-        /// (with --serve) Server private key PEM. Defaults to ~/.nanny/certs/server.key.
+        /// (with --serve) Server private key PEM. Defaults to the app's sandbox bundle.
         #[arg(long)]
         key: Option<PathBuf>,
 
-        /// (with --serve) CA certificate PEM to validate client certs. Defaults to ~/.nanny/certs/ca.crt.
+        /// (with --serve) CA certificate PEM to validate client certs. Defaults to the app's sandbox bundle.
         #[arg(long)]
         ca: Option<PathBuf>,
 
@@ -171,6 +172,7 @@ fn main() {
             cert,
             key,
             ca,
+            live,
             extra_args,
         } => {
             if serve {
@@ -188,11 +190,20 @@ fn main() {
                     // shared-governor case. Trailing args append to that
                     // command, exactly as they do for plain `nanny run`.
                     commands::server::cmd_server_start(
-                        addr, cert, key, ca, no_sync, env, extra_args,
+                        addr,
+                        commands::server::TlsSource {
+                            cert,
+                            key,
+                            ca,
+                            live,
+                        },
+                        no_sync,
+                        env,
+                        extra_args,
                     )
                 }
             } else {
-                cmd_run(&cli.config, no_sync, env, join, extra_args)
+                cmd_run(no_sync, env, join, extra_args)
             }
         }
         Command::Uninstall => cmd_uninstall(),
@@ -592,23 +603,18 @@ fn declare_app_to_governor(server: &NetworkServerInfo, dir: &Path, run_id: &str)
 }
 
 fn cmd_run(
-    config_path: &Path,
     no_sync: bool,
     env: cloud::CloudEnv,
     join: Option<String>,
     extra_args: Vec<String>,
 ) -> Result<()> {
-    // Guard: exactly one nanny*.toml allowed per directory.
-    let config_dir = config_path
-        .parent()
-        .map(|p| {
-            if p == Path::new("") {
-                Path::new(".")
-            } else {
-                p
-            }
-        })
-        .unwrap_or(Path::new("."));
+    // A project has one nanny.toml and it sits at its root, which is where you
+    // run from. `--serve` already resolved it this way and ignored the flag
+    // that claimed otherwise; both paths now agree.
+    let config_dir = std::env::current_dir().context("failed to read the current directory")?;
+    let config_dir = config_dir.as_path();
+    let config_path = &config_dir.join("nanny.toml");
+
     let existing = nanny_tomls_in_dir(config_dir)?;
     if existing.len() > 1 {
         let mut names: Vec<_> = existing

@@ -30,7 +30,6 @@ nanny run --serve -- --verbose
 | `--join=<appId>`  | string | —              | Join an existing governance server by app id (from that server's `.nanny/app.json`), instead of enforcing locally. Explicit and app-id-only: never a name, never auto-detected. Not compatible with `--serve`. |
 | `--serve`         | flag   | —              | Start the governance server, and launch `[start].cmd` underneath it when `nanny.toml` declares one. Omit `[start]` for a headless governor. See [Governance server](#governance-server) below. |
 | `--no-sync`       | flag   | —              | Do not forward events to Nanny Cloud for this run, even if `NANNY_API_KEY` is set. Enforcement is unaffected. See [Connect to Nanny Cloud](/v0.6/guides/managed-mode). |
-| `--config=<path>` | path   | `./nanny.toml` | Path to config file.                                                                                                   |
 
 ---
 
@@ -105,9 +104,9 @@ It reads `nanny.toml` from the current directory and blocks until stopped (`nann
 | Flag     | Type           | Default                     | Description                                                                                                    |
 | -------- | -------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | `--addr` | socket address | `127.0.0.1:62669`           | Listen address. Loopback is plain HTTP; non-loopback requires mTLS. |
-| `--cert` | path           | `~/.nanny/certs/server.crt` | Server TLS certificate PEM. Required only for non-loopback addresses.                                          |
-| `--key`  | path           | `~/.nanny/certs/server.key` | Server TLS private key PEM. Required only for non-loopback addresses.                                          |
-| `--ca`   | path           | `~/.nanny/certs/ca.crt`     | CA certificate PEM used to validate agent client certs. Required only for non-loopback addresses.             |
+| `--cert` | path           | the app's sandbox bundle | Server TLS certificate PEM. Required only for non-loopback addresses.                                          |
+| `--key`  | path           | the app's sandbox bundle | Server TLS private key PEM. Required only for non-loopback addresses.                                          |
+| `--ca`   | path           | the app's sandbox bundle | CA certificate PEM used to validate agent client certs. Required only for non-loopback addresses.             |
 
 The bind address sets the security posture: **loopback** (`127.0.0.1`) is plain HTTP for same-machine agents; a **non-loopback** address (`0.0.0.0`) makes mTLS mandatory, and the server refuses to start without certs. For cross-machine setup, certificates, and connecting agents, see the [Governance server guide](/v0.6/guides/governance-server).
 

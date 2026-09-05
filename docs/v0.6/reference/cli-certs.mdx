@@ -9,6 +9,31 @@ TLS certificates are required when the governance server binds to a non-loopback
 nanny certs <COMMAND>
 ```
 
+**Run these inside the project.** A bundle belongs to one app, identified by the
+committed `.nanny/app.json`, and there is no flag to point somewhere else.
+
+## Sandbox and live
+
+Every command targets **sandbox** unless you pass `--live`.
+
+```
+~/.nanny/servers/<app_id>/certs/sandbox/
+~/.nanny/servers/<app_id>/certs/live/
+```
+
+Two environments means two certificate authorities. A CA is what a governor
+trusts, so sharing one across environments means a client certificate issued
+for sandbox is admitted to production: the production governor verifies the
+signature, the signature is valid, and nothing distinguishes them. Separate
+authorities make that impossible rather than merely discouraged.
+
+Production is typed every time. `rotate` takes no confirmation, and reissuing a
+live bundle stops every joiner still holding the old client certificate.
+
+This flag selects the trust anchor and reads nothing else. The
+`nny_sdbx_`/`nny_live_` key prefix selects which cloud your evidence reaches.
+Same words, two independent axes.
+
 ---
 
 ## Commands
@@ -18,7 +43,7 @@ nanny certs <COMMAND>
 Generate a complete certificate bundle for the governance server.
 
 ```bash
-nanny certs generate [--out-dir <path>] [--days <days>] [--force]
+nanny certs generate [--live] [--san <host>]... [--days <days>] [--force]
 ```
 
 Always generates all six files atomically, PKI requires a CA to sign the server and client certs, so partial generation is not supported.
@@ -26,9 +51,11 @@ Always generates all six files atomically, PKI requires a CA to sign the server 
 #### Files generated
 
 ```
-~/.nanny/certs/
+~/.nanny/servers/<app_id>/certs/sandbox/
   ca.crt      CA certificate (the trust anchor)
-  ca.key      CA private key (keep this on the server machine; needed for nanny certs rotate)
+  ca.key      CA private key. Never leaves the machine that generated it: it
+              signs certificates, so whoever holds it can mint a client the
+              governor trusts. Needed by nanny certs rotate.
   server.crt  server TLS certificate
   server.key  server TLS private key
   client.crt  client certificate (copy to each agent machine)
@@ -41,7 +68,7 @@ Always generates all six files atomically, PKI requires a CA to sign the server 
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--out-dir` | path | `~/.nanny/certs/` | Directory to write cert files. The default is outside any project directory so files are never accidentally committed. |
+| `--live` | flag | — | Issue from the live authority instead of the sandbox one. |
 | `--days` | integer | `365` | Certificate validity period in days. |
 | `--force` | flag | — | Overwrite existing cert files. Without this flag, `generate` refuses if any cert files already exist. |
 
@@ -158,7 +185,7 @@ nanny certs rotate
 **When `rotate` does not apply:**
 - Your certs were issued by an external PKI (Vault, AWS ACM, etc.), those systems hold the CA private key, not Nanny. Use `nanny certs import` instead.
 
-`rotate` requires `ca.key` to be present in `~/.nanny/certs/`. This file only exists when `nanny certs generate` created the CA. If `ca.key` is missing, `rotate` exits with an error and suggests `nanny certs import`.
+`rotate` requires `ca.key` to be present in `~/.nanny/servers/<app_id>/certs/sandbox/`. This file only exists when `nanny certs generate` created the CA. If `ca.key` is missing, `rotate` exits with an error and suggests `nanny certs import`.
 
 #### Example output
 
@@ -210,7 +237,7 @@ nanny certs: no certificates found, run `nanny certs generate`
 
 ### remove
 
-Delete all cert files from `~/.nanny/certs/`.
+Delete all cert files from `~/.nanny/servers/<app_id>/certs/sandbox/`.
 
 ```bash
 nanny certs remove
@@ -228,7 +255,7 @@ nanny certs: nothing to remove, '/Users/you/.nanny/certs' does not exist
 
 ## Certificate hot-reload
 
-The governance server watches `~/.nanny/certs/` for file changes. When cert files are updated, by `nanny certs import`, `nanny certs rotate`, or an external PKI agent writing to the directory, the server reloads the new certs without restarting. New connections use the new cert immediately; existing connections complete on the old cert.
+The governance server watches `~/.nanny/servers/<app_id>/certs/sandbox/` for file changes. When cert files are updated, by `nanny certs import`, `nanny certs rotate`, or an external PKI agent writing to the directory, the server reloads the new certs without restarting. New connections use the new cert immediately; existing connections complete on the old cert.
 
 This is designed for short-lived PKI certs (for example, Vault PKI secrets engine issuing 8-hour certs renewed automatically by Vault Agent). The server stays up; certs rotate underneath it.
 

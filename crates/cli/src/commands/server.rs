@@ -23,7 +23,7 @@ use nanny_config;
 use crate::identity::AppIdentity;
 use crate::runtime::build_bridge_components;
 
-use super::certs::default_certs_dir;
+use super::certs::certs_dir;
 
 // The governance server is `nanny run --serve`; `nanny status` and `nanny stop`
 // manage it. This module holds those three entry points (`cmd_server_start`,
@@ -77,15 +77,30 @@ fn resolve_app_id(explicit: Option<String>) -> Result<String> {
 /// use-case Nanny needs to support.
 const RATE_LIMIT_RPS: u32 = 100;
 
+/// Where the governor's TLS material comes from: explicit paths when given,
+/// otherwise this app's bundle for the selected environment.
+pub struct TlsSource {
+    pub cert: Option<PathBuf>,
+    pub key: Option<PathBuf>,
+    pub ca: Option<PathBuf>,
+    /// Use the live bundle rather than the sandbox one. Ignored when all three
+    /// paths above are given, since nothing is then resolved.
+    pub live: bool,
+}
+
 pub fn cmd_server_start(
     addr: SocketAddr,
-    cert: Option<PathBuf>,
-    key: Option<PathBuf>,
-    ca: Option<PathBuf>,
+    tls: TlsSource,
     no_sync: bool,
     env: crate::cloud::CloudEnv,
     extra_args: Vec<String>,
 ) -> Result<()> {
+    let TlsSource {
+        cert,
+        key,
+        ca,
+        live,
+    } = tls;
     let cwd = std::env::current_dir().context("cannot determine current directory")?;
 
     // Load nanny.toml from CWD.
@@ -110,11 +125,15 @@ pub fn cmd_server_start(
     // Build BridgeComponents from config (no CLI ceiling: server uses config values).
     let components = build_bridge_components(&config);
 
-    // Resolve cert paths: use CLI args, else fall back to ~/.nanny/certs/.
-    let certs_dir = default_certs_dir();
-    let cert_path = cert.unwrap_or_else(|| certs_dir.join("server.crt"));
-    let key_path = key.unwrap_or_else(|| certs_dir.join("server.key"));
-    let ca_path = ca.unwrap_or_else(|| certs_dir.join("ca.crt"));
+    // Explicit paths win. Otherwise the bundle this app generated for the
+    // selected environment, which is why --live exists here as well as on
+    // `nanny certs`: the governor has to look in the directory that command
+    // wrote to, or a deployment generates a live bundle and the server reports
+    // the sandbox one missing.
+    let bundle = certs_dir(live)?;
+    let cert_path = cert.unwrap_or_else(|| bundle.join("server.crt"));
+    let key_path = key.unwrap_or_else(|| bundle.join("server.key"));
+    let ca_path = ca.unwrap_or_else(|| bundle.join("ca.crt"));
 
     // Cert files are required only for non-loopback addresses (mTLS mandatory).
     // Loopback binds use plain HTTP: OS-enforced, no TLS overhead.

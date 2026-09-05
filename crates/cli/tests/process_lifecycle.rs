@@ -68,10 +68,6 @@ log = "file"
     fs::write(dir.join("nanny.toml"), toml).unwrap();
 }
 
-fn config_arg(dir: &Path) -> String {
-    dir.join("nanny.toml").to_string_lossy().into_owned()
-}
-
 /// Write `.nanny/app.json` directly (bypassing `nanny init`, which also wants
 /// to write nanny.toml, tests that need an app id but already have their own
 /// nanny.toml call this instead). Returns the id.
@@ -151,7 +147,8 @@ fn fast_exit_completes_cleanly() {
     write_config(&dir, "echo hello");
 
     let output = Command::new(nanny_bin())
-        .args(["--config", &config_arg(&dir), "run"])
+        .current_dir(&dir)
+        .args(["run"])
         .output()
         .expect("failed to run nanny");
 
@@ -192,7 +189,8 @@ fn execution_stopped_is_always_last_line() {
     write_config(&dir, "echo nanny-test");
 
     let output = Command::new(nanny_bin())
-        .args(["--config", &config_arg(&dir), "run"])
+        .current_dir(&dir)
+        .args(["run"])
         .output()
         .expect("failed to run nanny");
 
@@ -236,7 +234,8 @@ fn execution_stopped_has_accounting_fields() {
     write_config(&dir, "echo nanny-accounting-test");
 
     let output = Command::new(nanny_bin())
-        .args(["--config", &config_arg(&dir), "run"])
+        .current_dir(&dir)
+        .args(["run"])
         .output()
         .expect("failed to run nanny");
 
@@ -273,7 +272,8 @@ fn process_crash_emits_process_crashed_stop_reason() {
     write_config(&dir, "false");
 
     let output = Command::new(nanny_bin())
-        .args(["--config", &config_arg(&dir), "run"])
+        .current_dir(&dir)
+        .args(["run"])
         .output()
         .expect("failed to run nanny");
 
@@ -310,7 +310,8 @@ log = "stdout"
     .unwrap();
 
     let output = Command::new(nanny_bin())
-        .args(["--config", &config_arg(&dir), "run"])
+        .current_dir(&dir)
+        .args(["run"])
         .output()
         .expect("failed to run nanny");
 
@@ -490,8 +491,6 @@ log = "stdout"
         .current_dir(&dir)
         .env("NANNY_HOME", &home)
         .args([
-            "--config",
-            &config_arg(&dir),
             "run",
             &format!("--join={app_id}"),
         ])
@@ -576,8 +575,6 @@ cmd = "echo joined-work"
         .current_dir(&client_dir)
         .env("NANNY_HOME", &home)
         .args([
-            "--config",
-            &config_arg(&client_dir),
             "run",
             &format!("--join={governor_id}"),
         ])
@@ -656,8 +653,6 @@ log = "stdout"
         .current_dir(&dir)
         .env("NANNY_HOME", &home)
         .args([
-            "--config",
-            &config_arg(&dir),
             "run",
             &format!("--join={app_id}"),
         ])
@@ -755,8 +750,6 @@ cmd = "echo JOINED-WHILE-SERVING"
         .current_dir(&client_dir)
         .env("NANNY_HOME", &home)
         .args([
-            "--config",
-            &config_arg(&client_dir),
             "run",
             &format!("--join={governor_id}"),
         ])
@@ -854,7 +847,8 @@ fn two_runs_sharing_one_log_stay_attributable() {
 
     for _ in 0..2 {
         let status = Command::new(nanny_bin())
-            .args(["run", "--config", &config_arg(&dir)])
+            .current_dir(&dir)
+            .args(["run"])
             .current_dir(&dir)
             .status()
             .expect("nanny run must execute");
@@ -915,7 +909,8 @@ fn a_run_without_a_stop_event_is_still_attributable() {
     write_config_logging_to_file(&dir, "echo hello");
 
     let status = Command::new(nanny_bin())
-        .args(["run", "--config", &config_arg(&dir)])
+        .current_dir(&dir)
+            .args(["run"])
         .current_dir(&dir)
         .status()
         .expect("nanny run must execute");
@@ -947,7 +942,8 @@ fn execution_started_carries_a_stable_config_hash() {
 
     for _ in 0..2 {
         Command::new(nanny_bin())
-            .args(["run", "--config", &config_arg(&dir)])
+            .current_dir(&dir)
+            .args(["run"])
             .current_dir(&dir)
             .status()
             .expect("nanny run must execute");
@@ -982,7 +978,8 @@ fn execution_started_carries_the_runtime_version() {
     write_config_logging_to_file(&dir, "echo hello");
 
     Command::new(nanny_bin())
-        .args(["run", "--config", &config_arg(&dir)])
+        .current_dir(&dir)
+            .args(["run"])
         .current_dir(&dir)
         .status()
         .expect("nanny run must execute");
@@ -1032,7 +1029,8 @@ log = "stdout"
     .unwrap();
 
     let out = Command::new(nanny_bin())
-        .args(["run", "--config", &config_arg(&dir)])
+        .current_dir(&dir)
+            .args(["run"])
         .current_dir(&dir)
         .output()
         .expect("nanny run must execute");
@@ -1067,7 +1065,8 @@ log = "stdout"
     .unwrap();
 
     let out = Command::new(nanny_bin())
-        .args(["run", "--config", &config_arg(&dir)])
+        .current_dir(&dir)
+            .args(["run"])
         .current_dir(&dir)
         .output()
         .expect("nanny run must execute");
@@ -1107,7 +1106,8 @@ log = "stdout"
     .unwrap();
 
     let out = Command::new(nanny_bin())
-        .args(["run", "--config", &config_arg(&dir)])
+        .current_dir(&dir)
+            .args(["run"])
         .current_dir(&dir)
         .output()
         .expect("nanny run must execute");
@@ -1183,7 +1183,8 @@ fn rules_add_vendors_the_pack_and_declares_it() {
 
     // The run now starts, because the declared pack is present.
     let run = Command::new(nanny_bin())
-        .args(["run", "--config", &config_arg(&dir)])
+        .current_dir(&dir)
+            .args(["run"])
         .current_dir(&dir)
         .output()
         .unwrap();

@@ -48,7 +48,22 @@ RUN uv sync --locked        # or pip install -r requirements.txt, npm ci, …
   you had. `npm ci` and `pip install -r` already fail this way by default.
 </Warning>
 
-## 3. Set one secret
+## 3. Put the runtime in the image
+
+Pin it. The installer at `install.nanny.run` fetches the **latest** release,
+which is right on a laptop and wrong in an image: rebuild in three months and
+you silently ship a different runtime.
+
+```dockerfile
+ARG NANNY_VERSION=0.6.3
+RUN curl -fsSL "https://github.com/nanny-run/nanny/releases/download/v${NANNY_VERSION}/nanny-linux-x86_64.tar.gz" | tar -xz -C /usr/local/bin nanny
+```
+
+Keep that version and your SDK floor in step. A lock file that installs an
+older SDK than the runtime expects fails at the first governed call, not at
+build time.
+
+## 4. Set one secret
 
 ```bash
 NANNY_API_KEY=nny_...
@@ -75,17 +90,23 @@ depends on the cloud.
 Set it on the governor only. Joined processes report through the governor, and
 a second key would split the audit trail and count the same run twice.
 
-## 4. If anything joins from elsewhere, do this before you deploy
+## 5. If anything joins from elsewhere, do this before you deploy
 
-Skip to step 6 for a single container.
+Skip to step 7 for a single container.
 
-Generate the bundle **on your machine, never in a container**, and mint the
-token at the same time:
+Generate the bundle **on your machine, never in a container**, from inside the
+project, and mint the token at the same time:
 
 ```bash
-nanny certs generate --san governor --days 3650
+nanny certs generate --live --san governor --days 3650
 openssl rand -hex 32
 ```
+
+`--live` picks which certificate authority you are issuing from. Omit it and
+you get the sandbox one. **Never point a production governor at a sandbox CA:**
+a CA is what the governor trusts, so a client certificate issued for staging
+would be admitted to production, and the governor could not tell, because the
+signature is genuinely valid. Two environments, two authorities.
 
 `--san` must cover the name the joiner dials. The client verifies the name it
 dialled against that list, and a mismatch fails the handshake before any
@@ -108,7 +129,7 @@ only a way for them to disagree. See
 [Rotating the token](/v0.6/guides/governance-server#rotating-the-token) for
 moving a fleet onto a new one without stopping it.
 
-## 5. One image, both shapes
+## 6. One image, both shapes
 
 A `CMD` with certificate paths baked into it only runs *with* certificates, so
 a single-container deploy needs a second image. Deciding at boot from whether
@@ -150,7 +171,7 @@ itself. Adding the certificates is what opens it to the joiners.
   ends in `exec nanny` is exactly as correct as a plain `CMD`.
 </Note>
 
-## 6. Read the first boot
+## 7. Read the first boot
 
 ```
 nanny: mode managed, syncing to https://api.nanny.run (app: your-app)
@@ -184,7 +205,7 @@ its first connection for 30 seconds rather than failing the work it was handed.
 Once it has connected, a later failure stops the run immediately: waiting for a
 first connection is patience, waiting mid-run is running ungoverned.
 
-## 7. When it does not come up
+## 8. When it does not come up
 
 | What you see | What it is |
 | --- | --- |
@@ -195,7 +216,7 @@ first connection is patience, waiting mid-run is running ungoverned.
 | `state directory not writable` | Not a failure. The governor records its address, pid and token so processes *on the same machine* can find it with `--join`, `status` and `stop`. It says so once and serves anyway, so a read-only root filesystem runs a governor perfectly well. A process joining from another machine is given the address and token as configuration and never reads them. |
 | The governor exits when your app does | By design. The governor's job is that process; there is nothing to govern once it is gone. |
 
-## 8. After it is up
+## 9. After it is up
 
 `/health` is served without the session token and reports whether the run is up
 and nothing else, so an orchestrator can probe it:
