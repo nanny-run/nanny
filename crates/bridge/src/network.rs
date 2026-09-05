@@ -693,6 +693,8 @@ impl NetworkServer {
             None,
             state_dir,
             None,
+            // No sink and no log, so nothing drains and the flag is never read.
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
         )
     }
 
@@ -721,6 +723,12 @@ impl NetworkServer {
         event_sink: Option<Sender<(String, Vec<String>)>>,
         state_dir: PathBuf, // ~/.nanny/servers/<app_id>/, keyed, per-app, never shared
         local_log: Option<Box<dyn std::io::Write + Send>>,
+        // Raised by the caller when the app it governs has exited. The drain
+        // thread makes one final sweep and returns, dropping its sender, which
+        // is what lets the cloud forwarder finish and be joined. Without it the
+        // process exits between 250ms ticks and the last batch, the one holding
+        // ExecutionStopped and the stop reason, is never drained at all.
+        drain_shutdown: Arc<std::sync::atomic::AtomicBool>,
     ) -> Result<()> {
         // Install ring crypto provider: safe to call multiple times.
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -789,7 +797,12 @@ impl NetworkServer {
             let drain_runs = Arc::clone(&runs);
             let mut local_log_file = local_log;
             std::thread::spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_millis(250));
+                // Checked after the sweep, not before, so a shutdown raised
+                // during the sleep still gets its final pass.
+                let stopping = drain_shutdown.load(std::sync::atomic::Ordering::SeqCst);
+                if !stopping {
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                }
                 let ids: Vec<String> = {
                     let guard = drain_runs.lock().unwrap();
                     guard.keys().cloned().collect()
@@ -813,6 +826,12 @@ impl NetworkServer {
                             }
                         }
                     }
+                }
+                if stopping {
+                    // The sweep above was the last one. Returning drops
+                    // `event_sink`, closing the channel the forwarder is
+                    // draining, which is how `flush_and_join` knows to finish.
+                    return;
                 }
             });
         }

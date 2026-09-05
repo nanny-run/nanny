@@ -247,9 +247,14 @@ pub fn cmd_server_start(
         },
     };
 
+    // Raised once the governed app has exited, so the drain thread makes a
+    // final sweep instead of the process dying between its 250ms ticks.
+    let drain_shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    let mut forwarder = None;
     let event_sink = target.ok().map(|target| {
         let (tx, rx) = std::sync::mpsc::channel();
-        crate::sync::ServerForwarder::spawn(
+        forwarder = Some(crate::sync::ServerForwarder::spawn(
             rx,
             target.endpoint,
             target.api_key,
@@ -262,7 +267,7 @@ pub fn cmd_server_start(
                 .expect("resolve_session_token never yields an empty set"),
             &cwd,
             local_log_path.clone(),
-        );
+        ));
         tx
     });
 
@@ -335,6 +340,7 @@ pub fn cmd_server_start(
                 event_sink,
                 state_dir_for_server,
                 local_log_sink,
+                std::sync::Arc::clone(&drain_shutdown),
             )?;
             Ok(())
         }
@@ -351,7 +357,9 @@ pub fn cmd_server_start(
                 event_sink,
                 state_dir: state_dir_for_server,
                 local_log_sink,
+                drain_shutdown: std::sync::Arc::clone(&drain_shutdown),
             },
+            forwarder.take(),
             command,
             &app.app_id,
         ),
@@ -427,6 +435,7 @@ struct GovernorSetup {
     event_sink: Option<std::sync::mpsc::Sender<(String, Vec<String>)>>,
     state_dir: PathBuf,
     local_log_sink: Option<Box<dyn std::io::Write + Send>>,
+    drain_shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Run the governance server and, underneath it, the app from `[start]`.
@@ -441,11 +450,18 @@ struct GovernorSetup {
 /// governor gets its full graceful drain; it owns the child, so the child is
 /// reaped rather than orphaned; and if either side dies the other is torn
 /// down instead of left running half-governed.
-fn run_governor_with_app(setup: GovernorSetup, command: Vec<String>, app_id: &str) -> Result<()> {
+fn run_governor_with_app(
+    setup: GovernorSetup,
+    forwarder: Option<crate::sync::ServerForwarder>,
+    command: Vec<String>,
+    app_id: &str,
+) -> Result<()> {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
 
     let state_dir = setup.state_dir.clone();
+    // Captured before `setup` is moved into the governor thread below.
+    let drain_shutdown = std::sync::Arc::clone(&setup.drain_shutdown);
 
     // ── User-interrupt handling (Ctrl-C / SIGTERM) ───────────────────────────
     //
@@ -507,6 +523,7 @@ fn run_governor_with_app(setup: GovernorSetup, command: Vec<String>, app_id: &st
                 setup.event_sink,
                 setup.state_dir,
                 setup.local_log_sink,
+                std::sync::Arc::clone(&setup.drain_shutdown),
             );
             if let Err(e) = outcome {
                 *result_slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(e);
@@ -581,6 +598,24 @@ fn run_governor_with_app(setup: GovernorSetup, command: Vec<String>, app_id: &st
     // discovery files first so `nanny status`/`--join` never point at a
     // governor that is on its way out.
     remove_discovery_files(&state_dir);
+
+    // Then get the events out, before anything below can exit the process.
+    //
+    // The drain thread runs on a 250ms tick and the cloud forwarder is fed by
+    // it, so simply returning here loses whatever the app wrote in its last
+    // fraction of a second: `ExecutionStopped` and the stop reason, which are
+    // written last and matter most. Raising the flag makes the drain thread
+    // sweep once more and return, which drops its sender, which ends the
+    // forwarder's loop, which is what `flush_and_join` waits for.
+    //
+    // Bounded by the forwarder's own 10s request timeout, and anything it
+    // still cannot deliver is already in the spool for the next run to
+    // backfill. So this is deliver-or-persist, never deliver-or-lose.
+    drain_shutdown.store(true, Ordering::SeqCst);
+    if let Some(forwarder) = forwarder {
+        forwarder.flush_and_join();
+    }
+
     drop(governor);
 
     if !status.success() {

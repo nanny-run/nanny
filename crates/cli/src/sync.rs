@@ -605,11 +605,23 @@ impl CloudSync {
 /// per run. Each batch's `X-Nanny-Session` is `{server_secret}:{run_id}`: a
 /// per-run value that folds in the server's secret token, so the cloud groups
 /// events per run with an unguessable, cross-org-collision-proof session (the API
-/// key is still the real auth). Fire and forget, like `CloudSync`.
-pub struct ServerForwarder;
+/// key is still the real auth).
+///
+/// Returns a handle rather than being forgotten, because a governor exits: it
+/// shuts down with the app it launched, which in development is seconds. The
+/// drain that feeds this runs on a 250ms tick, so without a flush the final
+/// batch never leaves, and the final batch is the one holding `ExecutionStopped`
+/// and the stop reason. Delivery is still best effort, but a failure now lands
+/// in the spool and is backfilled by the next run rather than disappearing.
+pub struct ServerForwarder {
+    handle: std::thread::JoinHandle<()>,
+}
 
 impl ServerForwarder {
     /// Spawn a background forwarder draining `(run_id, lines)` from the engine.
+    ///
+    /// The caller keeps the `Sender`; dropping it closes the channel, which is
+    /// what tells this thread to finish and exit. See `flush_and_join`.
     pub fn spawn(
         rx: Receiver<(String, Vec<String>)>,
         endpoint: String,
@@ -617,10 +629,10 @@ impl ServerForwarder {
         server_secret: String,
         base_dir: &Path,
         log_path: Option<PathBuf>,
-    ) {
+    ) -> Self {
         Spool::warn_about_the_other_environment(base_dir, Environment::from_api_key(&api_key));
         let spool = Spool::new(base_dir, &api_key).logging_to(log_path);
-        std::thread::spawn(move || {
+        let handle = std::thread::spawn(move || {
             let Ok(client) = reqwest::blocking::Client::builder()
                 .connect_timeout(Duration::from_secs(3))
                 .timeout(Duration::from_secs(10))
@@ -668,6 +680,18 @@ impl ServerForwarder {
                 }
             }
         });
+        Self { handle }
+    }
+
+    /// Wait for the forwarder to deliver what it has, then stop.
+    ///
+    /// The caller drops its `Sender` first; that closes the channel, the loop
+    /// above falls out of `rx.recv()`, and this waits for the thread to finish
+    /// the batch it is on. Bounded by the client's 10s request timeout, so an
+    /// unreachable cloud delays a shutdown rather than hanging it, and anything
+    /// still undelivered has already been spooled for the next run.
+    pub fn flush_and_join(self) {
+        let _ = self.handle.join();
     }
 }
 
@@ -1453,4 +1477,77 @@ mod tests {
             "the per-run session must fold in the server secret:\n{req}"
         );
     }
+
+    #[test]
+    fn flush_and_join_waits_for_the_last_batch_to_be_delivered() {
+        // The governor exits when the app it launched exits, so anything still
+        // in flight dies with the process. The last batch is the one carrying
+        // ExecutionStopped and the stop reason.
+        //
+        // Asserting only that the batch arrives proves nothing: a detached
+        // forwarder still delivers it, because a test process does not exit.
+        // The property that actually saves those events is that shutdown
+        // *waits*, so this measures that it blocked.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (seen_tx, seen) = mpsc::channel();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut tmp = [0u8; 4096];
+                let n = stream.read(&mut tmp).unwrap_or(0);
+                // Answer slowly, so a shutdown that does not wait is visibly
+                // faster than one that does.
+                std::thread::sleep(Duration::from_millis(600));
+                let _ = stream.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+                let _ = seen_tx.send(String::from_utf8_lossy(&tmp[..n]).to_string());
+            }
+        });
+
+        let dir = std::env::temp_dir().join(format!("nanny-flush-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let (tx, rx) = mpsc::channel();
+        let forwarder = ServerForwarder::spawn(
+            rx,
+            format!("http://127.0.0.1:{port}/v1/ingest"),
+            "nny_sdbx_test".to_string(),
+            "server-secret".to_string(),
+            &dir,
+            None,
+        );
+        tx.send((
+            "run-last".to_string(),
+            vec![r#"{"event":"ExecutionStopped"}"#.to_string()],
+        ))
+        .unwrap();
+
+        // Exactly what governor shutdown does: close the channel, then wait.
+        let started = std::time::Instant::now();
+        drop(tx);
+        forwarder.flush_and_join();
+        let waited = started.elapsed();
+
+        assert!(
+            waited >= Duration::from_millis(400),
+            "shutdown must wait for the in-flight batch, not detach from it; \
+             returned after {waited:?}"
+        );
+
+        let body = seen
+            .recv_timeout(INGEST_WAIT)
+            .expect("the final batch must have been delivered");
+        assert!(
+            body.contains("ExecutionStopped"),
+            "the last event must be in the delivered body: {body}"
+        );
+        assert!(
+            body.contains("server-secret:run-last"),
+            "and it must carry {{server_secret}}:{{run_id}}, so the cloud can group it: {body}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
 }
