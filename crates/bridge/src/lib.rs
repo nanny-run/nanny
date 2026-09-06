@@ -98,6 +98,19 @@ pub struct BridgeComponents {
     /// Carried into every `PolicyContext` so rules can reason about what a
     /// tool is rather than what it is called.
     pub tool_labels: HashMap<String, Vec<String>>,
+
+    /// The two scalars `ExecutionStarted` needs that the bridge cannot derive:
+    /// the config fingerprint and the runtime version. Seeded into every run so
+    /// a governed execution opens with the authority it was granted, the same
+    /// way a local one always has.
+    pub config_hash: String,
+    pub runtime_version: String,
+
+    /// `[start].cmd`, when this governor launches an app of its own. `None` for
+    /// a headless governor, and for a run that arrived over `--join` the
+    /// governor genuinely does not know what the joiner is running, so the
+    /// field is empty rather than guessed at.
+    pub start_command: Option<String>,
 }
 
 // ── Internal state ────────────────────────────────────────────────────────────
@@ -189,7 +202,7 @@ impl Bridge {
             session_token: token.clone(),
             execution: ExecutionState::Running,
             run_id,
-            next_seq: 1,
+            next_seq: 0,
             tool_permission_policy,
             rule_evaluator,
             agent_name_stack: Vec::new(),
@@ -1395,6 +1408,27 @@ pub(crate) struct RunTemplate {
     allowed_tools: Vec<String>,
     per_tool_max_calls: HashMap<String, u32>,
     tool_labels: HashMap<String, Vec<String>>,
+    config_hash: String,
+    runtime_version: String,
+    start_command: Option<String>,
+}
+
+/// Build a `RunTemplate` directly, for tests that need to inspect what a fresh
+/// run is seeded with without standing up a whole governor.
+#[cfg(test)]
+pub(crate) fn run_template_for_test(
+    components: BridgeComponents,
+    session_token: String,
+) -> RunTemplate {
+    RunTemplate {
+        session_token,
+        allowed_tools: components.allowed_tools,
+        per_tool_max_calls: components.per_tool_max_calls,
+        tool_labels: components.tool_labels,
+        config_hash: components.config_hash,
+        runtime_version: components.runtime_version,
+        start_command: components.start_command,
+    }
 }
 
 impl RunTemplate {
@@ -1410,7 +1444,8 @@ impl RunTemplate {
             session_token: self.session_token.clone(),
             execution: ExecutionState::Running,
             run_id: run_id.to_string(),
-            next_seq: 0,
+            // 1, not 0: the seeded `ExecutionStarted` above is seq 0.
+            next_seq: 1,
             tool_permission_policy,
             rule_evaluator,
             agent_name_stack: Vec::new(),
@@ -1420,7 +1455,25 @@ impl RunTemplate {
             tool_call_counts: HashMap::new(),
             tool_call_history: Vec::new(),
             start_time: std::time::Instant::now(),
-            events: Vec::new(),
+            // Seeded, not left empty. Every run opens with `ExecutionStarted`
+            // as seq 0, which is where the config half of declared authority
+            // lives: the allowlist, the tool labels, the config fingerprint and
+            // the runtime version. A governed run used to emit none, so an
+            // execution reached the cloud with a null config hash and no record
+            // of what it had been authorised to do.
+            events: vec![serde_json::to_string(&LoggedEvent::new(
+                run_id.to_string(),
+                0,
+                ExecutionEvent::ExecutionStarted {
+                    ts: now_ms(),
+                    command: self.start_command.clone().unwrap_or_default(),
+                    allowed_tools: self.allowed_tools.clone(),
+                    tool_labels: self.tool_labels.clone().into_iter().collect(),
+                    config_hash: self.config_hash.clone(),
+                    runtime_version: self.runtime_version.clone(),
+                },
+            ))
+            .expect("ExecutionStarted always serialises")],
             last_harness: None,
             last_rules: None,
             last_app: None,
@@ -1437,6 +1490,9 @@ pub(crate) fn init_run_template(
     token: String,
 ) -> (RunTemplate, Arc<ToolRegistry>) {
     let template = RunTemplate {
+        config_hash: components.config_hash.clone(),
+        runtime_version: components.runtime_version.clone(),
+        start_command: components.start_command.clone(),
         session_token: token,
         allowed_tools: components.allowed_tools,
         per_tool_max_calls: components.per_tool_max_calls,
@@ -1485,6 +1541,9 @@ mod tests {
             allowed_tools: vec!["echo".to_string()],
             per_tool_max_calls: Default::default(),
             tool_labels: Default::default(),
+            config_hash: "test-config".to_string(),
+            runtime_version: "0.0.0-test".to_string(),
+            start_command: None,
         }
     }
 
@@ -1503,6 +1562,9 @@ mod tests {
             allowed_tools,
             per_tool_max_calls: Default::default(),
             tool_labels: Default::default(),
+            config_hash: "test-config".to_string(),
+            runtime_version: "0.0.0-test".to_string(),
+            start_command: None,
         };
         let b = Bridge::start(components, "test-run".to_string()).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
@@ -1766,7 +1828,10 @@ mod tests {
                 allowed_tools: vec![], // empty allowlist, all tools denied
                 per_tool_max_calls: Default::default(),
                 tool_labels: Default::default(),
-            },
+            config_hash: "test-config".to_string(),
+            runtime_version: "0.0.0-test".to_string(),
+            start_command: None,
+        },
             "test-run".to_string(),
         )
         .unwrap();
@@ -1788,7 +1853,10 @@ mod tests {
                 allowed_tools: vec![],
                 per_tool_max_calls: Default::default(),
                 tool_labels: Default::default(),
-            },
+            config_hash: "test-config".to_string(),
+            runtime_version: "0.0.0-test".to_string(),
+            start_command: None,
+        },
             "test-run".to_string(),
         )
         .unwrap();
@@ -1865,7 +1933,10 @@ mod tests {
                 allowed_tools: vec!["echo".to_string()],
                 per_tool_max_calls,
                 tool_labels: Default::default(),
-            },
+            config_hash: "test-config".to_string(),
+            runtime_version: "0.0.0-test".to_string(),
+            start_command: None,
+        },
             "test-run".to_string(),
         )
         .unwrap();
@@ -1904,7 +1975,10 @@ mod tests {
                 allowed_tools: vec!["echo".to_string()],
                 per_tool_max_calls,
                 tool_labels: Default::default(),
-            },
+            config_hash: "test-config".to_string(),
+            runtime_version: "0.0.0-test".to_string(),
+            start_command: None,
+        },
             "test-run".to_string(),
         )
         .unwrap();
@@ -1929,7 +2003,10 @@ mod tests {
                 allowed_tools: vec!["echo".to_string()],
                 per_tool_max_calls,
                 tool_labels: Default::default(),
-            },
+            config_hash: "test-config".to_string(),
+            runtime_version: "0.0.0-test".to_string(),
+            start_command: None,
+        },
             "test-run".to_string(),
         )
         .unwrap();
@@ -2062,7 +2139,10 @@ mod tests {
                 allowed_tools: vec!["echo".to_string(), "quiet".to_string()],
                 per_tool_max_calls: Default::default(),
                 tool_labels,
-            },
+            config_hash: "test-config".to_string(),
+            runtime_version: "0.0.0-test".to_string(),
+            start_command: None,
+        },
             "test-run".to_string(),
         )
         .unwrap();
@@ -2513,7 +2593,10 @@ mod tests {
                 allowed_tools: vec!["fail".to_string()],
                 per_tool_max_calls: Default::default(),
                 tool_labels: Default::default(),
-            },
+            config_hash: "test-config".to_string(),
+            runtime_version: "0.0.0-test".to_string(),
+            start_command: None,
+        },
             "test-run".to_string(),
         )
         .unwrap();
@@ -2815,6 +2898,9 @@ mod tests {
             allowed_tools: vec!["echo".into()],
             per_tool_max_calls: HashMap::new(),
             tool_labels: HashMap::new(),
+            config_hash: "test-config".to_string(),
+            runtime_version: "0.0.0-test".to_string(),
+            start_command: None,
         };
         init_run_template(components, "tok".into()).0
     }
@@ -2842,7 +2928,10 @@ mod tests {
                     .unwrap()
             })
             .collect();
-        assert_eq!(seqs, vec![0, 1, 2]);
+        // 0 is the `ExecutionStarted` every run is seeded with; the three
+        // appended events follow it. The property is the monotonicity, not
+        // where it starts.
+        assert_eq!(seqs, vec![0, 1, 2, 3]);
     }
 
     #[test]
@@ -2900,8 +2989,18 @@ mod tests {
                 .collect()
         };
 
-        assert_eq!(read(&a), vec![("run-a".into(), 0), ("run-a".into(), 1)]);
-        assert_eq!(read(&b), vec![("run-b".into(), 0)]);
+        // Seq 0 of each run is the `ExecutionStarted` a run is seeded with, so
+        // appended events start at 1. The property under test is unchanged:
+        // the counters are per run and never shared.
+        assert_eq!(
+            read(&a),
+            vec![
+                ("run-a".into(), 0),
+                ("run-a".into(), 1),
+                ("run-a".into(), 2)
+            ]
+        );
+        assert_eq!(read(&b), vec![("run-b".into(), 0), ("run-b".into(), 1)]);
     }
 
     // ── cleared_by ────────────────────────────────────────────────────────────
@@ -2915,7 +3014,10 @@ mod tests {
                 allowed_tools: vec![tool.to_string()],
                 per_tool_max_calls: [(tool.to_string(), max)].into_iter().collect(),
                 tool_labels: HashMap::new(),
-            },
+            config_hash: "test-config".to_string(),
+            runtime_version: "0.0.0-test".to_string(),
+            start_command: None,
+        },
             "test-run".to_string(),
         )
         .unwrap()

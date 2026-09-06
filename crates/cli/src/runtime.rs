@@ -71,6 +71,12 @@ pub fn build_bridge_components(config: &NannyConfig) -> BridgeComponents {
         allowed_tools: config.tools.allowed.clone(),
         per_tool_max_calls,
         tool_labels,
+        config_hash: config.fingerprint(),
+        runtime_version: env!("CARGO_PKG_VERSION").to_string(),
+        // Filled in by the caller that knows whether this governor launches an
+        // app of its own. A headless one, and any run arriving over `--join`,
+        // leaves it empty rather than claiming a command it did not start.
+        start_command: None,
     }
 }
 

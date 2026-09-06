@@ -123,7 +123,11 @@ pub fn cmd_server_start(
     // Proxy mode is opt-in.
 
     // Build BridgeComponents from config (no CLI ceiling: server uses config values).
-    let components = build_bridge_components(&config);
+    let mut components = build_bridge_components(&config);
+    // The governor knows its own `[start]`, so a run it launches opens with the
+    // command in its `ExecutionStarted`. A joiner's command it does not know,
+    // and leaves empty rather than attributing its own.
+    components.start_command = config.start.as_ref().map(|s| s.cmd.clone());
 
     // Explicit paths win. Otherwise the bundle this app generated for the
     // selected environment, which is why --live exists here as well as on

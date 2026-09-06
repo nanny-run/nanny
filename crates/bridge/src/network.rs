@@ -1257,6 +1257,9 @@ mod tests {
             allowed_tools: vec!["echo".to_string()],
             per_tool_max_calls: HashMap::new(),
             tool_labels: Default::default(),
+            config_hash: "test-config".to_string(),
+            runtime_version: "0.0.0-test".to_string(),
+            start_command: None,
         }
     }
 
@@ -2033,6 +2036,9 @@ mod tests {
             allowed_tools: vec!["http_get".to_string()],
             per_tool_max_calls: HashMap::new(),
             tool_labels: Default::default(),
+            config_hash: "test-config".to_string(),
+            runtime_version: "0.0.0-test".to_string(),
+            start_command: None,
         }
     }
 
@@ -2043,6 +2049,9 @@ mod tests {
             allowed_tools: vec!["http_get".to_string()],
             per_tool_max_calls: HashMap::new(),
             tool_labels: Default::default(),
+            config_hash: "test-config".to_string(),
+            runtime_version: "0.0.0-test".to_string(),
+            start_command: None,
         }
     }
 
@@ -3155,5 +3164,42 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn every_governed_run_opens_with_execution_started() {
+        // A governed run used to emit none at all: runs are created lazily on
+        // first request, and nothing seeded them. So an execution reached the
+        // cloud with a null config hash and no record of the authority it had
+        // been granted, while a local run had carried both since 0.1.
+        let components = BridgeComponents {
+            registry: nanny_runtime::default_registry(),
+            allowed_tools: vec!["http_get".to_string()],
+            per_tool_max_calls: HashMap::new(),
+            tool_labels: [("http_get".to_string(), vec!["reads_untrusted".to_string()])]
+                .into_iter()
+                .collect(),
+            config_hash: "cafebabe".to_string(),
+            runtime_version: "9.9.9".to_string(),
+            start_command: Some("python agent.py".to_string()),
+        };
+        let template = crate::run_template_for_test(components, "tok".to_string());
+        let state = template.build_state("run-abc");
+
+        let events = { state.lock().unwrap().events.clone() };
+        let first: serde_json::Value =
+            serde_json::from_str(events.first().expect("a run opens with an event")).unwrap();
+
+        assert_eq!(first["event"], "ExecutionStarted");
+        assert_eq!(first["seq"], 0, "it is seq 0, so the log is one sequence");
+        assert_eq!(first["run_id"], "run-abc");
+        assert_eq!(first["config_hash"], "cafebabe");
+        assert_eq!(first["runtime_version"], "9.9.9");
+        assert_eq!(first["command"], "python agent.py");
+        assert_eq!(first["allowed_tools"][0], "http_get");
+        assert_eq!(
+            first["tool_labels"]["http_get"][0], "reads_untrusted",
+            "the labels are the half a rule reasons about"
+        );
     }
 }
