@@ -686,14 +686,12 @@ fn run_governor_with_app(
     // still cannot deliver is already in the spool for the next run to
     // backfill. So this is deliver-or-persist, never deliver-or-lose.
     // Named before the flag is raised, so the final sweep finds it.
-    *stop_reason.lock().unwrap_or_else(|e| e.into_inner()) = Some(
-        if status.success() {
-            "AgentCompleted"
-        } else {
-            "ProcessCrashed"
-        }
-        .to_string(),
-    );
+    let reason = if status.success() {
+        "AgentCompleted"
+    } else {
+        "ProcessCrashed"
+    };
+    *stop_reason.lock().unwrap_or_else(|e| e.into_inner()) = Some(reason.to_string());
     drain_shutdown.store(true, Ordering::SeqCst);
 
     // Wait for that sweep to actually happen. Raising the flag and returning
@@ -719,6 +717,13 @@ fn run_governor_with_app(
     }
 
     drop(governor);
+
+    // Said once, on stderr, so a run that did not finish cleanly is visible
+    // without reading the event log back. The exit code carries it too, but a
+    // code alone does not say which of the reasons it was.
+    if reason != "AgentCompleted" {
+        eprintln!("nanny: stopped, {reason}");
+    }
 
     if !status.success() {
         std::process::exit(status.code().unwrap_or(1));
