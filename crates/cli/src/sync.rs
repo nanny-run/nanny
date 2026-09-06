@@ -789,7 +789,7 @@ mod tests {
         assert!(sync_status_line(Err(NoSyncReason::Flag), None).contains("--no-sync"));
     }
 
-    // ── CloudSync (the sender): mock ingest, injected endpoint ───────────
+    // ── The forwarder: mock ingest, injected endpoint ────────────────────
 
     /// One-shot HTTP server: captures the first request and returns 200.
     fn mock_ingest_server() -> (u16, mpsc::Receiver<String>) {
@@ -874,16 +874,50 @@ mod tests {
             .collect()
     }
 
+    /// Feed one batch through a `ServerForwarder` and wait for it to finish,
+    /// which is exactly what governor shutdown does. These tests were written
+    /// against `CloudSync`, the local path's forwarder; that path is gone, and
+    /// the behaviour they cover, batching, spooling and backfill, belongs to
+    /// the one forwarder that remains.
+    fn forward_one(
+        endpoint: String,
+        api_key: &str,
+        session: &str,
+        dir: &Path,
+        lines: &[&str],
+    ) {
+        let (tx, rx) = mpsc::channel();
+        let forwarder = ServerForwarder::spawn(
+            rx,
+            endpoint,
+            api_key.to_string(),
+            session.to_string(),
+            dir,
+            None,
+        );
+        // The forwarder composes `{server_secret}:{run_id}` for the session
+        // header, so the run id is part of what gets stored and asserted.
+        tx.send((
+            "r1".to_string(),
+            lines.iter().map(|l| l.to_string()).collect(),
+        ))
+        .unwrap();
+        drop(tx);
+        forwarder.flush_and_join();
+    }
+
     #[test]
     fn forwards_batched_ndjson_with_headers() {
         let (port, rx) = mock_ingest_server();
         let dir = temp_app_dir();
         let endpoint = format!("http://127.0.0.1:{port}/v1/ingest");
-        let sender = CloudSync::start(endpoint, "nny_test".to_string(), "session-abc", &dir, None)
-            .expect("sender starts");
-        sender.enqueue(r#"{"event":"ExecutionStarted"}"#.to_string());
-        sender.enqueue(r#"{"event":"ExecutionStopped"}"#.to_string());
-        sender.flush_and_join();
+        forward_one(
+            endpoint,
+            "nny_test",
+            "session-abc",
+            &dir,
+            &[r#"{"event":"ExecutionStarted"}"#, r#"{"event":"ExecutionStopped"}"#],
+        );
 
         let req = rx
             .recv_timeout(INGEST_WAIT)
@@ -908,16 +942,14 @@ mod tests {
     #[test]
     fn unreachable_endpoint_never_panics_or_hangs() {
         let dir = temp_app_dir();
-        let sender = CloudSync::start(
+        // Returns, bounded by the connect timeout plus backoff.
+        forward_one(
             "http://127.0.0.1:1/v1/ingest".to_string(),
-            "k".to_string(),
+            "k",
             "s",
             &dir,
-            None,
-        )
-        .expect("sender starts");
-        sender.enqueue(r#"{"event":"ToolAllowed"}"#.to_string());
-        sender.flush_and_join(); // returns (bounded by connect timeout + backoff)
+            &[r#"{"event":"ToolAllowed"}"#],
+        );
     }
 
     // ── Durable outbox ────────────────────────────────────────────────────────
@@ -928,16 +960,13 @@ mod tests {
         // clear()ed and the events were gone. A cloud blip cost real history
         // out of a log whose value is being complete.
         let dir = temp_app_dir();
-        let sender = CloudSync::start(
+        forward_one(
             "http://127.0.0.1:1/v1/ingest".to_string(),
-            "k".to_string(),
+            "k",
             "run-1",
             &dir,
-            None,
-        )
-        .expect("sender starts");
-        sender.enqueue(r#"{"event":"ExecutionStarted"}"#.to_string());
-        sender.flush_and_join();
+            &[r#"{"event":"ExecutionStarted"}"#],
+        );
 
         let held = spooled_files(&dir, "k");
         assert_eq!(
@@ -951,8 +980,8 @@ mod tests {
             .split_once('\n')
             .expect("session on the first line");
         assert_eq!(
-            session, "run-1",
-            "the session must be stored with the batch"
+            session, "run-1:r1",
+            "the session must be stored with the batch, secret and run id both"
         );
         assert!(
             body.contains("ExecutionStarted"),
@@ -1222,21 +1251,18 @@ mod tests {
         // Switching keys back and forth (live today, sandbox tomorrow) must
         // recover cleanly: nothing spooled under one environment is ever sent
         // by a run authenticated under the other, all the way through
-        // `CloudSync::start`, not just the lower-level `Spool::drain`.
+        // the forwarder itself, not just the lower-level `Spool::drain`.
         let dir = temp_app_dir();
         Spool::new(&dir, "nny_sdbx_x").store("held-for-sandbox", r#"{"event":"Sandbox"}"#);
 
         let (port, rx_srv) = mock_ingest_server();
-        let sender = CloudSync::start(
+        forward_one(
             format!("http://127.0.0.1:{port}/v1/ingest"),
-            "nny_live_x".to_string(),
+            "nny_live_x",
             "live-session",
             &dir,
-            None,
-        )
-        .expect("sender starts");
-        sender.enqueue(r#"{"event":"LiveOnly"}"#.to_string());
-        sender.flush_and_join();
+            &[r#"{"event":"LiveOnly"}"#],
+        );
 
         let req = rx_srv
             .recv_timeout(INGEST_WAIT)
@@ -1298,15 +1324,13 @@ mod tests {
         Spool::new(&dir, "nny_k").store("previous-run", r#"{"event":"FromEarlierRun"}"#);
 
         let (port, rx_srv) = mock_ingest_server();
-        let sender = CloudSync::start(
+        forward_one(
             format!("http://127.0.0.1:{port}/v1/ingest"),
-            "nny_k".to_string(),
+            "nny_k",
             "current-run",
             &dir,
-            None,
-        )
-        .expect("sender starts");
-        sender.flush_and_join();
+            &[],
+        );
 
         let req = rx_srv
             .recv_timeout(INGEST_WAIT)
