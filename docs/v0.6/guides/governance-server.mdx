@@ -5,7 +5,7 @@ description: Run Nanny enforcement across multiple processes and machines using 
 
 ## When to use the governance server
 
-Every governed app runs under one: `nanny run --serve` starts a governor and
+Every governed app runs under one: `nanny run` starts a governor and
 launches your `[start].cmd` underneath it. On loopback that needs no
 certificates and no network setup, so a single process on one machine is
 already the simple case, and this page is only about what changes when there
@@ -20,7 +20,7 @@ share one enforcement boundary. Common scenarios:
 
 If your agents all run inside one process, even a complex CrewAI or LangGraph
 pipeline with many agents, the governor you already have covers them and
-nothing here applies: one `nanny run --serve` governs the whole fleet.
+nothing here applies: one `nanny run` governs the whole fleet.
 
 ---
 
@@ -30,8 +30,8 @@ One command, and the address decides the rest.
 
 | Mode | Command | Transport | When to use |
 |------|---------|-----------|-------------|
-| Same machine | `nanny run --serve` | Plain HTTP on loopback, no certs needed | One process, or several on one machine |
-| Cross-machine | `nanny run --serve --addr 0.0.0.0:62669` | mTLS, mandatory, certs required | Docker, Kubernetes, remote agents |
+| Same machine | `nanny run` | Plain HTTP on loopback, no certs needed | One process, or several on one machine |
+| Cross-machine | `nanny run --addr 0.0.0.0:62669` | mTLS, mandatory, certs required | Docker, Kubernetes, remote agents |
 
 The bind address determines the security posture. The default (`127.0.0.1:62669`) is loopback, plain HTTP, no cert setup required. Binding to a non-loopback address enables network access and makes mTLS mandatory; the server refuses to start without cert files.
 
@@ -46,7 +46,7 @@ This covers the common case where all your agents run on the same machine but in
 **1. Start the server:**
 
 ```bash
-nanny run --serve
+nanny run
 ```
 
 This requires the directory to have run `nanny init` first: the server's state is keyed by that app's permanent `app_id` (from `.nanny/app.json`), so two unrelated apps' servers on the same machine never collide. The server starts on `127.0.0.1:62669` (loopback) by default, generates a session token and a separate proxy token, and writes the address and both tokens to `~/.nanny/servers/<app_id>/`. The token is printed at startup for reference. No certs needed.
@@ -85,7 +85,7 @@ committed `.nanny/app.json`.
 ```
 ca.crt      CA certificate (the trust anchor, share with all agents)
 ca.key      CA private key (keep this on the server machine only)
-server.crt  server certificate (used by nanny run --serve)
+server.crt  server certificate (used by nanny run)
 server.key  server private key (keep this on the server machine only)
 client.crt  client certificate (copy to each agent machine)
 client.key  client private key (copy to each agent machine)
@@ -100,7 +100,7 @@ nanny certs show
 ### Step 2: Start the server
 
 ```bash
-nanny run --serve --addr 0.0.0.0:62669
+nanny run --addr 0.0.0.0:62669
 ```
 
 The server reads `server.crt`, `server.key` and `ca.crt` from the same bundle
@@ -109,7 +109,7 @@ with no flags. Pass explicit paths when the certificates are mounted somewhere
 else, which is the normal case in a container:
 
 ```bash
-nanny run --serve --addr 0.0.0.0:62669 \
+nanny run --addr 0.0.0.0:62669 \
   --cert /path/to/server.crt \
   --key  /path/to/server.key \
   --ca   /path/to/ca.crt
@@ -211,7 +211,7 @@ NANNY_SESSION_TOKEN=a3f9...
 ```
 
 ```dockerfile
-CMD ["nanny", "run", "--serve", "--addr", "0.0.0.0:62669", \
+CMD ["nanny", "run", "--addr", "0.0.0.0:62669", \
      "--cert", "/run/secrets/nanny/server.crt", \
      "--key",  "/run/secrets/nanny/server.key", \
      "--ca",   "/run/secrets/nanny/ca.crt"]
@@ -269,7 +269,7 @@ The governance server is a **shared authority layer** for a team of agents worki
 
 If the thing you're wrapping with `--join` is a long-lived server of its own (a web app, a Discord bot, anything that keeps running and handles more than one request per process), read this before you deploy it.
 
-**`nanny run --join` never kills your process on a stop.** This is deliberate, and it's different from plain `nanny run`. Under plain `nanny run` (no `--serve`), the CLI actively watches your process and kills it on a denial. That's the right behavior for a one-shot batch job. Under `--join`, there is no such watcher: the CLI injects the bridge address and token, starts your process, and waits for it to exit on its own. Enforcement happens entirely inside your process, at the specific call site that is denied, as a `NannyStop` exception raised right there, not a kill signal from outside. This is what makes the governance server's core guarantee possible: **a stop ends one run, not the server.** The whole point of hosting a shared governor is that it keeps running and keeps serving other agents and requests after any one of them gets stopped.
+**`nanny run --join` never kills your process on a stop.** This is deliberate, and it's different from a governor running its own app. There, the CLI actively watches your process and kills it on a denial. That's the right behavior for a one-shot batch job. Under `--join`, there is no such watcher: the CLI injects the bridge address and token, starts your process, and waits for it to exit on its own. Enforcement happens entirely inside your process, at the specific call site that is denied, as a `NannyStop` exception raised right there, not a kill signal from outside. This is what makes the governance server's core guarantee possible: **a stop ends one run, not the server.** The whole point of hosting a shared governor is that it keeps running and keeps serving other agents and requests after any one of them gets stopped.
 
 The consequence: if your server has its own request loop, you are responsible for containing that exception per request. Nanny does not do it for you, because from outside your process there is nothing to watch. The stop already happened inside a function call your own code made.
 
@@ -309,7 +309,7 @@ nanny health
 
 Both commands default to the current directory's own `app_id` (from `.nanny/app.json`) when `--app` is omitted. `nanny stop` sends `SIGTERM` to the server process. In-flight requests complete within a 10-second grace window before the server exits. This means a running agent can finish its current tool call before the server shuts down.
 
-Set `NANNY_HOME` to move `~/.nanny/servers/` to a directory of your choice instead of the home directory. Every `--serve`/`--join`/`status`/`stop` invocation for a given governor needs the same `NANNY_HOME` to find its state. It moves the server state directory only: certificates are resolved from the home directory or from the paths you pass to `--cert`, `--key` and `--ca`, which is what a deployment mounting its bundle somewhere specific should use.
+Set `NANNY_HOME` to move `~/.nanny/servers/` to a directory of your choice instead of the home directory. Every `nanny run`/`--join`/`status`/`stop` invocation for a given governor needs the same `NANNY_HOME` to find its state. It moves the server state directory only: certificates are resolved from the home directory or from the paths you pass to `--cert`, `--key` and `--ca`, which is what a deployment mounting its bundle somewhere specific should use.
 
 ---
 

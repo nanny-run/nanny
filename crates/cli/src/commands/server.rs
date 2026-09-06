@@ -112,7 +112,24 @@ pub fn cmd_server_start(
     // An app identity is required to key this governor's state, without it
     // two unrelated `--serve` instances on one machine would collide again,
     // exactly the bug this keying exists to fix.
-    let app = AppIdentity::load_required(&cwd)?;
+    // Optional, not required. Now that every run is a governor, demanding
+    // `nanny init` would make a hand-written nanny.toml stop working, and
+    // "write a config, run it" is how people try this out. Without an
+    // identity the run is governed exactly the same; it just has no permanent
+    // id, so it is not discoverable by `--join`, `status` or `stop`, and its
+    // events carry no `AppIdentified`. The id below is per-run and never
+    // written to disk.
+    let app = match AppIdentity::load(&cwd)? {
+        Some(app) => app,
+        None => AppIdentity {
+            app_id: nanny_config::new_run_id().replace("run_", "eph_"),
+            name: cwd
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "app".to_string()),
+        },
+    };
+    let ephemeral = AppIdentity::load(&cwd)?.is_none();
 
     // Before the governor binds anything. A pack declared in [rules] extends
     // and missing from disk means this fleet would run less governed than its
@@ -134,10 +151,16 @@ pub fn cmd_server_start(
     // `nanny certs`: the governor has to look in the directory that command
     // wrote to, or a deployment generates a live bundle and the server reports
     // the sandbox one missing.
-    let bundle = certs_dir(live)?;
-    let cert_path = cert.unwrap_or_else(|| bundle.join("server.crt"));
-    let key_path = key.unwrap_or_else(|| bundle.join("server.key"));
-    let ca_path = ca.unwrap_or_else(|| bundle.join("ca.crt"));
+    // Resolved lazily. A loopback governor needs no certificates at all, and
+    // the bundle path is keyed by app id, so resolving it eagerly would make
+    // `nanny run` in a directory without `nanny init` fail over TLS material
+    // it was never going to read.
+    let bundle = || {
+        certs_dir(live).unwrap_or_else(|_| PathBuf::from(".nanny").join("certs-not-resolved"))
+    };
+    let cert_path = cert.unwrap_or_else(|| bundle().join("server.crt"));
+    let key_path = key.unwrap_or_else(|| bundle().join("server.key"));
+    let ca_path = ca.unwrap_or_else(|| bundle().join("ca.crt"));
 
     // Cert files are required only for non-loopback addresses (mTLS mandatory).
     // Loopback binds use plain HTTP: OS-enforced, no TLS overhead.
@@ -254,6 +277,14 @@ pub fn cmd_server_start(
     // Raised once the governed app has exited, so the drain thread makes a
     // final sweep instead of the process dying between its 250ms ticks.
     let drain_shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // Why the run ended. Only this side sees the child's exit status, so only
+    // this side can name it; the drain thread writes it into every live run as
+    // the closing `ExecutionStopped`.
+    let stop_reason: std::sync::Arc<std::sync::Mutex<Option<String>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+    // Signalled by the drain thread when its final sweep is written.
+    let drain_done: std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)> =
+        std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
 
     let mut forwarder = None;
     let event_sink = target.ok().map(|target| {
@@ -286,7 +317,15 @@ pub fn cmd_server_start(
     // land on the same `.nanny/logs/<name>` file. Resolved above, before the
     // forwarder, so the same value describes both the log and the outbox.
 
-    println!("nanny: name ({}), appId ({})", app.name, app.app_id);
+    if ephemeral {
+        println!(
+            "nanny: name ({}), no app identity (run `nanny init` to make this \
+             governor joinable and give its runs a permanent id)",
+            app.name
+        );
+    } else {
+        println!("nanny: name ({}), appId ({})", app.name, app.app_id);
+    }
 
     // Does this governor also have an app of its own to run?
     //
@@ -326,6 +365,17 @@ pub fn cmd_server_start(
         }
     };
 
+    // Minted here, before the governor starts, so the run its app will report
+    // under is the run the governor opens. Otherwise the app's first request
+    // opens a second run beside the governor's own, and one process under one
+    // governor reports as two executions.
+    let primary_run_id = child_command
+        .is_some()
+        .then(|| std::env::var("NANNY_RUN_ID").ok().filter(|v| !v.trim().is_empty()))
+        .flatten()
+        .or_else(|| child_command.is_some().then(nanny_config::new_run_id));
+
+
     let state_dir_for_server = nanny_server_state_dir(&app.app_id)?;
 
     match child_command {
@@ -345,6 +395,9 @@ pub fn cmd_server_start(
                 state_dir_for_server,
                 local_log_sink,
                 std::sync::Arc::clone(&drain_shutdown),
+                std::sync::Arc::clone(&stop_reason),
+                std::sync::Arc::clone(&drain_done),
+                primary_run_id.clone(),
             )?;
             Ok(())
         }
@@ -362,6 +415,9 @@ pub fn cmd_server_start(
                 state_dir: state_dir_for_server,
                 local_log_sink,
                 drain_shutdown: std::sync::Arc::clone(&drain_shutdown),
+                stop_reason: std::sync::Arc::clone(&stop_reason),
+                drain_done: std::sync::Arc::clone(&drain_done),
+                primary_run_id: primary_run_id.clone(),
             },
             forwarder.take(),
             command,
@@ -440,6 +496,9 @@ struct GovernorSetup {
     state_dir: PathBuf,
     local_log_sink: Option<Box<dyn std::io::Write + Send>>,
     drain_shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    stop_reason: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    drain_done: std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+    primary_run_id: Option<String>,
 }
 
 /// Run the governance server and, underneath it, the app from `[start]`.
@@ -466,6 +525,9 @@ fn run_governor_with_app(
     let state_dir = setup.state_dir.clone();
     // Captured before `setup` is moved into the governor thread below.
     let drain_shutdown = std::sync::Arc::clone(&setup.drain_shutdown);
+    let stop_reason = std::sync::Arc::clone(&setup.stop_reason);
+    let drain_done = std::sync::Arc::clone(&setup.drain_done);
+    let primary_run_id = setup.primary_run_id.clone();
 
     // ── User-interrupt handling (Ctrl-C / SIGTERM) ───────────────────────────
     //
@@ -528,6 +590,9 @@ fn run_governor_with_app(
                 setup.state_dir,
                 setup.local_log_sink,
                 std::sync::Arc::clone(&setup.drain_shutdown),
+                std::sync::Arc::clone(&setup.stop_reason),
+                std::sync::Arc::clone(&setup.drain_done),
+                setup.primary_run_id.clone(),
             );
             if let Err(e) = outcome {
                 *result_slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(e);
@@ -562,6 +627,11 @@ fn run_governor_with_app(
         return Err(e);
     }
 
+    // The governor already opened this run and put its identity in it, so the
+    // child joins that one instead of opening a second beside it.
+    if let Some(id) = &primary_run_id {
+        std::env::set_var("NANNY_RUN_ID", id);
+    }
     let (mut cmd, run_id) = crate::build_governed_child(command, &server)?;
     crate::declare_app_to_governor(&server, Path::new("."), &run_id);
 
@@ -615,7 +685,35 @@ fn run_governor_with_app(
     // Bounded by the forwarder's own 10s request timeout, and anything it
     // still cannot deliver is already in the spool for the next run to
     // backfill. So this is deliver-or-persist, never deliver-or-lose.
+    // Named before the flag is raised, so the final sweep finds it.
+    *stop_reason.lock().unwrap_or_else(|e| e.into_inner()) = Some(
+        if status.success() {
+            "AgentCompleted"
+        } else {
+            "ProcessCrashed"
+        }
+        .to_string(),
+    );
     drain_shutdown.store(true, Ordering::SeqCst);
+
+    // Wait for that sweep to actually happen. Raising the flag and returning
+    // would let the process exit first, and a run that never made a governed
+    // call would emit nothing at all. Bounded: a stuck drain delays a
+    // shutdown by two seconds rather than hanging it.
+    {
+        let (lock, cv) = &*drain_done;
+        let mut done = lock.lock().unwrap_or_else(|e| e.into_inner());
+        while !*done {
+            let (guard, timeout) = cv
+                .wait_timeout(done, std::time::Duration::from_secs(2))
+                .unwrap_or_else(|e| e.into_inner());
+            done = guard;
+            if timeout.timed_out() {
+                break;
+            }
+        }
+    }
+
     if let Some(forwarder) = forwarder {
         forwarder.flush_and_join();
     }

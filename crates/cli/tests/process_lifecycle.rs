@@ -357,7 +357,7 @@ log = "stdout"
     let output = Command::new(nanny_bin())
         .current_dir(&dir)
         .env("HOME", &home)
-        .args(["run", "--serve", "--addr", "0.0.0.0:62998"])
+        .args(["run", "--addr", "0.0.0.0:62998"])
         .output()
         .expect("nanny run --serve must run");
 
@@ -413,7 +413,7 @@ log = "stdout"
     let mut child = Command::new(nanny_bin())
         .current_dir(&dir)
         .env("NANNY_HOME", &home)
-        .args(["run", "--serve", "--addr", "127.0.0.1:0"])
+        .args(["run", "--addr", "127.0.0.1:0"])
         .spawn()
         .expect("nanny run --serve must spawn");
 
@@ -478,7 +478,7 @@ log = "stdout"
     let mut server = Command::new(nanny_bin())
         .current_dir(&server_toml_dir)
         .env("NANNY_HOME", &home)
-        .args(["run", "--serve", "--addr", "127.0.0.1:0"])
+        .args(["run", "--addr", "127.0.0.1:0"])
         .spawn()
         .expect("governance server must spawn");
 
@@ -564,7 +564,7 @@ cmd = "echo joined-work"
     let mut server = Command::new(nanny_bin())
         .current_dir(&server_dir)
         .env("NANNY_HOME", &home)
-        .args(["run", "--serve", "--addr", "127.0.0.1:0"])
+        .args(["run", "--addr", "127.0.0.1:0"])
         .spawn()
         .expect("governance server must spawn");
 
@@ -716,7 +716,7 @@ log = "file"
     let mut server = Command::new(nanny_bin())
         .current_dir(&server_dir)
         .env("NANNY_HOME", &home)
-        .args(["run", "--serve", "--addr", "127.0.0.1:0"])
+        .args(["run", "--addr", "127.0.0.1:0"])
         .stdout(std::process::Stdio::piped())
         .spawn()
         .expect("governor must spawn");
@@ -808,7 +808,7 @@ fn serve_without_a_start_section_stays_headless() {
     let mut server = Command::new(nanny_bin())
         .current_dir(&server_dir)
         .env("NANNY_HOME", &home)
-        .args(["run", "--serve", "--addr", "127.0.0.1:0"])
+        .args(["run", "--addr", "127.0.0.1:0"])
         .stdout(std::process::Stdio::piped())
         .spawn()
         .expect("governor must spawn");
@@ -1274,7 +1274,7 @@ fn write_config_declaring_a_missing_pack(dir: &Path) {
 /// nothing else checks. Testing one path would have passed throughout.
 #[test]
 fn a_missing_rule_pack_refuses_to_start_on_both_paths() {
-    for args in [vec!["run"], vec!["run", "--serve"]] {
+    for args in [vec!["run"], vec!["run"]] {
         let dir = temp_dir();
         write_config_declaring_a_missing_pack(&dir);
 

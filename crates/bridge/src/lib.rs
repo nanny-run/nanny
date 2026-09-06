@@ -1436,6 +1436,20 @@ impl RunTemplate {
     ///
     /// Each call produces a distinct execution with zeroed counters, so a
     /// stop on one run never touches another.
+    /// A run with no opening `ExecutionStarted`, for the placeholder a
+    /// headless governor keeps so `GovernorIdentified` has somewhere to land.
+    /// Nothing runs under it, so bracketing it would report an execution that
+    /// never happened.
+    pub(crate) fn build_placeholder_state(&self, run_id: &str) -> Arc<Mutex<BridgeState>> {
+        let state = self.build_state(run_id);
+        {
+            let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
+            guard.events.clear();
+            guard.next_seq = 0;
+        }
+        state
+    }
+
     pub(crate) fn build_state(&self, run_id: &str) -> Arc<Mutex<BridgeState>> {
         let tool_permission_policy = ToolPermissionPolicy::new(self.allowed_tools.clone());
         let rule_evaluator = RuleEvaluator::new(self.per_tool_max_calls.clone());

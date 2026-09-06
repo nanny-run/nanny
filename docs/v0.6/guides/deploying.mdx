@@ -14,7 +14,7 @@ There are two, and the choice decides everything after it.
 
 | | Shape | What it needs |
 | --- | --- | --- |
-| **One container** | Your app runs under a governor in the same container. | Nothing beyond `--serve`. |
+| **One container** | Your app runs under a governor in the same container. | Nothing. `nanny run` is already this. |
 | **Governor and joiners** | One service runs the governor, others connect to it from their own containers or machines. | mTLS certificates and a session token. |
 
 Start with one container if you can. Not everything has to move at once: a
@@ -22,11 +22,10 @@ second process joins later without the first one changing shape, and the rule
 set it is evaluated against is the same one.
 
 <Note>
-  **`--serve` is how a governed app starts, here and on your laptop.** On
-  loopback it needs no certificates and no setup, so there is nothing to trade
-  away by using it everywhere, and it is the shape verified against a real
-  container, a real port, and a real restart. Using it in development too means
-  the thing you tested is the thing you deploy.
+  **`nanny run` is the same command here and on your laptop.** It brings up a
+  governor and runs your app underneath it; on loopback that needs no
+  certificates and no setup. There is no second, quieter mode to develop
+  against and then swap out, so the shape you tested is the shape you deploy.
 </Note>
 
 ## 2. Install dependencies at build time
@@ -145,14 +144,14 @@ set -e
 CERT_DIR=/run/secrets/nanny
 
 if [ -f "$CERT_DIR/server.crt" ]; then
-  exec nanny run --serve --addr "0.0.0.0:${NANNY_BRIDGE_PORT:-62669}" \
+  exec nanny run --addr "0.0.0.0:${NANNY_BRIDGE_PORT:-62669}" \
     --cert "$CERT_DIR/server.crt" \
     --key  "$CERT_DIR/server.key" \
     --ca   "$CERT_DIR/ca.crt"
 fi
 
 echo "nanny: no certificates at $CERT_DIR, serving on loopback only"
-exec nanny run --serve
+exec nanny run
 ```
 
 The two branches match how the runtime already behaves: it picks its transport

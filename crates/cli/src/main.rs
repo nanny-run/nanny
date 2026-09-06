@@ -46,15 +46,16 @@ enum Command {
 
     /// Run the project under nanny enforcement.
     ///
-    /// `--serve` is how a governed app starts. It brings up the governor and
-    /// runs [start].cmd from nanny.toml underneath it; on loopback that needs
-    /// no certificates and no setup. Other processes and machines join the
-    /// same governor with --join, sharing one rule set. Without [start] it
-    /// stays headless, for the case where every app arrives via --join.
+    /// Brings up the governor and runs [start].cmd from nanny.toml underneath
+    /// it. On loopback that needs no certificates and no setup, so the same
+    /// command covers a laptop and a deployment. Other processes and machines
+    /// join the same governor with --join, sharing one rule set. Without
+    /// [start] it stays headless, for the case where every app arrives via
+    /// --join.
     ///
-    /// Example: nanny run --serve
+    /// Example: nanny run
     ///
-    /// Example: nanny run --serve --addr 0.0.0.0:62669
+    /// Example: nanny run --addr 0.0.0.0:62669
     Run {
         /// Do not forward events to Nanny Cloud for this run, even with a key set.
         /// Enforcement is unaffected. Also settable with NANNY_NO_SYNC=1.
@@ -69,20 +70,14 @@ enum Command {
         env: cloud::CloudEnv,
 
         /// Join an existing governance server by appId (from that server's
-        /// `.nanny/app.json`), instead of starting a local bridge. Explicit and
+        /// `.nanny/app.json`), instead of starting a governor. Explicit and
         /// appId-only, never a name, and never auto-detected: two unrelated
         /// governors on one machine must never be able to collide by accident.
         /// Example: nanny run --join=app_3f9c2a1e...
         #[arg(long)]
         join: Option<String>,
 
-        /// Run as a headless governance server that other processes and machines
-        /// join, sharing one rule set. Same enforcement as `nanny run`, exposed
-        /// over the network.
-        #[arg(long)]
-        serve: bool,
-
-        /// (with --serve) Listen address for the governance API.
+        /// Listen address for the governance API.
         /// Loopback is plain HTTP; a non-loopback address makes mTLS mandatory.
         ///
         /// Left at the default, a busy port steps forward to the next free one
@@ -91,20 +86,20 @@ enum Command {
         #[arg(long, default_value_t = nanny_bridge::network::default_governor_addr())]
         addr: SocketAddr,
 
-        /// (with --serve) Use this app's live certificate bundle rather than
+        /// Use this app's live certificate bundle rather than
         /// its sandbox one. Ignored when --cert/--key/--ca are given.
         #[arg(long)]
         live: bool,
 
-        /// (with --serve) Server certificate PEM. Defaults to the app's sandbox bundle.
+        /// Server certificate PEM. Defaults to the app's sandbox bundle.
         #[arg(long)]
         cert: Option<PathBuf>,
 
-        /// (with --serve) Server private key PEM. Defaults to the app's sandbox bundle.
+        /// Server private key PEM. Defaults to the app's sandbox bundle.
         #[arg(long)]
         key: Option<PathBuf>,
 
-        /// (with --serve) CA certificate PEM to validate client certs. Defaults to the app's sandbox bundle.
+        /// CA certificate PEM to validate client certs. Defaults to the app's sandbox bundle.
         #[arg(long)]
         ca: Option<PathBuf>,
 
@@ -167,7 +162,6 @@ fn main() {
             no_sync,
             env,
             join,
-            serve,
             addr,
             cert,
             key,
@@ -175,35 +169,26 @@ fn main() {
             live,
             extra_args,
         } => {
-            if serve {
-                if join.is_some() {
-                    Err(anyhow::anyhow!(
-                        "`--serve` runs the governance server and does not take --join. \
-                         Its rules come from nanny.toml, and it *is* the governor, \
-                         so there is nothing to join."
-                    ))
-                } else {
-                    // Runs the full network server (mTLS, certs), plus
-                    // cloud sync gated on NANNY_API_KEY, honoring --no-sync.
-                    // Also launches [start].cmd underneath it when nanny.toml
-                    // declares one; without [start] it stays headless for the
-                    // shared-governor case. Trailing args append to that
-                    // command, exactly as they do for plain `nanny run`.
-                    commands::server::cmd_server_start(
-                        addr,
-                        commands::server::TlsSource {
-                            cert,
-                            key,
-                            ca,
-                            live,
-                        },
-                        no_sync,
-                        env,
-                        extra_args,
-                    )
-                }
+            // One shape. `nanny run` starts a governor and launches
+            // [start].cmd underneath it; without [start] it stays headless for
+            // the shared-governor case. There is no second, quieter run path
+            // to fall through to, so what a laptop exercises is what a
+            // deployment runs.
+            if let Some(app_id) = join {
+                cmd_run_joined(&app_id, extra_args)
             } else {
-                cmd_run(no_sync, env, join, extra_args)
+                commands::server::cmd_server_start(
+                    addr,
+                    commands::server::TlsSource {
+                        cert,
+                        key,
+                        ca,
+                        live,
+                    },
+                    no_sync,
+                    env,
+                    extra_args,
+                )
             }
         }
         Command::Uninstall => cmd_uninstall(),
@@ -464,6 +449,52 @@ fn detect_joined_server(app_id: &str) -> Result<NetworkServerInfo> {
     })
 }
 
+/// `nanny run --join=<appId>`: run `[start].cmd` against a governor that is
+/// already up, instead of starting one.
+///
+/// The governor owns the rules, the event log and the cloud forwarding for
+/// every run it holds, so this reads `nanny.toml` only for the command to
+/// launch. Everything else about how the run is governed arrives from the
+/// other end of the connection.
+fn cmd_run_joined(app_id: &str, extra_args: Vec<String>) -> Result<()> {
+    let cwd = std::env::current_dir().context("failed to read the current directory")?;
+    let config_path = cwd.join("nanny.toml");
+
+    let existing = nanny_tomls_in_dir(&cwd)?;
+    if existing.len() > 1 {
+        let mut names: Vec<String> = existing
+            .iter()
+            .filter_map(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        anyhow::bail!(
+            "multiple nanny configuration files found in '{}': {}\n\
+             A project must have exactly one nanny.toml. Remove the extras.",
+            cwd.display(),
+            names.join(", ")
+        );
+    }
+
+    let config = nanny_config::load(&config_path)
+        .with_context(|| format!("failed to load config from '{}'", config_path.display()))?;
+    let start = config.start.as_ref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "no [start] in nanny.toml, so there is no command to run under the \
+             governor you joined. Add [start] cmd = \"...\" here."
+        )
+    })?;
+    let mut command: Vec<String> = shlex::split(&start.cmd)
+        .ok_or_else(|| anyhow::anyhow!("could not parse [start].cmd: {}", start.cmd))?;
+    if command.is_empty() {
+        anyhow::bail!("[start].cmd is empty");
+    }
+    command.extend(extra_args);
+
+    let server = detect_joined_server(app_id)?;
+    cmd_run_via_network_server(command, server)
+}
+
 fn cmd_run_via_network_server(command: Vec<String>, server: NetworkServerInfo) -> Result<()> {
     println!("nanny: network server detected at {}", server.addr);
     println!("nanny: governance enforced remotely, tool permission and rules apply");
@@ -602,362 +633,7 @@ fn declare_app_to_governor(server: &NetworkServerInfo, dir: &Path, run_id: &str)
     nanny::set_app(app.app_id, app.name);
 }
 
-fn cmd_run(
-    no_sync: bool,
-    env: cloud::CloudEnv,
-    join: Option<String>,
-    extra_args: Vec<String>,
-) -> Result<()> {
-    // A project has one nanny.toml and it sits at its root, which is where you
-    // run from. `--serve` already resolved it this way and ignored the flag
-    // that claimed otherwise; both paths now agree.
-    let config_dir = std::env::current_dir().context("failed to read the current directory")?;
-    let config_dir = config_dir.as_path();
-    let config_path = &config_dir.join("nanny.toml");
-
-    let existing = nanny_tomls_in_dir(config_dir)?;
-    if existing.len() > 1 {
-        let mut names: Vec<_> = existing
-            .iter()
-            .filter_map(|p| p.file_name())
-            .map(|n| n.to_string_lossy().into_owned())
-            .collect();
-        names.sort();
-        anyhow::bail!(
-            "multiple nanny configuration files found in '{}': {}\n\
-             A project must have exactly one nanny.toml. Remove the extras.",
-            config_dir.display(),
-            names.join(", ")
-        );
-    }
-
-    // Load and validate config: fail immediately if anything is wrong.
-    let config = nanny_config::load(config_path)
-        .with_context(|| format!("failed to load config from '{}'", config_path.display()))?;
-
-    // [managed] endpoint/api_key, and [runtime]/mode, are both retired; either
-    // is now silently ignored by the parser, so warn rather than silently do
-    // nothing. There is no config knob to "keep" anymore: sync is decided
-    // entirely by whether NANNY_API_KEY is set in the environment.
-    if let Ok(raw) = std::fs::read_to_string(config_path) {
-        if nanny_config::has_managed_section(&raw) {
-            eprintln!(
-                "nanny: [managed] in nanny.toml is deprecated and ignored. Set the \
-                 NANNY_API_KEY environment variable and Cloud sync happens \
-                 automatically, no config needed."
-            );
-        }
-    }
-
-    // ── Resolve declared rule packs ───────────────────────────────────────────
-    let declared_packs = resolve_declared_packs(&config, config_dir)?;
-
-    // Require [start]: nanny run always reads the command from config.
-    let start = config
-        .start
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("no start config found in nanny.toml"))?;
-
-    // Build command: parse [start].cmd with shell quoting rules, then append extra args.
-    // shlex::split handles quoted paths and escaped spaces: e.g. 'python "my agent.py"'.
-    let mut command: Vec<String> = shlex::split(&start.cmd).ok_or_else(|| {
-        anyhow::anyhow!(
-            "invalid [start].cmd in nanny.toml: unterminated quote or invalid shell syntax: {:?}",
-            start.cmd
-        )
-    })?;
-    if command.is_empty() {
-        return Err(anyhow::anyhow!("[start].cmd in nanny.toml is empty"));
-    }
-    command.extend(extra_args);
-
-    // ── Explicit governor join ────────────────────────────────────────────────
-    // Only when `--join=<appId>` is given. There is no auto-detection: joining a
-    // governor is always an explicit, ID-only choice, so two unrelated apps on
-    // one machine can never collide by one silently absorbing the other's run.
-    if let Some(app_id) = join.as_deref() {
-        let server = detect_joined_server(app_id)?;
-        return cmd_run_via_network_server(command, server);
-    }
-
-    // Build the wired runtime from config.
-    let components = runtime::build_from_config(&config);
-
-    println!("nanny: config loaded from '{}'", config_path.display());
-    println!("nanny: tools allowed, {:?}", config.tools.allowed);
-
-    let registered = components.registry.registered_names();
-    println!(
-        "nanny: registry, {} tool(s) registered: {:?}",
-        registered.len(),
-        registered
-    );
-    println!();
-
-    let started_at = Instant::now();
-
-    // ── Open event log ────────────────────────────────────────────────────
-    let mut log = events::EventWriter::from_config(&config.observability, config_dir)?;
-
-    // The run id is minted before anything is written: `ExecutionStarted` is
-    // seq 0 of this run and the bridge continues from 1, so the log is one
-    // sequence rather than two that collide.
-    let run_id = runtime::resolve_run_id();
-    let started_event =
-        execution_started_event(&command.join(" "), &config.tools, config.fingerprint());
-    log.write(&run_id, 0, &started_event)?;
-
-    // ── Start bridge ──────────────────────────────────────────────────────
-    let bridge_components = runtime::build_bridge_components(&config);
-    let bridge =
-        Bridge::start(bridge_components, run_id.clone()).context("failed to start bridge")?;
-
-    // ── Cloud sync (off unless NANNY_API_KEY is set) ────────────────────────
-    // Forwards a copy of the NDJSON event log to the cloud; enforcement stays
-    // fully local. Fire-and-forget, never blocks or fails the run. The key is
-    // the only input: no config field, no credential file, nothing written to
-    // disk. The status line prints on every run either way, because a run that stops
-    // reporting must never do so silently.
-    // Declare which app this is, before anything else can be attributed to it.
-    // Identity rides in the event stream rather than being derived from the API
-    // key, so one credential can serve many apps and each still lands under its
-    // own name. An app with no `.nanny/app.json` simply doesn't declare, and
-    // Cloud groups its runs the way it always has.
-    let app = identity::AppIdentity::load(config_dir).ok().flatten();
-    if let Some(app) = &app {
-        bridge.declare_app(&app.app_id, &app.name);
-    }
-    let app_name = app.map(|a| a.name);
-
-    let target = sync::resolve_sync(env, no_sync);
-    println!(
-        "{}",
-        sync::sync_status_line(target.as_ref().map_err(|e| *e), app_name.as_deref())
-    );
-    let managed = target.ok().and_then(|t| {
-        sync::CloudSync::start(
-            t.endpoint,
-            t.api_key,
-            &bridge.session_token,
-            config_dir,
-            config
-                .observability
-                .resolve_log_path(config_dir)
-                .ok()
-                .flatten(),
-        )
-    });
-    // ExecutionStarted was already written locally; forward it too.
-    if let (Some(sender), Ok(line)) = (&managed, serde_json::to_string(&started_event)) {
-        sender.enqueue(line);
-    }
-
-    // ── Spawn child process ───────────────────────────────────────────────
-    let (program, args) = command
-        .split_first()
-        .expect("command is non-empty, enforced by clap");
-
-    let mut cmd = std::process::Command::new(program);
-    cmd.args(args);
-    match &bridge.address {
-        #[cfg(unix)]
-        BridgeAddress::Unix(path) => {
-            cmd.env("NANNY_BRIDGE_SOCKET", path);
-        }
-        BridgeAddress::Tcp(port) => {
-            cmd.env("NANNY_BRIDGE_PORT", port.to_string());
-        }
-    }
-    cmd.env("NANNY_SESSION_TOKEN", &bridge.session_token);
-
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(e) => {
-            // ExecutionStarted was emitted: always pair it with ExecutionStopped.
-            let elapsed_ms = started_at.elapsed().as_millis() as u64;
-            let _ = log.write(
-                &run_id,
-                bridge.next_seq(),
-                &execution_stopped_event("SpawnFailed", 0, elapsed_ms),
-            );
-            return Err(e).with_context(|| format!("failed to spawn '{}'", program));
-        }
-    };
-
-    // ── Poll until exit or a bridge-signaled stop ────────────────────────
-    //
-    // We poll every 50 ms. Coarse enough to avoid busy-spinning; fine enough
-    // that a stop is noticed promptly. The bridge signals stop (allowlist,
-    // rules) independently of the child's own exit: we must check both.
-    //
-    // Bridge events (ToolAllowed, RuleDenied, ToolDenied, …) are drained on every tick
-    // so the NDJSON stream is written in near-real-time: `tail -f` on the
-    // log file shows events as they happen, not just at execution end.
-    let poll_interval = Duration::from_millis(50);
-    let stop_reason: String = loop {
-        // Drain any bridge events accumulated since the last tick.
-        for line in bridge.drain_events() {
-            let _ = log.write_raw(&line);
-            if let Some(sender) = &managed {
-                sender.enqueue(line);
-            }
-        }
-
-        // Check bridge first: it may have stopped execution (allowlist, rules).
-        if let ExecutionState::Stopped { reason } = bridge.execution_state() {
-            let _ = child.kill();
-            let _ = child.wait(); // reap, avoid zombie
-            break reason;
-        }
-
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                // Use exit status as the fallback reason only.
-                // The child may have called POST /stop before dying (e.g. for
-                // RuleDenied or ToolFailed), in which case the bridge already
-                // has the specific reason. bridge.stop() is idempotent: it
-                // won't overwrite a reason the child already reported.
-                let fallback = if status.success() {
-                    "AgentCompleted"
-                } else {
-                    "ProcessCrashed"
-                };
-                bridge.stop(fallback);
-                // Re-read: prefer the bridge's reason over the generic fallback.
-                let reason = match bridge.execution_state() {
-                    nanny_bridge::ExecutionState::Stopped { reason } => reason,
-                    nanny_bridge::ExecutionState::Running => fallback.to_string(),
-                };
-                break reason;
-            }
-            Ok(None) => {
-                std::thread::sleep(poll_interval);
-            }
-            Err(e) => {
-                // Polling failed: emit stopped before surfacing the error.
-                let elapsed_ms = started_at.elapsed().as_millis() as u64;
-                let _ = log.write(
-                    &run_id,
-                    bridge.next_seq(),
-                    &execution_stopped_event("InternalError", 0, elapsed_ms),
-                );
-                return Err(e).context("failed to poll child process");
-            }
-        }
-    };
-
-    // ── Final event drain ─────────────────────────────────────────────────
-    // Catch any events generated during the stop transition itself (e.g. a
-    // ToolDenied raised on the very last bridge call).
-    for line in bridge.drain_events() {
-        let _ = log.write_raw(&line);
-        if let Some(sender) = &managed {
-            sender.enqueue(line);
-        }
-    }
-
-    // ── ExecutionStopped event ────────────────────────────────────────────
-    let elapsed_ms = started_at.elapsed().as_millis() as u64;
-    let metrics = bridge.metrics();
-
-    // Warn when tools are configured but the agent never called any.
-    // This usually means the model ignored its tool definitions: a common
-    // sign of a model that is too small or a prompt that needs improvement.
-    // Suppress the warning when execution was stopped by a governance decision
-    // (rule denial, tool denial): in that case 0 calls is expected.
-    let is_governance_stop = matches!(stop_reason.as_str(), "RuleDenied" | "ToolDenied");
-    if metrics.allowed_tool_count > 0 && metrics.tool_call_count == 0 && !is_governance_stop {
-        eprintln!(
-            "nanny: warning, execution completed with 0 tool calls \
-             ({} tool(s) were allowed). \
-             The model may have ignored its tool definitions.",
-            metrics.allowed_tool_count
-        );
-    }
-
-    // Warn when a pack was declared and nothing ever evaluated it.
-    //
-    // Pack rules are loaded and run by the SDK, in the agent's own process, and
-    // only the Python SDK does so today. A Rust agent declaring a pack gets it
-    // verified and pinned and then enforced by nothing, which is the one
-    // failure this project cannot let pass quietly.
-    //
-    // A warning rather than a stop: `POST /rules` is fire-and-forget by design,
-    // so a lost declaration must never take a governed run down with it.
-    if !declared_packs.is_empty() && metrics.declared_rule_count == 0 {
-        eprintln!(
-            "nanny: warning, {} rule pack(s) declared but no rule was registered by the agent. \
-             Pack rules are loaded by the SDK, and only the Python SDK loads them today. \
-             Nothing in {:?} enforced anything during this run.",
-            declared_packs.len(),
-            declared_packs.iter().map(|p| p.slug()).collect::<Vec<_>>()
-        );
-    }
-
-    let stopped_event = execution_stopped_event(&stop_reason, metrics.tokens_spent, elapsed_ms);
-    log.write(&run_id, bridge.next_seq(), &stopped_event)?;
-    if let Some(sender) = &managed {
-        if let Ok(line) = serde_json::to_string(&stopped_event) {
-            sender.enqueue(line);
-        }
-    }
-
-    // Flush the managed forwarder before exit (bounded by its request timeout).
-    if let Some(sender) = managed {
-        sender.flush_and_join();
-    }
-
-    // ── Exit code ─────────────────────────────────────────────────────────
-    if stop_reason != "AgentCompleted" {
-        eprintln!("nanny: stopped, {stop_reason}");
-        std::process::exit(1);
-    }
-
-    Ok(())
-}
 
 // ── Event constructors ────────────────────────────────────────────────────────
 
-/// The declared authority of this run, written before the agent does anything.
-///
-/// Carries the config-side half of the grant: what the governor knows from
-/// nanny.toml. The rules half lives in the agent's process and arrives as
-/// `RulesDeclared` once it contacts the bridge.
-fn execution_started_event(
-    command: &str,
-    tools: &nanny_config::ToolsConfig,
-    config_hash: String,
-) -> ExecutionEvent {
-    // Every allowlisted tool appears, unlabelled ones with an empty list, so a
-    // reader can tell "declared, no labels" from "never declared".
-    let tool_labels = tools
-        .allowed
-        .iter()
-        .map(|name| {
-            let labels = tools
-                .per_tool
-                .get(name)
-                .map(|cfg| cfg.labels().iter().map(|l| l.to_string()).collect())
-                .unwrap_or_default();
-            (name.clone(), labels)
-        })
-        .collect();
 
-    ExecutionEvent::ExecutionStarted {
-        ts: now_ms(),
-        command: command.to_string(),
-        allowed_tools: tools.allowed.clone(),
-        tool_labels,
-        config_hash,
-        runtime_version: env!("CARGO_PKG_VERSION").to_string(),
-    }
-}
-
-fn execution_stopped_event(reason: &str, tokens_spent: u64, elapsed_ms: u64) -> ExecutionEvent {
-    ExecutionEvent::ExecutionStopped {
-        ts: now_ms(),
-        reason: reason.to_string(),
-        tokens_spent,
-        elapsed_ms,
-    }
-}

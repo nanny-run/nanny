@@ -47,9 +47,6 @@ use nanny_config::API_KEY_ENV;
 const NO_SYNC_ENV: &str = "NANNY_NO_SYNC";
 
 // Match the cloud ingest caps so a batch is never rejected wholesale.
-const MAX_LINES: usize = 1000; // NDJSON lines per request
-const MAX_BODY_BYTES: usize = 256 * 1024; // 256 KB per request
-const FLUSH_INTERVAL: Duration = Duration::from_millis(250);
 
 /// A resolved forwarding target: the full ingest URL and the key that authorizes
 /// it. The URL is derived from a compiled host, never stored or user-supplied.
@@ -545,62 +542,6 @@ fn now_millis() -> u128 {
         .as_millis()
 }
 
-/// A forwarder to the cloud orchestrator. Present only when a run syncs.
-pub struct CloudSync {
-    tx: Sender<String>,
-    handle: JoinHandle<()>,
-}
-
-impl CloudSync {
-    /// Start the background forwarder for a resolved target. `None` only if the
-    /// HTTP client fails to build: callers treat `None` as "do nothing".
-    ///
-    /// `base_dir` is the app directory, used for the durable outbox. Anything
-    /// a previous run could not deliver is sent first, before this run's own
-    /// events, so an outage recovers in order.
-    pub fn start(
-        endpoint: String,
-        api_key: String,
-        session_token: &str,
-        base_dir: &Path,
-        log_path: Option<PathBuf>,
-    ) -> Option<Self> {
-        let session = session_token.to_string();
-        let client = reqwest::blocking::Client::builder()
-            .connect_timeout(Duration::from_secs(3))
-            .timeout(Duration::from_secs(10))
-            .build()
-            .ok()?;
-
-        Spool::warn_about_the_other_environment(base_dir, Environment::from_api_key(&api_key));
-        let spool = Spool::new(base_dir, &api_key).logging_to(log_path);
-        let (tx, rx) = std::sync::mpsc::channel::<String>();
-        let handle = std::thread::spawn(move || {
-            // Backfill first: on the forwarder thread, so a cloud that is still
-            // down delays nothing the agent is doing.
-            let recovered = spool.drain(&client, &endpoint, &api_key);
-            if recovered > 0 {
-                eprintln!("nanny: sync: delivered {recovered} batch(es) held from an earlier run");
-            }
-            worker(rx, client, endpoint, api_key, session, spool)
-        });
-        Some(Self { tx, handle })
-    }
-
-    /// Queue one NDJSON event line for forwarding. Non-blocking; never fails the
-    /// run (a dropped receiver just means the worker already exited).
-    pub fn enqueue(&self, line: String) {
-        let _ = self.tx.send(line);
-    }
-
-    /// Flush any buffered events and stop the worker. Bounded by the client's
-    /// request timeout, so a slow cloud can't hang `nanny run` indefinitely.
-    pub fn flush_and_join(self) {
-        drop(self.tx); // close the channel → worker flushes remaining and exits
-        let _ = self.handle.join();
-    }
-}
-
 /// Forwards a governance server's per-run events to the cloud, one ingest batch
 /// per run. Each batch's `X-Nanny-Session` is `{server_secret}:{run_id}`: a
 /// per-run value that folds in the server's secret token, so the cloud groups
@@ -695,72 +636,6 @@ impl ServerForwarder {
     }
 }
 
-/// Background loop: batch lines and POST them; flush on cap, on idle tick, and
-/// once more when the channel closes.
-fn worker(
-    rx: Receiver<String>,
-    client: reqwest::blocking::Client,
-    endpoint: String,
-    api_key: String,
-    session: String,
-    spool: Spool,
-) {
-    let mut batch: Vec<String> = Vec::new();
-    let mut bytes = 0usize;
-    let mut warned = false;
-
-    let flush = |batch: &mut Vec<String>, bytes: &mut usize, warned: &mut bool| {
-        if batch.is_empty() {
-            return;
-        }
-        let body = batch.join("\n");
-        match send_batch(&client, &endpoint, &api_key, &session, &body) {
-            Delivery::Sent => {}
-            Delivery::Retryable => {
-                // Hand it to the outbox rather than dropping it. This is the
-                // whole point: a cloud outage costs latency, not history.
-                spool.store(&session, &body);
-                if !*warned {
-                    eprintln!(
-                        "nanny: sync: cloud unreachable; holding events locally and \
-                         retrying on the next run (enforcement is unaffected)"
-                    );
-                    *warned = true;
-                }
-            }
-            Delivery::Permanent(status) => {
-                if !*warned {
-                    eprintln!(
-                        "{}",
-                        dropped_notice(Dropped::RefusedLive(status), spool.log_path())
-                    );
-                    *warned = true;
-                }
-            }
-        }
-        batch.clear();
-        *bytes = 0;
-    };
-
-    loop {
-        match rx.recv_timeout(FLUSH_INTERVAL) {
-            Ok(line) => {
-                if !batch.is_empty()
-                    && (batch.len() >= MAX_LINES || bytes + line.len() + 1 > MAX_BODY_BYTES)
-                {
-                    flush(&mut batch, &mut bytes, &mut warned);
-                }
-                bytes += line.len() + 1;
-                batch.push(line);
-            }
-            Err(RecvTimeoutError::Timeout) => flush(&mut batch, &mut bytes, &mut warned),
-            Err(RecvTimeoutError::Disconnected) => {
-                flush(&mut batch, &mut bytes, &mut warned);
-                break;
-            }
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {

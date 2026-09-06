@@ -693,8 +693,11 @@ impl NetworkServer {
             None,
             state_dir,
             None,
-            // No sink and no log, so nothing drains and the flag is never read.
+            // No sink and no log, so nothing drains and neither is read.
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            Arc::new(Mutex::new(None)),
+            Arc::new((Mutex::new(false), std::sync::Condvar::new())),
+            None,
         )
     }
 
@@ -729,6 +732,26 @@ impl NetworkServer {
         // process exits between 250ms ticks and the last batch, the one holding
         // ExecutionStopped and the stop reason, is never drained at all.
         drain_shutdown: Arc<std::sync::atomic::AtomicBool>,
+        // Why the run ended, set by the caller alongside `drain_shutdown`. The
+        // bridge does not know: only the CLI sees the child's exit status, a
+        // signal, or a spawn failure. Written into every live run as its
+        // closing `ExecutionStopped` on the final sweep, so an execution is
+        // bracketed rather than simply stopping mid-log.
+        stop_reason: Arc<Mutex<Option<String>>>,
+        // Raised by the drain thread once its final sweep has been written.
+        // The caller waits on this before letting the process exit: without it
+        // the main thread raises `drain_shutdown` and returns, and the process
+        // dies before the sweep runs, so a run that never made a governed call
+        // emits no events at all.
+        drain_done: Arc<(Mutex<bool>, std::sync::Condvar)>,
+        // The run this governor's own app will report under, when it launches
+        // one. Created eagerly so `GovernorIdentified` has somewhere to land,
+        // and so the app's first request joins the run already open rather
+        // than opening a second beside it: one process under one governor is
+        // one execution, not two. `None` for a headless governor, where the
+        // placeholder run carries only the governor's identity and never
+        // pretends to be an execution.
+        primary_run_id: Option<String>,
     ) -> Result<()> {
         // Install ring crypto provider: safe to call multiple times.
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -759,10 +782,19 @@ impl NetworkServer {
         // action endpoint is hit. Distinct run ids are minted lazily on demand.
         let runs: Arc<Mutex<HashMap<String, Arc<Mutex<BridgeState>>>>> =
             Arc::new(Mutex::new(HashMap::new()));
-        let default_state = template.build_state(DEFAULT_RUN_ID);
+        let primary = primary_run_id
+            .clone()
+            .unwrap_or_else(|| DEFAULT_RUN_ID.to_string());
+        let default_state = if primary_run_id.is_some() {
+            template.build_state(&primary)
+        } else {
+            // No app of its own, so nothing here is an execution. Opening it
+            // with `ExecutionStarted` would report a run that never ran.
+            template.build_placeholder_state(&primary)
+        };
         runs.lock()
             .unwrap()
-            .insert(DEFAULT_RUN_ID.to_string(), default_state.clone());
+            .insert(primary.clone(), default_state.clone());
 
         // GovernorIdentified: declared once, into the default run's
         // own event stream, so it drains and forwards the same way every other
@@ -793,8 +825,16 @@ impl NetworkServer {
         // `local_log`, flushed per write, the same guarantee `EventWriter`
         // gives. Whatever `[observability]` resolved to, stdout or a file,
         // arrives here already open, so both are honoured by one code path.
+        if event_sink.is_none() && local_log.is_none() {
+            // Nothing drains, so a caller waiting for a sweep would wait for
+            // one that never comes.
+            let (lock, cv) = &*drain_done;
+            *lock.lock().unwrap_or_else(|e| e.into_inner()) = true;
+            cv.notify_all();
+        }
         if event_sink.is_some() || local_log.is_some() {
             let drain_runs = Arc::clone(&runs);
+            let drain_done = Arc::clone(&drain_done);
             let mut local_log_file = local_log;
             std::thread::spawn(move || loop {
                 // Checked after the sweep, not before, so a shutdown raised
@@ -802,6 +842,36 @@ impl NetworkServer {
                 let stopping = drain_shutdown.load(std::sync::atomic::Ordering::SeqCst);
                 if !stopping {
                     std::thread::sleep(std::time::Duration::from_millis(250));
+                } else if let Some(reason) =
+                    stop_reason.lock().unwrap_or_else(|e| e.into_inner()).take()
+                {
+                    // Close every run still open, before the sweep below picks
+                    // the events up. `ExecutionStarted` opened them; this is the
+                    // other half of the bracket, and without it a governed
+                    // execution simply stops mid-log.
+                    let guard = drain_runs.lock().unwrap_or_else(|e| e.into_inner());
+                    for state in guard.values() {
+                        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                        let elapsed_ms = st.start_time.elapsed().as_millis() as u64;
+                        let tokens_spent = st.tokens_spent;
+                        // A run that reported its own reason keeps it: the
+                        // child may have posted /stop with RuleDenied or
+                        // ToolDenied before dying, and the exit status the
+                        // caller saw is only the fallback.
+                        let reason = match &st.execution {
+                            crate::ExecutionState::Stopped { reason } => reason.clone(),
+                            crate::ExecutionState::Running => reason.clone(),
+                        };
+                        crate::append_event(
+                            &mut st,
+                            nanny_core::events::event::ExecutionEvent::ExecutionStopped {
+                                ts: crate::now_ms(),
+                                reason,
+                                tokens_spent,
+                                elapsed_ms,
+                            },
+                        );
+                    }
                 }
                 let ids: Vec<String> = {
                     let guard = drain_runs.lock().unwrap();
@@ -828,9 +898,13 @@ impl NetworkServer {
                     }
                 }
                 if stopping {
-                    // The sweep above was the last one. Returning drops
-                    // `event_sink`, closing the channel the forwarder is
-                    // draining, which is how `flush_and_join` knows to finish.
+                    // The sweep above was the last one. Tell the caller it is
+                    // safe to exit, then return, which drops `event_sink` and
+                    // closes the channel the forwarder is draining, which is
+                    // how `flush_and_join` knows to finish.
+                    let (lock, cv) = &*drain_done;
+                    *lock.lock().unwrap_or_else(|e| e.into_inner()) = true;
+                    cv.notify_all();
                     return;
                 }
             });

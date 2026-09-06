@@ -91,10 +91,10 @@ without being written for it. See [Tool labels](/v0.6/concepts/tool-labels).
 
 Nanny is designed to meet you where you are and grow with you.
 
-**Nanny CLI**: the enforcement entry point. Governs any agent process in any language as its parent process supervisor. Install it once as a system tool and use `nanny run --serve` from any project that has a `nanny.toml` with a `[start]` command configured.
+**Nanny CLI**: the enforcement entry point. Governs any agent process in any language as its parent process supervisor. Install it once as a system tool and use `nanny run` from any project that has a `nanny.toml` with a `[start]` command configured.
 
 ```bash
-nanny run --serve   # starts a governor, runs [start].cmd underneath it
+nanny run   # starts a governor, runs [start].cmd underneath it
 ```
 
 **Rust SDK**, for Rust agents. Annotate functions with `#[nanny::tool]`, `#[nanny::rule]`, and `#[nanny::agent]` for per-call enforcement and custom rules. See the [Rust SDK guide](/v0.6/guides/rust-sdk).
