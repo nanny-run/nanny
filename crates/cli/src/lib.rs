@@ -389,31 +389,16 @@ mod runtime {
 
     // ── Bridge detection ──────────────────────────────────────────────────────
 
-    /// Returns `true` if any bridge transport is active.
+    /// Returns `true` if the bridge is reachable.
     ///
-    /// Priority (checked in order):
-    ///   1. `NANNY_BRIDGE_SOCKET` : Unix domain socket (macOS/Linux local)
-    ///   2. `NANNY_BRIDGE_PORT`   : TCP loopback (Windows local)
-    ///   3. `NANNY_BRIDGE_ADDR`   : TCP + mTLS (network / cross-machine)
-    ///   4. None of the above     : passthrough (no-op)
+    /// `NANNY_BRIDGE_ADDR` is the one transport: plain HTTP on loopback, mTLS
+    /// anywhere else. Absent means passthrough, where every macro is a no-op.
+    ///
+    /// There used to be two more, a Unix socket and a Windows TCP port, which
+    /// meant every SDK carried a three-rung ladder and the runtime carried two
+    /// servers to answer it. One governor, one way to reach it.
     pub fn is_active() -> bool {
-        bridge_socket_path().is_some() || bridge_tcp_port().is_some() || bridge_addr().is_some()
-    }
-
-    #[cfg(unix)]
-    fn bridge_socket_path() -> Option<std::path::PathBuf> {
-        std::env::var("NANNY_BRIDGE_SOCKET")
-            .ok()
-            .map(std::path::PathBuf::from)
-    }
-
-    #[cfg(not(unix))]
-    fn bridge_socket_path() -> Option<std::path::PathBuf> {
-        None
-    }
-
-    fn bridge_tcp_port() -> Option<u16> {
-        std::env::var("NANNY_BRIDGE_PORT").ok()?.parse().ok()
+        bridge_addr().is_some()
     }
 
     /// `NANNY_BRIDGE_ADDR`: host:port of the network governance server.
@@ -624,17 +609,7 @@ mod runtime {
              \r\n"
         );
 
-        #[cfg(unix)]
-        if let Some(sock) = bridge_socket_path() {
-            return with_first_contact_retry(|| unix_roundtrip(&sock, &req));
-        }
-
-        if let Some(port) = bridge_tcp_port() {
-            return with_first_contact_retry(|| tcp_roundtrip(&format!("127.0.0.1:{port}"), &req));
-        }
-
-        // Transport 3: NANNY_BRIDGE_ADDR: loopback is plain HTTP (mirrors the
-        // server), non-loopback is mTLS.
+        // Loopback is plain HTTP, mirroring the server; anywhere else is mTLS.
         if let Some(addr) = bridge_addr() {
             if addr_is_loopback(&addr) {
                 return with_first_contact_retry(|| tcp_roundtrip(&addr, &req));
@@ -645,18 +620,6 @@ mod runtime {
         None
     }
 
-    /// One request over a Unix socket. Every failure collapses to `None`, the
-    /// same as before; the retry above decides whether to try again.
-    #[cfg(unix)]
-    fn unix_roundtrip(sock: &std::path::Path, req: &str) -> Option<BridgeResponse> {
-        use std::io::{Read, Write};
-        use std::os::unix::net::UnixStream;
-        let mut stream = UnixStream::connect(sock).ok()?;
-        stream.write_all(req.as_bytes()).ok()?;
-        let mut raw = String::new();
-        stream.read_to_string(&mut raw).ok()?;
-        parse_http_response(&raw)
-    }
 
     /// One request over plain TCP.
     fn tcp_roundtrip(addr: &str, req: &str) -> Option<BridgeResponse> {
@@ -685,17 +648,7 @@ mod runtime {
             len = body.len()
         );
 
-        #[cfg(unix)]
-        if let Some(sock) = bridge_socket_path() {
-            return with_first_contact_retry(|| unix_roundtrip(&sock, &req));
-        }
-
-        if let Some(port) = bridge_tcp_port() {
-            return with_first_contact_retry(|| tcp_roundtrip(&format!("127.0.0.1:{port}"), &req));
-        }
-
-        // Transport 3: NANNY_BRIDGE_ADDR: loopback is plain HTTP (mirrors the
-        // server), non-loopback is mTLS.
+        // Loopback is plain HTTP, mirroring the server; anywhere else is mTLS.
         if let Some(addr) = bridge_addr() {
             if addr_is_loopback(&addr) {
                 return with_first_contact_retry(|| tcp_roundtrip(&addr, &req));

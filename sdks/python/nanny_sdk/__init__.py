@@ -4,7 +4,7 @@
     from nanny_sdk import RuleDenied, ToolDenied
 
 Run your agent under ``nanny run agent.py``. All decorators are no-ops when
-``NANNY_BRIDGE_PORT`` is absent, zero friction in direct development.
+``NANNY_BRIDGE_ADDR`` is absent, zero friction in direct development.
 """
 
 from nanny_sdk._decorators import agent, rule, tool

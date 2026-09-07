@@ -102,7 +102,7 @@ def test_agent_bridge_unreachable_raises_bridge_unavailable(
     not a raw httpx/httpcore traceback: @agent must fail closed the same way
     @tool's rule evaluation already does when the bridge can't be reached.
     """
-    monkeypatch.setenv("NANNY_BRIDGE_PORT", "19999")  # nothing listening here
+    monkeypatch.setenv("NANNY_BRIDGE_ADDR", "127.0.0.1:19999")  # nothing listening here
     monkeypatch.setenv("NANNY_SESSION_TOKEN", "test-token")
 
     @agent("researcher")
@@ -120,8 +120,6 @@ def test_agent_bridge_unreachable_raises_bridge_unavailable(
 
 def test_agent_passthrough_runs_directly(monkeypatch: pytest.MonkeyPatch) -> None:
     """In passthrough mode, no network calls; function runs directly."""
-    monkeypatch.delenv("NANNY_BRIDGE_PORT", raising=False)
-
     @agent("researcher")
     def my_func() -> str:
         return "direct"
@@ -185,8 +183,6 @@ async def test_agent_async_exit_called_on_exception(mock_bridge: HTTPServer) -> 
 
 async def test_agent_async_passthrough(monkeypatch: pytest.MonkeyPatch) -> None:
     """Async passthrough: no network calls, function runs directly."""
-    monkeypatch.delenv("NANNY_BRIDGE_PORT", raising=False)
-
     @agent("researcher")
     async def my_async_func() -> str:
         return "async direct"

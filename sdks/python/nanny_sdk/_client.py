@@ -58,16 +58,6 @@ T = TypeVar("T")
 # ---------------------------------------------------------------------------
 
 
-def _socket_path() -> str | None:
-    """Unix domain socket path set by the CLI on macOS/Linux."""
-    return os.environ.get("NANNY_BRIDGE_SOCKET")
-
-
-def _port() -> str | None:
-    """TCP port set by the CLI on Windows."""
-    return os.environ.get("NANNY_BRIDGE_PORT")
-
-
 def _bridge_addr() -> str | None:
     """Network governance server address (host:port) for cross-process enforcement.
 
@@ -204,15 +194,12 @@ def _build_ssl_context(cert_val: str, key_val: str | None, ca_val: str) -> ssl.S
 def is_passthrough() -> bool:
     """True when the SDK is running outside ``nanny run`` (no bridge present).
 
-    All three transport env vars must be absent for passthrough mode:
-    - ``NANNY_BRIDGE_SOCKET`` (Unix domain socket)
-    - ``NANNY_BRIDGE_PORT``   (TCP loopback)
-    - ``NANNY_BRIDGE_ADDR``   (network mTLS)
-
-    Checking only the first two would silently skip enforcement when the
-    process was started with ``NANNY_BRIDGE_ADDR`` set.
+    ``NANNY_BRIDGE_ADDR`` is the one transport, so its absence is the whole
+    test. It used to be three, a Unix socket and a Windows TCP port beside
+    this one, which meant every SDK carried a resolution ladder and the
+    runtime carried two servers to answer it.
     """
-    return _socket_path() is None and _port() is None and _bridge_addr() is None
+    return _bridge_addr() is None
 
 
 def _split_host(addr: str) -> str:
@@ -257,15 +244,6 @@ def _make_client(**kwargs: Any) -> httpx.Client:
     Raises ``RuntimeError`` if called in passthrough mode (should never happen
     because decorators check ``is_passthrough()`` first).
     """
-    sock = _socket_path()
-    if sock is not None:
-        transport = httpx.HTTPTransport(uds=sock)
-        return httpx.Client(transport=transport, base_url="http://localhost", **kwargs)
-
-    port = _port()
-    if port is not None:
-        return httpx.Client(base_url=f"http://127.0.0.1:{port}", **kwargs)
-
     addr = _bridge_addr()
     if addr is not None:
         # Mirror the server's transport (crates/bridge/src/network.rs): loopback is
@@ -284,8 +262,7 @@ def _make_client(**kwargs: Any) -> httpx.Client:
             return httpx.Client(base_url=f"https://{addr}", verify=ssl_ctx, **kwargs)
 
     raise RuntimeError(  # pragma: no cover
-        "nanny: bridge not available "
-        "(NANNY_BRIDGE_SOCKET, NANNY_BRIDGE_PORT, and NANNY_BRIDGE_ADDR are all unset)"
+        "nanny: bridge not available (NANNY_BRIDGE_ADDR is unset)"
     )
 
 

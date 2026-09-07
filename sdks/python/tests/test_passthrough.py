@@ -1,6 +1,6 @@
 """Day 6, Passthrough verification.
 
-All tests verify that when neither NANNY_BRIDGE_SOCKET nor NANNY_BRIDGE_PORT is
+All tests verify that when NANNY_BRIDGE_ADDR is not
 set (i.e. running ``python agent.py`` directly, not under ``nanny run``):
 
 - ``@tool`` returns the original function unchanged, no wrapper, no network calls.
@@ -35,11 +35,7 @@ from nanny_sdk._decorators import _RULES
 @pytest.fixture(autouse=True)
 def _no_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
     """Unset both bridge env vars so every test runs in passthrough mode."""
-    monkeypatch.delenv("NANNY_BRIDGE_SOCKET", raising=False)
-    monkeypatch.delenv("NANNY_BRIDGE_PORT", raising=False)
-
-
-# ---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
 # Import: zero errors with no env vars
 # ---------------------------------------------------------------------------
 

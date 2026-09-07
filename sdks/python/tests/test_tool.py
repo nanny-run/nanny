@@ -146,9 +146,7 @@ def test_function_body_never_runs_on_deny(mock_bridge: HTTPServer) -> None:
 
 
 def test_passthrough_calls_function_directly(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Without NANNY_BRIDGE_PORT the function runs directly, no network calls."""
-    monkeypatch.delenv("NANNY_BRIDGE_PORT", raising=False)
-
+    """Without NANNY_BRIDGE_ADDR the function runs directly, no network calls."""
     @tool()
     def my_func() -> str:
         return "direct"
