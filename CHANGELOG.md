@@ -9,6 +9,20 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **One log target: stdout.** `log = "file"` wrote to `.nanny/logs/` and
+  refused any other path, which is the one place a deployment cannot use:
+  inside the image, wiped by a rebuild, invisible to a mounted volume, refused
+  outright by a read-only filesystem. Redirection does strictly more, and two
+  targets doing one job is what let one of them silently be a no-op. The whole
+  `[observability]` section is gone, with `LogTarget`, the `file` key, its
+  bare-name validation, `.nanny/logs/` and the gitignore line written for it.
+  The spool is untouched; it is the cloud outbox and the durable path.
+
+- **Nanny's own output goes to stderr.** The startup block, the sync status
+  line and every warning, so `nanny run > events.ndjson` yields NDJSON and
+  nothing else. Your app's stdout still passes through, so a consumer wanting
+  only events filters for lines beginning with a brace.
+
 - **One transport, not three.** Both SDKs resolved a bridge through a ladder: a
   Unix socket on macOS and Linux, a TCP port on Windows, and an address for
   anything over a network. Every SDK in every language had to implement all
