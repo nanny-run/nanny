@@ -6,35 +6,12 @@
 
 use nanny_bridge::BridgeComponents;
 use nanny_config::NannyConfig;
-use nanny_runtime::ToolRegistry;
 use std::collections::HashMap;
 
 // ── RuntimeComponents ─────────────────────────────────────────────────────────
 
-/// The fully wired runtime: the tool registry, ready to run.
-///
-/// Every field is derived directly from `NannyConfig`.
-/// Nothing is hardcoded. Nothing comes from ambient state.
-/// Policy enforcement is owned by the bridge (`BridgeComponents`).
-pub struct RuntimeComponents {
-    /// All registered built-in tools. The policy controls which are permitted.
-    pub registry: ToolRegistry,
-}
-
 // ── build_from_config ─────────────────────────────────────────────────────────
 
-/// Build all runtime components from a validated `NannyConfig`.
-///
-/// The mapping is intentionally explicit: every field traces back to config:
-///
-/// ```text
-/// config.tools.*       → allowlist + per-tool max_calls
-/// ```
-pub fn build_from_config(_config: &NannyConfig) -> RuntimeComponents {
-    RuntimeComponents {
-        registry: nanny_runtime::default_registry(),
-    }
-}
 
 // ── build_bridge_components ───────────────────────────────────────────────────
 
@@ -71,22 +48,15 @@ pub fn build_bridge_components(config: &NannyConfig) -> BridgeComponents {
         allowed_tools: config.tools.allowed.clone(),
         per_tool_max_calls,
         tool_labels,
+        config_hash: config.fingerprint(),
+        runtime_version: env!("CARGO_PKG_VERSION").to_string(),
+        // Filled in by the caller that knows whether this governor launches an
+        // app of its own. A headless one, and any run arriving over `--join`,
+        // leaves it empty rather than claiming a command it did not start.
+        start_command: None,
     }
 }
 
-/// The id for this run.
-///
-/// `NANNY_RUN_ID` is how separate processes opt into one shared run; absent it,
-/// every invocation is its own. Minted here rather than inside the bridge
-/// because the CLI writes `ExecutionStarted` before the bridge exists, and a
-/// bookend stamped with a different id than the verdicts it brackets would be
-/// worse than no id at all.
-pub fn resolve_run_id() -> String {
-    std::env::var("NANNY_RUN_ID")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(nanny_config::new_run_id)
-}
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
@@ -110,7 +80,7 @@ mod tests {
 
     #[test]
     fn registry_contains_http_get() {
-        let components = build_from_config(&test_config());
+        let components = build_bridge_components(&test_config());
 
         assert!(
             components.registry.registered_names().contains(&"http_get"),

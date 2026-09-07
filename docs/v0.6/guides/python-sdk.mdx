@@ -17,7 +17,7 @@ When running outside `nanny run`, every decorator is a no-op. The function execu
 
 ```bash
 # Governed: enforcement active (reads [start].cmd from nanny.toml)
-nanny run --serve
+nanny run
 
 # Not governed: decorators silent, agent runs normally
 python agent.py
@@ -213,7 +213,7 @@ Safe under concurrency: the run id lives in a context variable, so threads and
 async tasks each get their own rather than sharing one process-global value.
 The scope self-cleans on exit.
 
-Only meaningful when governed through a governance server (`nanny run --serve`
+Only meaningful when governed through a governance server (`nanny run`
 or `--join`), which keys state per run. Under local `nanny run` one process is
 always exactly one run, so this is a no-op and code that might run under either
 mode does not need to branch.
@@ -261,7 +261,7 @@ are attributed separately. A process that declares nothing inherits the
 governor's identity.
 
 `nanny run` already does this for the process it launches, under both
-`--serve` and `--join`. Call it yourself only for a process `nanny run` did not
+a run it started and one it joined. Call it yourself only for a process `nanny run` did not
 start, such as a worker that joins a governor from its own entrypoint.
 
 ---
@@ -327,9 +327,9 @@ permanently on the first success: after a governor has answered, a later
 failure raises immediately, because retrying then would let the agent keep
 calling tools while nothing was authorising them.
 
-Under plain `nanny run` (single process, no `--serve`), you do not need to handle stop reasons in most agent code. They propagate up the call stack and terminate the process, since `nanny run` is watching that process and exits it for you. Catching them there is useful mainly in test code and at the CLI entry point.
+Under `nanny run` (a governor running your own app), you do not need to handle stop reasons in most agent code. They propagate up the call stack and terminate the process, since `nanny run` is watching that process and exits it for you. Catching them there is useful mainly in test code and at the CLI entry point.
 
-**This is not true once you're running under `nanny run --serve` / `--join`.** When your process joins a governance server, the wrapping `nanny run --join` command does not watch your process for stops at all: no polling loop, no kill on a stop, nothing. That's deliberate. [The stop guarantee](/v0.6/guides/governance-server#long-lived-processes-and-nannystop) is that a stop ends one *run*, not your whole process, so a long-lived server (a web app, a Discord bot, anything handling more than one request per process) has to keep running after another request's run gets stopped. Nothing does that for you. If a request handler lets `NannyStop` propagate uncaught, your framework's own crash behavior decides what happens next, which for many servers means the whole process going down over one governed request. Catch it at the boundary of whatever "one governed unit of work" means for your app, typically each request handler, and turn it into a failure response for that one request, not an unhandled exception:
+**This is not true once you're running under `nanny run` / `--join`.** When your process joins a governance server, the wrapping `nanny run --join` command does not watch your process for stops at all: no polling loop, no kill on a stop, nothing. That's deliberate. [The stop guarantee](/v0.6/guides/governance-server#long-lived-processes-and-nannystop) is that a stop ends one *run*, not your whole process, so a long-lived server (a web app, a Discord bot, anything handling more than one request per process) has to keep running after another request's run gets stopped. Nothing does that for you. If a request handler lets `NannyStop` propagate uncaught, your framework's own crash behavior decides what happens next, which for many servers means the whole process going down over one governed request. Catch it at the boundary of whatever "one governed unit of work" means for your app, typically each request handler, and turn it into a failure response for that one request, not an unhandled exception:
 
 ```python
 from nanny_sdk import run_scope, NannyStop
@@ -342,7 +342,7 @@ def handle_request(payload: dict) -> dict:
         return {"error": f"stopped: {type(e).__name__}"}
 ```
 
-See [Long-lived processes and NannyStop](/v0.6/guides/governance-server#long-lived-processes-and-nannystop) for the full explanation of why this only applies under `--serve`/`--join`.
+See [Long-lived processes and NannyStop](/v0.6/guides/governance-server#long-lived-processes-and-nannystop) for the full explanation of why this only applies under `nanny run`/`--join`.
 
 ---
 
@@ -381,7 +381,7 @@ if __name__ == "__main__":
 Run it under Nanny:
 
 ```bash
-nanny run --serve
+nanny run
 ```
 
 Run it without Nanny (decorators silent, agent runs normally):

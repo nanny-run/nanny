@@ -7,6 +7,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- **`nanny run` is the governor. `--serve` is gone.** One shape: it brings up a
+  governor and runs `[start].cmd` underneath it, on a laptop and in a container
+  alike. On loopback that needs no certificates and no setup, so there was
+  never a trade to make, only a flag with one correct value and a second,
+  quieter path underneath it that nobody deployed and everybody developed
+  against. `--join` is unchanged.
+
 ### Added
 
 - **Certificate bundles are per app and per environment.** They all shared
@@ -54,6 +63,37 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   replaces the reason to reach for it.
 
 ### Fixed
+
+- **A governed run emitted no `ExecutionStarted`.** Runs are created lazily on
+  first request and nothing seeded them, so an execution reached the cloud with
+  a null config hash, a null runtime version, and no record of the allowlist or
+  tool labels it had been granted. That is the config half of declared
+  authority, and a local run had carried it from the beginning. Every run now
+  opens with it as seq 0.
+
+- **A governed run emitted no `ExecutionStopped` either.** Only the local path
+  wrote one. The drain thread now writes it into each live run on its final
+  sweep, with the reason named from the child's exit status, and a run that
+  reported its own reason first keeps it.
+
+- **A governor dropped its last batch of events on exit.** It shuts down with
+  the app it launched, which in development is seconds and in a deployment is
+  every restart, and the forwarder was spawned and forgotten. The drain feeding
+  it runs on a 250ms tick, so whatever the app wrote in its last fraction of a
+  second never left, and that is where `ExecutionStopped` and the stop reason
+  are. Shutdown now waits for a final sweep and for the forwarder to finish,
+  bounded, and anything undelivered is spooled for the next run to backfill:
+  deliver or persist, never deliver or lose.
+
+- **A governor wrote its event log nowhere under the default config.**
+  `log = "stdout"` is the default and the governor took a path, which stdout
+  does not have, so the local NDJSON stream was shut for anyone who had not set
+  `log = "file"`. It takes an open sink now, and honours both.
+
+- **A governor's own app opened a second run.** The governor had already opened
+  one to carry its identity, so one process under one governor reported as two
+  executions. The run id is minted before the governor starts and handed to
+  both.
 
 - **`nanny certs` said to keep `ca.key` "on the server machine".** Backwards:
   it signs certificates, so whoever holds it can mint a client any governor

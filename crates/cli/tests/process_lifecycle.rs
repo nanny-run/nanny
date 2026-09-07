@@ -297,37 +297,6 @@ fn process_crash_emits_process_crashed_stop_reason() {
     );
 }
 
-/// Missing [start] section exits non-zero with a clear error message.
-#[test]
-fn missing_start_section_exits_nonzero_with_message() {
-    let dir = temp_dir();
-    fs::write(
-        dir.join("nanny.toml"),
-        r#"[observability]
-log = "stdout"
-"#,
-    )
-    .unwrap();
-
-    let output = Command::new(nanny_bin())
-        .current_dir(&dir)
-        .args(["run"])
-        .output()
-        .expect("failed to run nanny");
-
-    let _ = fs::remove_dir_all(&dir);
-
-    assert!(
-        !output.status.success(),
-        "nanny must exit non-zero when [start] is missing"
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("no start config"),
-        "stderr must mention 'no start config'; got: {stderr}"
-    );
-}
-
 // ── nanny run --serve: non-loopback without certs fails fast ────────────
 //
 // `server.rs` bails before starting the server when the bind address is
@@ -357,7 +326,7 @@ log = "stdout"
     let output = Command::new(nanny_bin())
         .current_dir(&dir)
         .env("HOME", &home)
-        .args(["run", "--serve", "--addr", "0.0.0.0:62998"])
+        .args(["run", "--addr", "0.0.0.0:62998"])
         .output()
         .expect("nanny run --serve must run");
 
@@ -413,7 +382,7 @@ log = "stdout"
     let mut child = Command::new(nanny_bin())
         .current_dir(&dir)
         .env("NANNY_HOME", &home)
-        .args(["run", "--serve", "--addr", "127.0.0.1:0"])
+        .args(["run", "--addr", "127.0.0.1:0"])
         .spawn()
         .expect("nanny run --serve must spawn");
 
@@ -478,7 +447,7 @@ log = "stdout"
     let mut server = Command::new(nanny_bin())
         .current_dir(&server_toml_dir)
         .env("NANNY_HOME", &home)
-        .args(["run", "--serve", "--addr", "127.0.0.1:0"])
+        .args(["run", "--addr", "127.0.0.1:0"])
         .spawn()
         .expect("governance server must spawn");
 
@@ -564,7 +533,7 @@ cmd = "echo joined-work"
     let mut server = Command::new(nanny_bin())
         .current_dir(&server_dir)
         .env("NANNY_HOME", &home)
-        .args(["run", "--serve", "--addr", "127.0.0.1:0"])
+        .args(["run", "--addr", "127.0.0.1:0"])
         .spawn()
         .expect("governance server must spawn");
 
@@ -716,7 +685,7 @@ log = "file"
     let mut server = Command::new(nanny_bin())
         .current_dir(&server_dir)
         .env("NANNY_HOME", &home)
-        .args(["run", "--serve", "--addr", "127.0.0.1:0"])
+        .args(["run", "--addr", "127.0.0.1:0"])
         .stdout(std::process::Stdio::piped())
         .spawn()
         .expect("governor must spawn");
@@ -808,7 +777,7 @@ fn serve_without_a_start_section_stays_headless() {
     let mut server = Command::new(nanny_bin())
         .current_dir(&server_dir)
         .env("NANNY_HOME", &home)
-        .args(["run", "--serve", "--addr", "127.0.0.1:0"])
+        .args(["run", "--addr", "127.0.0.1:0"])
         .stdout(std::process::Stdio::piped())
         .spawn()
         .expect("governor must spawn");
@@ -1274,7 +1243,7 @@ fn write_config_declaring_a_missing_pack(dir: &Path) {
 /// nothing else checks. Testing one path would have passed throughout.
 #[test]
 fn a_missing_rule_pack_refuses_to_start_on_both_paths() {
-    for args in [vec!["run"], vec!["run", "--serve"]] {
+    for args in [vec!["run"], vec!["run"]] {
         let dir = temp_dir();
         write_config_declaring_a_missing_pack(&dir);
 

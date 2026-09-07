@@ -5,7 +5,7 @@ description: Install Nanny, configure limits, and run your first enforced proces
 
 ## Install
 
-The Nanny CLI is a system tool, install it once and use `nanny run --serve` from any project.
+The Nanny CLI is a system tool, install it once and use `nanny run` from any project.
 
 <Tabs>
   <Tab title="macOS">
@@ -38,7 +38,7 @@ nanny --version
 
 For upgrade paths, uninstall, and troubleshooting on each platform, see [Installing Nanny](/v0.6/install).
 
-The CLI is the enforcement engine. The SDK instruments your functions. You need both: `nanny run --serve` owns the process lifecycle and enforces limits; `@tool`, `@rule`, and `@agent` report tool calls and activate named limit sets from inside your agent code.
+The CLI is the enforcement engine. The SDK instruments your functions. You need both: `nanny run` owns the process lifecycle and enforces limits; `@tool`, `@rule`, and `@agent` report tool calls and activate named limit sets from inside your agent code.
 
 ## Initialise a config
 
@@ -67,7 +67,7 @@ Set `[start].cmd` to your agent's entry point, then list the tools it is allowed
 ## Run your agent
 
 ```bash
-nanny run --serve
+nanny run
 ```
 
 Nanny reads `[start].cmd` from `nanny.toml`, spawns the process, and stops it the moment it tries something outside what you declared.
@@ -121,7 +121,7 @@ Every run emits structured NDJSON to stdout:
 Pipe it to a file or your log aggregator:
 
 ```bash
-nanny run --serve >> nanny.log
+nanny run >> nanny.log
 ```
 
 Or configure file output directly in `nanny.toml`:

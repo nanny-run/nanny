@@ -693,6 +693,11 @@ impl NetworkServer {
             None,
             state_dir,
             None,
+            // No sink and no log, so nothing drains and neither is read.
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            Arc::new(Mutex::new(None)),
+            Arc::new((Mutex::new(false), std::sync::Condvar::new())),
+            None,
         )
     }
 
@@ -701,15 +706,14 @@ impl NetworkServer {
     /// `(run_id, lines)` to it. This is the ONLY hook cloud sync uses; the engine
     /// stays auth free: it never talks to the cloud, it just hands off strings.
     ///
-    /// `local_log_path`: when `Some`, the same drain thread also appends each
-    /// drained line to this file, flushed per write. This is what makes
-    /// `[observability] log = "file"` behave identically whether the process
-    /// is local `nanny run` or `nanny run --serve`: before this, `nanny.toml`
-    /// promised a log file and `--serve` silently never wrote one, the config
-    /// was only ever honored by the local, single-process run path. The
-    /// caller (`commands/server.rs`) resolves this from the server's own
-    /// `nanny.toml`, the same `[observability]` table local `nanny run`
-    /// already reads via `EventWriter::from_config`.
+    /// `local_log`: when `Some`, the same drain thread also writes each drained
+    /// line to it, flushed per write. The caller resolves it from
+    /// `[observability]`, so `log = "stdout"` (the default) and `log = "file"`
+    /// both arrive here as a sink and are honoured identically. Taking a writer
+    /// rather than a path is what lets stdout reach this at all: a path cannot
+    /// name it, and the governor writing nowhere under the default config would
+    /// mean the local event stream disappears for anyone who never set
+    /// `log = "file"`.
     #[allow(clippy::too_many_arguments)]
     pub fn start_blocking_synced(
         addr: SocketAddr,
@@ -721,7 +725,33 @@ impl NetworkServer {
         rate_limit_rps: u32, // max req/s per client IP, DoS protection, default 100
         event_sink: Option<Sender<(String, Vec<String>)>>,
         state_dir: PathBuf, // ~/.nanny/servers/<app_id>/, keyed, per-app, never shared
-        local_log_path: Option<PathBuf>,
+        local_log: Option<Box<dyn std::io::Write + Send>>,
+        // Raised by the caller when the app it governs has exited. The drain
+        // thread makes one final sweep and returns, dropping its sender, which
+        // is what lets the cloud forwarder finish and be joined. Without it the
+        // process exits between 250ms ticks and the last batch, the one holding
+        // ExecutionStopped and the stop reason, is never drained at all.
+        drain_shutdown: Arc<std::sync::atomic::AtomicBool>,
+        // Why the run ended, set by the caller alongside `drain_shutdown`. The
+        // bridge does not know: only the CLI sees the child's exit status, a
+        // signal, or a spawn failure. Written into every live run as its
+        // closing `ExecutionStopped` on the final sweep, so an execution is
+        // bracketed rather than simply stopping mid-log.
+        stop_reason: Arc<Mutex<Option<String>>>,
+        // Raised by the drain thread once its final sweep has been written.
+        // The caller waits on this before letting the process exit: without it
+        // the main thread raises `drain_shutdown` and returns, and the process
+        // dies before the sweep runs, so a run that never made a governed call
+        // emits no events at all.
+        drain_done: Arc<(Mutex<bool>, std::sync::Condvar)>,
+        // The run this governor's own app will report under, when it launches
+        // one. Created eagerly so `GovernorIdentified` has somewhere to land,
+        // and so the app's first request joins the run already open rather
+        // than opening a second beside it: one process under one governor is
+        // one execution, not two. `None` for a headless governor, where the
+        // placeholder run carries only the governor's identity and never
+        // pretends to be an execution.
+        primary_run_id: Option<String>,
     ) -> Result<()> {
         // Install ring crypto provider: safe to call multiple times.
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -752,10 +782,19 @@ impl NetworkServer {
         // action endpoint is hit. Distinct run ids are minted lazily on demand.
         let runs: Arc<Mutex<HashMap<String, Arc<Mutex<BridgeState>>>>> =
             Arc::new(Mutex::new(HashMap::new()));
-        let default_state = template.build_state(DEFAULT_RUN_ID);
+        let primary = primary_run_id
+            .clone()
+            .unwrap_or_else(|| DEFAULT_RUN_ID.to_string());
+        let default_state = if primary_run_id.is_some() {
+            template.build_state(&primary)
+        } else {
+            // No app of its own, so nothing here is an execution. Opening it
+            // with `ExecutionStarted` would report a run that never ran.
+            template.build_placeholder_state(&primary)
+        };
         runs.lock()
             .unwrap()
-            .insert(DEFAULT_RUN_ID.to_string(), default_state.clone());
+            .insert(primary.clone(), default_state.clone());
 
         // GovernorIdentified: declared once, into the default run's
         // own event stream, so it drains and forwards the same way every other
@@ -783,31 +822,57 @@ impl NetworkServer {
         // copy of the same drained lines, neither steals from the other.
         // Cloud sink: hands `(run_id, lines)` to the cli-layer forwarder, no
         // cloud code lives here. Local log: appends each line to
-        // `local_log_path`, flushed per write, same guarantee
-        // `EventWriter` (the local `nanny run` path) already gives: this is
-        // what makes `[observability] log = "file"` behave the same whether
-        // the process is local `nanny run` or `nanny run --serve`.
-        if event_sink.is_some() || local_log_path.is_some() {
+        // `local_log`, flushed per write, the same guarantee `EventWriter`
+        // gives. Whatever `[observability]` resolved to, stdout or a file,
+        // arrives here already open, so both are honoured by one code path.
+        if event_sink.is_none() && local_log.is_none() {
+            // Nothing drains, so a caller waiting for a sweep would wait for
+            // one that never comes.
+            let (lock, cv) = &*drain_done;
+            *lock.lock().unwrap_or_else(|e| e.into_inner()) = true;
+            cv.notify_all();
+        }
+        if event_sink.is_some() || local_log.is_some() {
             let drain_runs = Arc::clone(&runs);
-            let mut local_log_file = match &local_log_path {
-                Some(path) => match std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(path)
-                {
-                    Ok(f) => Some(f),
-                    Err(e) => {
-                        eprintln!(
-                            "nanny: failed to open local log file '{}': {e}",
-                            path.display()
-                        );
-                        None
-                    }
-                },
-                None => None,
-            };
+            let drain_done = Arc::clone(&drain_done);
+            let mut local_log_file = local_log;
             std::thread::spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_millis(250));
+                // Checked after the sweep, not before, so a shutdown raised
+                // during the sleep still gets its final pass.
+                let stopping = drain_shutdown.load(std::sync::atomic::Ordering::SeqCst);
+                if !stopping {
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                } else if let Some(reason) =
+                    stop_reason.lock().unwrap_or_else(|e| e.into_inner()).take()
+                {
+                    // Close every run still open, before the sweep below picks
+                    // the events up. `ExecutionStarted` opened them; this is the
+                    // other half of the bracket, and without it a governed
+                    // execution simply stops mid-log.
+                    let guard = drain_runs.lock().unwrap_or_else(|e| e.into_inner());
+                    for state in guard.values() {
+                        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                        let elapsed_ms = st.start_time.elapsed().as_millis() as u64;
+                        let tokens_spent = st.tokens_spent;
+                        // A run that reported its own reason keeps it: the
+                        // child may have posted /stop with RuleDenied or
+                        // ToolDenied before dying, and the exit status the
+                        // caller saw is only the fallback.
+                        let reason = match &st.execution {
+                            crate::ExecutionState::Stopped { reason } => reason.clone(),
+                            crate::ExecutionState::Running => reason.clone(),
+                        };
+                        crate::append_event(
+                            &mut st,
+                            nanny_core::events::event::ExecutionEvent::ExecutionStopped {
+                                ts: crate::now_ms(),
+                                reason,
+                                tokens_spent,
+                                elapsed_ms,
+                            },
+                        );
+                    }
+                }
                 let ids: Vec<String> = {
                     let guard = drain_runs.lock().unwrap();
                     guard.keys().cloned().collect()
@@ -831,6 +896,16 @@ impl NetworkServer {
                             }
                         }
                     }
+                }
+                if stopping {
+                    // The sweep above was the last one. Tell the caller it is
+                    // safe to exit, then return, which drops `event_sink` and
+                    // closes the channel the forwarder is draining, which is
+                    // how `flush_and_join` knows to finish.
+                    let (lock, cv) = &*drain_done;
+                    *lock.lock().unwrap_or_else(|e| e.into_inner()) = true;
+                    cv.notify_all();
+                    return;
                 }
             });
         }
@@ -1256,6 +1331,9 @@ mod tests {
             allowed_tools: vec!["echo".to_string()],
             per_tool_max_calls: HashMap::new(),
             tool_labels: Default::default(),
+            config_hash: "test-config".to_string(),
+            runtime_version: "0.0.0-test".to_string(),
+            start_command: None,
         }
     }
 
@@ -2032,6 +2110,9 @@ mod tests {
             allowed_tools: vec!["http_get".to_string()],
             per_tool_max_calls: HashMap::new(),
             tool_labels: Default::default(),
+            config_hash: "test-config".to_string(),
+            runtime_version: "0.0.0-test".to_string(),
+            start_command: None,
         }
     }
 
@@ -2042,6 +2123,9 @@ mod tests {
             allowed_tools: vec!["http_get".to_string()],
             per_tool_max_calls: HashMap::new(),
             tool_labels: Default::default(),
+            config_hash: "test-config".to_string(),
+            runtime_version: "0.0.0-test".to_string(),
+            start_command: None,
         }
     }
 
@@ -3154,5 +3238,42 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn every_governed_run_opens_with_execution_started() {
+        // A governed run used to emit none at all: runs are created lazily on
+        // first request, and nothing seeded them. So an execution reached the
+        // cloud with a null config hash and no record of the authority it had
+        // been granted, while a local run had carried both since 0.1.
+        let components = BridgeComponents {
+            registry: nanny_runtime::default_registry(),
+            allowed_tools: vec!["http_get".to_string()],
+            per_tool_max_calls: HashMap::new(),
+            tool_labels: [("http_get".to_string(), vec!["reads_untrusted".to_string()])]
+                .into_iter()
+                .collect(),
+            config_hash: "cafebabe".to_string(),
+            runtime_version: "9.9.9".to_string(),
+            start_command: Some("python agent.py".to_string()),
+        };
+        let template = crate::run_template_for_test(components, "tok".to_string());
+        let state = template.build_state("run-abc");
+
+        let events = { state.lock().unwrap().events.clone() };
+        let first: serde_json::Value =
+            serde_json::from_str(events.first().expect("a run opens with an event")).unwrap();
+
+        assert_eq!(first["event"], "ExecutionStarted");
+        assert_eq!(first["seq"], 0, "it is seq 0, so the log is one sequence");
+        assert_eq!(first["run_id"], "run-abc");
+        assert_eq!(first["config_hash"], "cafebabe");
+        assert_eq!(first["runtime_version"], "9.9.9");
+        assert_eq!(first["command"], "python agent.py");
+        assert_eq!(first["allowed_tools"][0], "http_get");
+        assert_eq!(
+            first["tool_labels"]["http_get"][0], "reads_untrusted",
+            "the labels are the half a rule reasons about"
+        );
     }
 }

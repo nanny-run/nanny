@@ -33,8 +33,7 @@
 //! (`X-Nanny-Session`).
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
-use std::thread::JoinHandle;
+use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 use crate::cloud::CloudEnv;
@@ -47,9 +46,6 @@ use nanny_config::API_KEY_ENV;
 const NO_SYNC_ENV: &str = "NANNY_NO_SYNC";
 
 // Match the cloud ingest caps so a batch is never rejected wholesale.
-const MAX_LINES: usize = 1000; // NDJSON lines per request
-const MAX_BODY_BYTES: usize = 256 * 1024; // 256 KB per request
-const FLUSH_INTERVAL: Duration = Duration::from_millis(250);
 
 /// A resolved forwarding target: the full ingest URL and the key that authorizes
 /// it. The URL is derived from a compiled host, never stored or user-supplied.
@@ -545,71 +541,27 @@ fn now_millis() -> u128 {
         .as_millis()
 }
 
-/// A forwarder to the cloud orchestrator. Present only when a run syncs.
-pub struct CloudSync {
-    tx: Sender<String>,
-    handle: JoinHandle<()>,
-}
-
-impl CloudSync {
-    /// Start the background forwarder for a resolved target. `None` only if the
-    /// HTTP client fails to build: callers treat `None` as "do nothing".
-    ///
-    /// `base_dir` is the app directory, used for the durable outbox. Anything
-    /// a previous run could not deliver is sent first, before this run's own
-    /// events, so an outage recovers in order.
-    pub fn start(
-        endpoint: String,
-        api_key: String,
-        session_token: &str,
-        base_dir: &Path,
-        log_path: Option<PathBuf>,
-    ) -> Option<Self> {
-        let session = session_token.to_string();
-        let client = reqwest::blocking::Client::builder()
-            .connect_timeout(Duration::from_secs(3))
-            .timeout(Duration::from_secs(10))
-            .build()
-            .ok()?;
-
-        Spool::warn_about_the_other_environment(base_dir, Environment::from_api_key(&api_key));
-        let spool = Spool::new(base_dir, &api_key).logging_to(log_path);
-        let (tx, rx) = std::sync::mpsc::channel::<String>();
-        let handle = std::thread::spawn(move || {
-            // Backfill first: on the forwarder thread, so a cloud that is still
-            // down delays nothing the agent is doing.
-            let recovered = spool.drain(&client, &endpoint, &api_key);
-            if recovered > 0 {
-                eprintln!("nanny: sync: delivered {recovered} batch(es) held from an earlier run");
-            }
-            worker(rx, client, endpoint, api_key, session, spool)
-        });
-        Some(Self { tx, handle })
-    }
-
-    /// Queue one NDJSON event line for forwarding. Non-blocking; never fails the
-    /// run (a dropped receiver just means the worker already exited).
-    pub fn enqueue(&self, line: String) {
-        let _ = self.tx.send(line);
-    }
-
-    /// Flush any buffered events and stop the worker. Bounded by the client's
-    /// request timeout, so a slow cloud can't hang `nanny run` indefinitely.
-    pub fn flush_and_join(self) {
-        drop(self.tx); // close the channel → worker flushes remaining and exits
-        let _ = self.handle.join();
-    }
-}
-
 /// Forwards a governance server's per-run events to the cloud, one ingest batch
 /// per run. Each batch's `X-Nanny-Session` is `{server_secret}:{run_id}`: a
 /// per-run value that folds in the server's secret token, so the cloud groups
 /// events per run with an unguessable, cross-org-collision-proof session (the API
-/// key is still the real auth). Fire and forget, like `CloudSync`.
-pub struct ServerForwarder;
+/// key is still the real auth).
+///
+/// Returns a handle rather than being forgotten, because a governor exits: it
+/// shuts down with the app it launched, which in development is seconds. The
+/// drain that feeds this runs on a 250ms tick, so without a flush the final
+/// batch never leaves, and the final batch is the one holding `ExecutionStopped`
+/// and the stop reason. Delivery is still best effort, but a failure now lands
+/// in the spool and is backfilled by the next run rather than disappearing.
+pub struct ServerForwarder {
+    handle: std::thread::JoinHandle<()>,
+}
 
 impl ServerForwarder {
     /// Spawn a background forwarder draining `(run_id, lines)` from the engine.
+    ///
+    /// The caller keeps the `Sender`; dropping it closes the channel, which is
+    /// what tells this thread to finish and exit. See `flush_and_join`.
     pub fn spawn(
         rx: Receiver<(String, Vec<String>)>,
         endpoint: String,
@@ -617,10 +569,10 @@ impl ServerForwarder {
         server_secret: String,
         base_dir: &Path,
         log_path: Option<PathBuf>,
-    ) {
+    ) -> Self {
         Spool::warn_about_the_other_environment(base_dir, Environment::from_api_key(&api_key));
         let spool = Spool::new(base_dir, &api_key).logging_to(log_path);
-        std::thread::spawn(move || {
+        let handle = std::thread::spawn(move || {
             let Ok(client) = reqwest::blocking::Client::builder()
                 .connect_timeout(Duration::from_secs(3))
                 .timeout(Duration::from_secs(10))
@@ -668,75 +620,21 @@ impl ServerForwarder {
                 }
             }
         });
+        Self { handle }
+    }
+
+    /// Wait for the forwarder to deliver what it has, then stop.
+    ///
+    /// The caller drops its `Sender` first; that closes the channel, the loop
+    /// above falls out of `rx.recv()`, and this waits for the thread to finish
+    /// the batch it is on. Bounded by the client's 10s request timeout, so an
+    /// unreachable cloud delays a shutdown rather than hanging it, and anything
+    /// still undelivered has already been spooled for the next run.
+    pub fn flush_and_join(self) {
+        let _ = self.handle.join();
     }
 }
 
-/// Background loop: batch lines and POST them; flush on cap, on idle tick, and
-/// once more when the channel closes.
-fn worker(
-    rx: Receiver<String>,
-    client: reqwest::blocking::Client,
-    endpoint: String,
-    api_key: String,
-    session: String,
-    spool: Spool,
-) {
-    let mut batch: Vec<String> = Vec::new();
-    let mut bytes = 0usize;
-    let mut warned = false;
-
-    let flush = |batch: &mut Vec<String>, bytes: &mut usize, warned: &mut bool| {
-        if batch.is_empty() {
-            return;
-        }
-        let body = batch.join("\n");
-        match send_batch(&client, &endpoint, &api_key, &session, &body) {
-            Delivery::Sent => {}
-            Delivery::Retryable => {
-                // Hand it to the outbox rather than dropping it. This is the
-                // whole point: a cloud outage costs latency, not history.
-                spool.store(&session, &body);
-                if !*warned {
-                    eprintln!(
-                        "nanny: sync: cloud unreachable; holding events locally and \
-                         retrying on the next run (enforcement is unaffected)"
-                    );
-                    *warned = true;
-                }
-            }
-            Delivery::Permanent(status) => {
-                if !*warned {
-                    eprintln!(
-                        "{}",
-                        dropped_notice(Dropped::RefusedLive(status), spool.log_path())
-                    );
-                    *warned = true;
-                }
-            }
-        }
-        batch.clear();
-        *bytes = 0;
-    };
-
-    loop {
-        match rx.recv_timeout(FLUSH_INTERVAL) {
-            Ok(line) => {
-                if !batch.is_empty()
-                    && (batch.len() >= MAX_LINES || bytes + line.len() + 1 > MAX_BODY_BYTES)
-                {
-                    flush(&mut batch, &mut bytes, &mut warned);
-                }
-                bytes += line.len() + 1;
-                batch.push(line);
-            }
-            Err(RecvTimeoutError::Timeout) => flush(&mut batch, &mut bytes, &mut warned),
-            Err(RecvTimeoutError::Disconnected) => {
-                flush(&mut batch, &mut bytes, &mut warned);
-                break;
-            }
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -890,7 +788,7 @@ mod tests {
         assert!(sync_status_line(Err(NoSyncReason::Flag), None).contains("--no-sync"));
     }
 
-    // ── CloudSync (the sender): mock ingest, injected endpoint ───────────
+    // ── The forwarder: mock ingest, injected endpoint ────────────────────
 
     /// One-shot HTTP server: captures the first request and returns 200.
     fn mock_ingest_server() -> (u16, mpsc::Receiver<String>) {
@@ -975,16 +873,50 @@ mod tests {
             .collect()
     }
 
+    /// Feed one batch through a `ServerForwarder` and wait for it to finish,
+    /// which is exactly what governor shutdown does. These tests were written
+    /// against `CloudSync`, the local path's forwarder; that path is gone, and
+    /// the behaviour they cover, batching, spooling and backfill, belongs to
+    /// the one forwarder that remains.
+    fn forward_one(
+        endpoint: String,
+        api_key: &str,
+        session: &str,
+        dir: &Path,
+        lines: &[&str],
+    ) {
+        let (tx, rx) = mpsc::channel();
+        let forwarder = ServerForwarder::spawn(
+            rx,
+            endpoint,
+            api_key.to_string(),
+            session.to_string(),
+            dir,
+            None,
+        );
+        // The forwarder composes `{server_secret}:{run_id}` for the session
+        // header, so the run id is part of what gets stored and asserted.
+        tx.send((
+            "r1".to_string(),
+            lines.iter().map(|l| l.to_string()).collect(),
+        ))
+        .unwrap();
+        drop(tx);
+        forwarder.flush_and_join();
+    }
+
     #[test]
     fn forwards_batched_ndjson_with_headers() {
         let (port, rx) = mock_ingest_server();
         let dir = temp_app_dir();
         let endpoint = format!("http://127.0.0.1:{port}/v1/ingest");
-        let sender = CloudSync::start(endpoint, "nny_test".to_string(), "session-abc", &dir, None)
-            .expect("sender starts");
-        sender.enqueue(r#"{"event":"ExecutionStarted"}"#.to_string());
-        sender.enqueue(r#"{"event":"ExecutionStopped"}"#.to_string());
-        sender.flush_and_join();
+        forward_one(
+            endpoint,
+            "nny_test",
+            "session-abc",
+            &dir,
+            &[r#"{"event":"ExecutionStarted"}"#, r#"{"event":"ExecutionStopped"}"#],
+        );
 
         let req = rx
             .recv_timeout(INGEST_WAIT)
@@ -1009,16 +941,14 @@ mod tests {
     #[test]
     fn unreachable_endpoint_never_panics_or_hangs() {
         let dir = temp_app_dir();
-        let sender = CloudSync::start(
+        // Returns, bounded by the connect timeout plus backoff.
+        forward_one(
             "http://127.0.0.1:1/v1/ingest".to_string(),
-            "k".to_string(),
+            "k",
             "s",
             &dir,
-            None,
-        )
-        .expect("sender starts");
-        sender.enqueue(r#"{"event":"ToolAllowed"}"#.to_string());
-        sender.flush_and_join(); // returns (bounded by connect timeout + backoff)
+            &[r#"{"event":"ToolAllowed"}"#],
+        );
     }
 
     // ── Durable outbox ────────────────────────────────────────────────────────
@@ -1029,16 +959,13 @@ mod tests {
         // clear()ed and the events were gone. A cloud blip cost real history
         // out of a log whose value is being complete.
         let dir = temp_app_dir();
-        let sender = CloudSync::start(
+        forward_one(
             "http://127.0.0.1:1/v1/ingest".to_string(),
-            "k".to_string(),
+            "k",
             "run-1",
             &dir,
-            None,
-        )
-        .expect("sender starts");
-        sender.enqueue(r#"{"event":"ExecutionStarted"}"#.to_string());
-        sender.flush_and_join();
+            &[r#"{"event":"ExecutionStarted"}"#],
+        );
 
         let held = spooled_files(&dir, "k");
         assert_eq!(
@@ -1052,8 +979,8 @@ mod tests {
             .split_once('\n')
             .expect("session on the first line");
         assert_eq!(
-            session, "run-1",
-            "the session must be stored with the batch"
+            session, "run-1:r1",
+            "the session must be stored with the batch, secret and run id both"
         );
         assert!(
             body.contains("ExecutionStarted"),
@@ -1323,21 +1250,18 @@ mod tests {
         // Switching keys back and forth (live today, sandbox tomorrow) must
         // recover cleanly: nothing spooled under one environment is ever sent
         // by a run authenticated under the other, all the way through
-        // `CloudSync::start`, not just the lower-level `Spool::drain`.
+        // the forwarder itself, not just the lower-level `Spool::drain`.
         let dir = temp_app_dir();
         Spool::new(&dir, "nny_sdbx_x").store("held-for-sandbox", r#"{"event":"Sandbox"}"#);
 
         let (port, rx_srv) = mock_ingest_server();
-        let sender = CloudSync::start(
+        forward_one(
             format!("http://127.0.0.1:{port}/v1/ingest"),
-            "nny_live_x".to_string(),
+            "nny_live_x",
             "live-session",
             &dir,
-            None,
-        )
-        .expect("sender starts");
-        sender.enqueue(r#"{"event":"LiveOnly"}"#.to_string());
-        sender.flush_and_join();
+            &[r#"{"event":"LiveOnly"}"#],
+        );
 
         let req = rx_srv
             .recv_timeout(INGEST_WAIT)
@@ -1399,15 +1323,13 @@ mod tests {
         Spool::new(&dir, "nny_k").store("previous-run", r#"{"event":"FromEarlierRun"}"#);
 
         let (port, rx_srv) = mock_ingest_server();
-        let sender = CloudSync::start(
+        forward_one(
             format!("http://127.0.0.1:{port}/v1/ingest"),
-            "nny_k".to_string(),
+            "nny_k",
             "current-run",
             &dir,
-            None,
-        )
-        .expect("sender starts");
-        sender.flush_and_join();
+            &[],
+        );
 
         let req = rx_srv
             .recv_timeout(INGEST_WAIT)
@@ -1453,4 +1375,77 @@ mod tests {
             "the per-run session must fold in the server secret:\n{req}"
         );
     }
+
+    #[test]
+    fn flush_and_join_waits_for_the_last_batch_to_be_delivered() {
+        // The governor exits when the app it launched exits, so anything still
+        // in flight dies with the process. The last batch is the one carrying
+        // ExecutionStopped and the stop reason.
+        //
+        // Asserting only that the batch arrives proves nothing: a detached
+        // forwarder still delivers it, because a test process does not exit.
+        // The property that actually saves those events is that shutdown
+        // *waits*, so this measures that it blocked.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (seen_tx, seen) = mpsc::channel();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut tmp = [0u8; 4096];
+                let n = stream.read(&mut tmp).unwrap_or(0);
+                // Answer slowly, so a shutdown that does not wait is visibly
+                // faster than one that does.
+                std::thread::sleep(Duration::from_millis(600));
+                let _ = stream.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+                let _ = seen_tx.send(String::from_utf8_lossy(&tmp[..n]).to_string());
+            }
+        });
+
+        let dir = std::env::temp_dir().join(format!("nanny-flush-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let (tx, rx) = mpsc::channel();
+        let forwarder = ServerForwarder::spawn(
+            rx,
+            format!("http://127.0.0.1:{port}/v1/ingest"),
+            "nny_sdbx_test".to_string(),
+            "server-secret".to_string(),
+            &dir,
+            None,
+        );
+        tx.send((
+            "run-last".to_string(),
+            vec![r#"{"event":"ExecutionStopped"}"#.to_string()],
+        ))
+        .unwrap();
+
+        // Exactly what governor shutdown does: close the channel, then wait.
+        let started = std::time::Instant::now();
+        drop(tx);
+        forwarder.flush_and_join();
+        let waited = started.elapsed();
+
+        assert!(
+            waited >= Duration::from_millis(400),
+            "shutdown must wait for the in-flight batch, not detach from it; \
+             returned after {waited:?}"
+        );
+
+        let body = seen
+            .recv_timeout(INGEST_WAIT)
+            .expect("the final batch must have been delivered");
+        assert!(
+            body.contains("ExecutionStopped"),
+            "the last event must be in the delivered body: {body}"
+        );
+        assert!(
+            body.contains("server-secret:run-last"),
+            "and it must carry {{server_secret}}:{{run_id}}, so the cloud can group it: {body}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
 }

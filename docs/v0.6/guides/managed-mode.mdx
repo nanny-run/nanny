@@ -28,7 +28,7 @@ Create a key in the dashboard under **Settings → API Keys**, then set it where
 
 ```bash
 export NANNY_API_KEY=nny_...
-nanny run --serve
+nanny run
 ```
 
 That is the whole setup. There is no config field, no credential file, no login command, and nothing written to disk. That is what makes it behave identically on a laptop, in CI, on a read-only filesystem, and across twenty replicas sharing one key.
@@ -82,7 +82,7 @@ This matters most with a governance server: one governor holds one key but can s
 ## Turning it off
 
 ```bash
-nanny run --serve --no-sync   # this run only
+nanny run --no-sync   # this run only
 export NANNY_NO_SYNC=1   # this machine
 ```
 

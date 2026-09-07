@@ -62,7 +62,7 @@ Always generates all six files atomically, PKI requires a CA to sign the server 
   client.key  client private key (copy to each agent machine)
 ```
 
-`nanny run --serve` reads `server.crt`, `server.key`, and `ca.crt` automatically. Agents on other machines need `client.crt`, `client.key`, and `ca.crt`.
+`nanny run` reads `server.crt`, `server.key`, and `ca.crt` automatically. Agents on other machines need `client.crt`, `client.key`, and `ca.crt`.
 
 #### Flags
 
@@ -87,7 +87,7 @@ nanny certs: generated certificate bundle in '/Users/you/.nanny/certs'
   valid until: 2027-05-01T09:00:00Z
 
 Start the server:
-  nanny run --serve
+  nanny run
 
 Cross-machine agents: copy client.crt + client.key to each agent machine
 and set NANNY_BRIDGE_CERT, NANNY_BRIDGE_KEY, NANNY_BRIDGE_CA in the env.
@@ -243,7 +243,7 @@ Delete all cert files from `~/.nanny/servers/<app_id>/certs/sandbox/`.
 nanny certs remove
 ```
 
-Prompts for confirmation before deleting. After removal, `nanny run --serve` with a non-loopback address will refuse to start until new certs are generated or imported.
+Prompts for confirmation before deleting. After removal, `nanny run` with a non-loopback address will refuse to start until new certs are generated or imported.
 
 **If no certs exist:**
 

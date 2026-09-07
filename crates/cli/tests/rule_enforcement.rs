@@ -102,6 +102,9 @@ fn start_bridge(allowed: &[&str]) -> Bridge {
         allowed_tools: allowed.iter().map(|s| s.to_string()).collect(),
         per_tool_max_calls: HashMap::new(),
         tool_labels: Default::default(),
+        config_hash: "test-config".to_string(),
+        runtime_version: "0.0.0-test".to_string(),
+        start_command: None,
     };
     Bridge::start(components, "test-run".to_string()).expect("bridge must start in tests")
 }
@@ -122,6 +125,9 @@ fn start_labelled_bridge(tools: &[(&str, &[&str])]) -> Bridge {
                 )
             })
             .collect(),
+        config_hash: "test-config".to_string(),
+        runtime_version: "0.0.0-test".to_string(),
+        start_command: None,
     };
     Bridge::start(components, "test-run".to_string()).expect("bridge must start in tests")
 }

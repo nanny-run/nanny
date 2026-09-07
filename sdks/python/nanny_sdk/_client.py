@@ -1,32 +1,29 @@
 """Bridge HTTP client.
 
-The bridge uses different transports depending on the OS and configuration:
+One transport, on every platform: TCP to the address in ``NANNY_BRIDGE_ADDR``,
+which ``nanny run`` injects into the process it launches.
 
-- **Unix (macOS/Linux):** Unix domain socket at ``/tmp/nanny-<token>.sock``.
-  The CLI injects ``NANNY_BRIDGE_SOCKET`` into the child process environment.
-- **Windows:** TCP loopback on an OS-assigned port.
-  The CLI injects ``NANNY_BRIDGE_PORT`` into the child process environment.
-- **Network (cross-process / cross-machine):** TCP + mTLS to the address in
-  ``NANNY_BRIDGE_ADDR``. The CLI auto-injects ``NANNY_BRIDGE_CERT``,
-  ``NANNY_BRIDGE_KEY``, and ``NANNY_BRIDGE_CA`` from ``~/.nanny/certs/`` when
-  ``NANNY_BRIDGE_ADDR`` is set. Cross-machine deployments set these env vars
-  manually.
+Loopback is plain HTTP; anything else requires mTLS, and the CLI injects
+``NANNY_BRIDGE_CERT``, ``NANNY_BRIDGE_KEY`` and ``NANNY_BRIDGE_CA`` alongside
+the address. Cross-machine deployments set all four themselves.
 
-``NANNY_SESSION_TOKEN`` is always injected on all platforms.
+``NANNY_SESSION_TOKEN`` is always injected.
 
-Transport priority:
-1. ``NANNY_BRIDGE_SOCKET``: Unix domain socket (macOS/Linux local)
-2. ``NANNY_BRIDGE_PORT``: TCP loopback (Windows local)
-3. ``NANNY_BRIDGE_ADDR``: TCP + mTLS (network / cross-machine)
-4. None of the above        → passthrough (all decorators are no-ops)
+There used to be three rungs here: a Unix domain socket on macOS and Linux, TCP
+loopback on Windows, and this one for anything over a network. Every SDK in
+every language had to implement all three, and the runtime had to carry two
+implementations of one enforcement surface to serve them. There is one governor
+now, so there is one way to reach it.
+
+Transport resolution:
+1. ``NANNY_BRIDGE_ADDR``: TCP, plain on loopback and mTLS anywhere else
+2. Unset → passthrough (all decorators are no-ops)
 
 All environment variables are read at call time (not import time) so tests can
 set them via ``monkeypatch`` without reloading the module.
 
-When none of the three transport env vars are set the SDK is in passthrough
-mode, every decorator is a no-op and no network calls are made. This is the
-normal state when running ``python agent.py`` directly instead of
-``nanny run agent.py``.
+Passthrough is the normal state when running ``python agent.py`` directly
+instead of under ``nanny run``.
 """
 
 from __future__ import annotations
