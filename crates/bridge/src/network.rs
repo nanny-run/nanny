@@ -1211,7 +1211,7 @@ mod tests {
 
     // Path parity ─────────────────────────────────────────────────────────────
 
-    /// Every POST path the socket dispatch in `lib.rs` answers.
+    /// Every POST path the test router in `lib.rs` answers.
     ///
     /// Read out of the source rather than maintained by hand, so the test
     /// cannot pass against a list that has drifted from the code it describes.
@@ -1269,11 +1269,12 @@ mod tests {
     /// The rules half of declared authority silently never arrived for exactly
     /// the fleet deployments most likely to be paying for it.
     ///
-    /// Asserting set *equality*, not "rules is present", is the point: the
-    /// class of bug is a path added to one transport and not the other, in
-    /// either direction, and only equality catches the next one.
+    /// Asserting set *equality* is still the point, for a narrower reason now
+    /// that the governor is the only thing serving traffic: the handler tests
+    /// in `lib.rs` route through their own table, and if the router gains a
+    /// path that table does not, those tests quietly stop covering it.
     #[test]
-    fn socket_and_network_answer_the_same_post_paths() {
+    fn the_handler_tests_route_over_the_paths_the_governor_serves() {
         let dispatch = dispatch_post_paths();
         let router = router_post_paths();
 
@@ -1285,9 +1286,9 @@ mod tests {
         assert_eq!(
             dispatch,
             router,
-            "socket dispatch and axum router disagree on POST paths.\n\
-             only in dispatch: {:?}\n\
-             only in router:   {:?}",
+            "the test router and the governor's router disagree on POST paths.\n\
+             only in the test router: {:?}\n\
+             only in the governor:    {:?}",
             dispatch.difference(&router).collect::<Vec<_>>(),
             router.difference(&dispatch).collect::<Vec<_>>(),
         );
@@ -1354,11 +1355,27 @@ mod tests {
     /// binding, but the kernel does not hand out the same ephemeral port twice
     /// in quick succession, so this is dramatically better than a fixed range.
     fn next_port() -> u16 {
-        std::net::TcpListener::bind("127.0.0.1:0")
-            .expect("the OS must be able to hand out an ephemeral port")
-            .local_addr()
-            .expect("a bound listener always has a local address")
-            .port()
+        use std::collections::HashSet;
+        static ISSUED: std::sync::Mutex<Option<HashSet<u16>>> = std::sync::Mutex::new(None);
+
+        // The kernel will hand a just-released ephemeral port to the next
+        // caller, so two tests in this process can be given the same one and
+        // race to bind it. One loses with "address already in use", which
+        // reads as flakiness. Remembering what has been issued removes that.
+        // What is left is another process taking the port between the release
+        // and the bind, which no bookkeeping here can prevent.
+        for _ in 0..64 {
+            let port = std::net::TcpListener::bind("127.0.0.1:0")
+                .expect("the OS must be able to hand out an ephemeral port")
+                .local_addr()
+                .expect("a bound listener always has a local address")
+                .port();
+            let mut guard = ISSUED.lock().unwrap_or_else(|e| e.into_inner());
+            if guard.get_or_insert_with(HashSet::new).insert(port) {
+                return port;
+            }
+        }
+        panic!("no ephemeral port left that this process has not already issued");
     }
 
     fn test_certs_dir() -> PathBuf {
@@ -1621,6 +1638,9 @@ mod tests {
 
         // Wait for the server to bind (poll instead of fixed sleep).
         let port = wait_for_bound_port(&state_dir);
+        // The address file lands before the listener accepts; under a full
+        // parallel run that gap can outlast a client timeout.
+        wait_for_port(port);
 
         // Connect with valid client cert
         let ca_pem = std::fs::read(&ca).unwrap();
@@ -1691,6 +1711,9 @@ mod tests {
             .ok();
         });
         let port = wait_for_bound_port(&state_dir);
+        // The address file lands before the listener accepts; under a full
+        // parallel run that gap can outlast a client timeout.
+        wait_for_port(port);
 
         let ca_pem = std::fs::read(&ca).unwrap();
         let ca_cert = reqwest::Certificate::from_pem(&ca_pem).unwrap();
@@ -1772,6 +1795,9 @@ mod tests {
             .ok();
         });
         let port = wait_for_bound_port(&state_dir);
+        // The address file lands before the listener accepts; under a full
+        // parallel run that gap can outlast a client timeout.
+        wait_for_port(port);
 
         let ca_pem = std::fs::read(&ca).unwrap();
         let ca_cert = reqwest::Certificate::from_pem(&ca_pem).unwrap();
@@ -1997,6 +2023,9 @@ mod tests {
             .ok();
         });
         let port = wait_for_bound_port(&state_dir);
+        // The address file lands before the listener accepts; under a full
+        // parallel run that gap can outlast a client timeout.
+        wait_for_port(port);
 
         // Connect WITHOUT a client cert: TLS handshake must fail
         let ca_pem = std::fs::read(&ca).unwrap();
@@ -2494,6 +2523,9 @@ mod tests {
             .ok();
         });
         let port = wait_for_bound_port(&state_dir);
+        // The address file lands before the listener accepts; under a full
+        // parallel run that gap can outlast a client timeout.
+        wait_for_port(port);
 
         // Build a client that trusts CA-A but presents a cert signed by CA-B.
         let ca_pem_a = std::fs::read(dir_a.join("ca.crt")).unwrap();
@@ -2535,10 +2567,13 @@ mod tests {
         // the TLS layer does not bypass the session-token gate.
         let dir = test_certs_dir();
         gen_certs_for_test(&dir);
-        let port = next_port();
         let state_dir = test_state_dir();
-        let addr: SocketAddr = format!("0.0.0.0:{port}").parse().unwrap();
-        let correct_token = format!("correct-{port}");
+        // Port 0: the kernel picks and the server publishes what it bound, read
+        // back below. Reserving a port here first and binding it a moment later
+        // leaves a window another test process can take it in, which is what
+        // made this test look flaky.
+        let addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
+        let correct_token = format!("correct-{}", std::process::id());
 
         let cert = dir.join("server.crt");
         let key = dir.join("server.key");
@@ -2559,6 +2594,13 @@ mod tests {
             .ok();
         });
         let port = wait_for_bound_port(&state_dir);
+        // The address file lands before the listener accepts; under a full
+        // parallel run that gap can outlast a client timeout.
+        wait_for_port(port);
+        // The address file is written before the listener accepts, and under a
+        // full parallel run that gap is long enough to outlast the client
+        // timeout. Wait for the socket, not just for the file.
+        wait_for_port(port);
 
         // Valid client cert: TLS succeeds.
         let client = make_mtls_client(&dir, port);
