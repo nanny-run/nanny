@@ -9,6 +9,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **One transport, not three.** Both SDKs resolved a bridge through a ladder: a
+  Unix socket on macOS and Linux, a TCP port on Windows, and an address for
+  anything over a network. Every SDK in every language had to implement all
+  three, and the runtime carried two servers to answer them.
+  `NANNY_BRIDGE_ADDR` is the transport now, plain HTTP on loopback and mTLS
+  anywhere else, and its absence is what passthrough means.
+  `NANNY_BRIDGE_SOCKET` and `NANNY_BRIDGE_PORT` are gone.
+
 - **`nanny run` is the governor. `--serve` is gone.** One shape: it brings up a
   governor and runs `[start].cmd` underneath it, on a laptop and in a container
   alike. On loopback that needs no certificates and no setup, so there was
