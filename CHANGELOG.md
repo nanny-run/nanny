@@ -23,6 +23,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   nothing else. Your app's stdout still passes through, so a consumer wanting
   only events filters for lines beginning with a brace.
 
+- **The local transport is gone.** `Bridge` listened on a Unix socket, or a TCP
+  port on Windows, and parsed HTTP off it by hand. The governor is what an app
+  talks to now, so nothing called it. `tiny_http` goes with it, its only user
+  having been the Windows listener.
+
 - **One transport, not three.** Both SDKs resolved a bridge through a ladder: a
   Unix socket on macOS and Linux, a TCP port on Windows, and an address for
   anything over a network. Every SDK in every language had to implement all
