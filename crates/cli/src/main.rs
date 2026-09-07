@@ -1,7 +1,6 @@
 // Nanny CLI: the only surface humans touch.
 mod cloud;
 mod commands;
-mod events;
 mod identity;
 mod runtime;
 mod sync;
@@ -15,12 +14,9 @@ mod sync;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use nanny_bridge::{Bridge, BridgeAddress, ExecutionState};
-use nanny_core::events::event::{now_ms, ExecutionEvent};
 use std::io::Write;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 // ── CLI shape ─────────────────────────────────────────────────────────────────
 

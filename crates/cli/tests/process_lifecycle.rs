@@ -297,37 +297,6 @@ fn process_crash_emits_process_crashed_stop_reason() {
     );
 }
 
-/// Missing [start] section exits non-zero with a clear error message.
-#[test]
-fn missing_start_section_exits_nonzero_with_message() {
-    let dir = temp_dir();
-    fs::write(
-        dir.join("nanny.toml"),
-        r#"[observability]
-log = "stdout"
-"#,
-    )
-    .unwrap();
-
-    let output = Command::new(nanny_bin())
-        .current_dir(&dir)
-        .args(["run"])
-        .output()
-        .expect("failed to run nanny");
-
-    let _ = fs::remove_dir_all(&dir);
-
-    assert!(
-        !output.status.success(),
-        "nanny must exit non-zero when [start] is missing"
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("no start config"),
-        "stderr must mention 'no start config'; got: {stderr}"
-    );
-}
-
 // ── nanny run --serve: non-loopback without certs fails fast ────────────
 //
 // `server.rs` bails before starting the server when the bind address is

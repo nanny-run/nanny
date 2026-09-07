@@ -33,8 +33,7 @@
 //! (`X-Nanny-Session`).
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
-use std::thread::JoinHandle;
+use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 use crate::cloud::CloudEnv;
