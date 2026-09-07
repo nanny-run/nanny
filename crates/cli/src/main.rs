@@ -305,10 +305,10 @@ fn cmd_init() -> Result<()> {
         }
     }
 
-    println!();
+    eprintln!();
     println!("Set [start] cmd to how you normally launch your agent, then:");
-    println!("    nanny run");
-    println!();
+    eprintln!("    nanny run");
+    eprintln!();
     println!("Works with any language, Python, Rust, Go, Node, or any compiled binary.");
 
     Ok(())
@@ -492,9 +492,9 @@ fn cmd_run_joined(app_id: &str, extra_args: Vec<String>) -> Result<()> {
 }
 
 fn cmd_run_via_network_server(command: Vec<String>, server: NetworkServerInfo) -> Result<()> {
-    println!("nanny: network server detected at {}", server.addr);
-    println!("nanny: governance enforced remotely, tool permission and rules apply");
-    println!();
+    eprintln!("nanny: network server detected at {}", server.addr);
+    eprintln!("nanny: governance enforced remotely, tool permission and rules apply");
+    eprintln!();
 
     let (mut cmd, run_id) = build_governed_child(command, &server)?;
 

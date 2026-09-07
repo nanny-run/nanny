@@ -12,7 +12,7 @@ pub mod pack;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use thiserror::Error;
 
 // ── Error type ────────────────────────────────────────────────────────────────
@@ -60,10 +60,6 @@ pub struct NannyConfig {
     /// Tool permission policy.
     #[serde(default)]
     pub tools: ToolsConfig,
-
-    /// Event log output settings.
-    #[serde(default)]
-    pub observability: ObservabilityConfig,
 
     /// Installed rule packs.
     #[serde(default)]
@@ -221,119 +217,6 @@ impl ToolConfig {
             .map(|(_, name)| *name)
             .collect()
     }
-}
-
-// ── ObservabilityConfig ───────────────────────────────────────────────────────
-
-/// Controls where the structured event log is written.
-///
-/// This log belongs to whoever runs the agent, not to Nanny. It exists so an
-/// operator can pipe events into their own observability stack; Nanny writes it
-/// and reads it back nowhere. Pipe stdout to your own storage if persistence is
-/// required in "stdout" mode.
-///
-/// It is **not** the path to the cloud. Forwarding reads events from the engine
-/// directly, and `Spool` holds anything undelivered until it can be retried, so
-/// a run syncs identically whether this is set to "file" or "stdout".
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ObservabilityConfig {
-    /// Where to write the NDJSON event log.
-    #[serde(default)]
-    pub log: LogTarget,
-
-    /// Optional override for the log's name when log = "file". Defaults to
-    /// "log" if not set. A bare name only: no extension, no path
-    /// separators: Nanny always appends `.ndjson` and always owns the
-    /// directory (`.nanny/logs/`, created automatically). See
-    /// `resolve_log_path`.
-    pub file: Option<String>,
-}
-
-impl Default for ObservabilityConfig {
-    fn default() -> Self {
-        Self {
-            log: LogTarget::Stdout,
-            file: None,
-        }
-    }
-}
-
-impl ObservabilityConfig {
-    /// The name used when `file` is not set, before `.ndjson` is appended.
-    pub const DEFAULT_NAME: &'static str = "log";
-
-    /// Resolve this config into an actual log file path, anchored under
-    /// `base_dir` (the directory nanny.toml lives in). Returns `None` for
-    /// `LogTarget::Stdout`.
-    ///
-    /// The directory is always `base_dir/.nanny/logs/`: never configurable,
-    /// created here if it doesn't exist yet, exactly like `.nanny/servers/`
-    /// already auto-creates itself for governor state. `file`, if set, must
-    /// be a bare name: no path separators (the directory isn't the
-    /// developer's to choose) and no `.` (the `.ndjson` extension is always
-    /// appended by Nanny, never spelled out in config).
-    pub fn resolve_log_path(&self, base_dir: &Path) -> Result<Option<PathBuf>, ConfigError> {
-        match self.log {
-            LogTarget::Stdout => Ok(None),
-            LogTarget::File => {
-                let name = self.file.as_deref().unwrap_or(Self::DEFAULT_NAME);
-                if name.contains('/') || name.contains('\\') {
-                    return Err(ConfigError::Parse(format!(
-                        "observability.file = '{name}' must be a bare name, not a path, \
-                         the directory is always .nanny/logs/, owned by nanny"
-                    )));
-                }
-                if name.contains('.') {
-                    return Err(ConfigError::Parse(format!(
-                        "observability.file = '{name}' must not include an extension, \
-                         nanny always appends .ndjson, e.g. file = \"events\""
-                    )));
-                }
-                let dir = base_dir.join(".nanny").join("logs");
-                std::fs::create_dir_all(&dir)?;
-                ensure_logs_gitignored(base_dir);
-                Ok(Some(dir.join(format!("{name}.ndjson"))))
-            }
-        }
-    }
-}
-
-/// Best-effort: append `.nanny/logs/` to `.gitignore` if it isn't already
-/// covered. Never fails the caller: a missed gitignore entry is a nudge,
-/// not a hard requirement. These are audit-trail logs, not source: they
-/// belong on disk (where they are also the durable buffer that lets a run
-/// back-sync history to Cloud after an outage) but never in git.
-fn ensure_logs_gitignored(base_dir: &Path) {
-    const GITIGNORE_LINE: &str = ".nanny/logs/";
-    let path = base_dir.join(".gitignore");
-    let existing = std::fs::read_to_string(&path).unwrap_or_default();
-    let already_covered = existing.lines().any(|l| {
-        let t = l.trim();
-        t == GITIGNORE_LINE || t == ".nanny/logs" || t == ".nanny/" || t == ".nanny"
-    });
-    if already_covered {
-        return;
-    }
-    let mut updated = existing;
-    if !updated.is_empty() && !updated.ends_with('\n') {
-        updated.push('\n');
-    }
-    updated.push_str(GITIGNORE_LINE);
-    updated.push('\n');
-    let _ = std::fs::write(&path, updated);
-}
-
-/// Where the event log is written.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum LogTarget {
-    /// Write events to stdout as NDJSON. Default.
-    #[default]
-    Stdout,
-
-    /// Write events to a file under `.nanny/logs/`. See
-    /// `ObservabilityConfig::resolve_log_path`.
-    File,
 }
 
 // ── Cloud sync ─────────────────────────────────────────────────────────────────
@@ -553,14 +436,6 @@ allowed = ["http_get"]
 # max_calls       = 10
 # reads_untrusted = true
 
-[observability]
-# Where to write the structured NDJSON event log.
-# "stdout", stream events to the terminal in real time (default).
-# "file"  , write events to .nanny/logs/log.ndjson (auto-created).
-log = "stdout"
-
-# Uncomment to write events to a file instead:
-# log = "file"
 
 # Optional, only set this if you want a name other than the default
 # ("log"). A bare name, no extension: nanny always appends .ndjson, and
@@ -587,8 +462,6 @@ max_calls = 10
 [tools.send_email]
 max_calls = 2
 
-[observability]
-log = "stdout"
 "#
     }
 
@@ -711,18 +584,7 @@ reads_untrused = true
         assert_eq!(config.tools.per_tool["send_email"].max_calls, Some(2));
     }
 
-    #[test]
-    fn observability_defaults_to_stdout() {
-        let config: NannyConfig = toml::from_str(
-            r#"
-"#,
-        )
-        .expect("must parse");
-
-        assert_eq!(config.observability.log, LogTarget::Stdout);
-        assert!(config.observability.file.is_none());
-    }
-
+    
     #[test]
     fn a_run_id_is_typed_and_prefix_addressable() {
         let id = new_run_id();
@@ -828,75 +690,10 @@ reads_untrused = true
         assert!(resolve_session_token(Some(&"a".repeat(MIN_SESSION_TOKEN_LEN - 1))).is_err());
     }
 
-    #[test]
-    fn resolve_log_path_defaults_to_log_ndjson_under_nanny_logs() {
-        let dir = std::env::temp_dir().join("nanny_test_resolve_default");
-        let _ = std::fs::remove_dir_all(&dir);
 
-        let config = ObservabilityConfig {
-            log: LogTarget::File,
-            file: None,
-        };
-        let path = config.resolve_log_path(&dir).unwrap().unwrap();
-        assert_eq!(path, dir.join(".nanny").join("logs").join("log.ndjson"));
-        assert!(
-            dir.join(".nanny").join("logs").is_dir(),
-            "directory must be auto-created"
-        );
 
-        let _ = std::fs::remove_dir_all(&dir);
-    }
 
-    #[test]
-    fn resolve_log_path_honors_name_override_and_appends_ndjson() {
-        let dir = std::env::temp_dir().join("nanny_test_resolve_override");
-        let _ = std::fs::remove_dir_all(&dir);
 
-        let config = ObservabilityConfig {
-            log: LogTarget::File,
-            file: Some("events".to_string()),
-        };
-        let path = config.resolve_log_path(&dir).unwrap().unwrap();
-        assert_eq!(path, dir.join(".nanny").join("logs").join("events.ndjson"));
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn resolve_log_path_rejects_path_separators_in_name() {
-        let dir = std::env::temp_dir().join("nanny_test_resolve_reject_sep");
-        let config = ObservabilityConfig {
-            log: LogTarget::File,
-            file: Some("sub/dir".to_string()),
-        };
-        assert!(
-            config.resolve_log_path(&dir).is_err(),
-            "a name with a separator must be rejected"
-        );
-    }
-
-    #[test]
-    fn resolve_log_path_rejects_an_extension_in_name() {
-        let dir = std::env::temp_dir().join("nanny_test_resolve_reject_ext");
-        let config = ObservabilityConfig {
-            log: LogTarget::File,
-            file: Some("events.ndjson".to_string()),
-        };
-        assert!(
-            config.resolve_log_path(&dir).is_err(),
-            "a name with an extension must be rejected, nanny always appends .ndjson itself"
-        );
-    }
-
-    #[test]
-    fn resolve_log_path_is_none_for_stdout() {
-        let dir = std::env::temp_dir().join("nanny_test_resolve_stdout");
-        let config = ObservabilityConfig {
-            log: LogTarget::Stdout,
-            file: None,
-        };
-        assert_eq!(config.resolve_log_path(&dir).unwrap(), None);
-    }
 
     #[test]
     fn start_section_is_parsed() {

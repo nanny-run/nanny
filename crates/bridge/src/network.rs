@@ -112,7 +112,7 @@ fn bind_with_fallforward(requested: SocketAddr) -> Result<std::net::TcpListener>
                     .set_nonblocking(true)
                     .context("failed to set the listener non-blocking")?;
                 if attempt > 0 {
-                    println!(
+                    eprintln!(
                         "nanny: port {} was in use, listening on {} instead",
                         requested.port(),
                         addr.port()
@@ -990,34 +990,34 @@ impl NetworkServer {
             format!("{} (+{} more accepted)", token_fingerprint(&token), tokens.len() - 1)
         };
         if addr.ip().is_loopback() {
-            println!("nanny: governance server started");
-            println!("  address      : {addr}");
-            println!("  session token: {accepted}");
+            eprintln!("nanny: governance server started");
+            eprintln!("  address      : {addr}");
+            eprintln!("  session token: {accepted}");
             if state_dir_ok {
-                println!("  token file   : {}", token_file.display());
+                eprintln!("  token file   : {}", token_file.display());
             }
             if interactive {
-                println!();
-                println!("Join with: nanny run --join=<this app's id>  (see .nanny/app.json)");
+                eprintln!();
+                eprintln!("Join with: nanny run --join=<this app's id>  (see .nanny/app.json)");
             }
         } else {
-            println!("nanny: governance server started");
-            println!("  address      : {addr}");
-            println!("  session token: {accepted}");
-            println!("  token file   : {}", token_file.display());
-            println!();
-            println!("Join with: nanny run --join=<this app's id>  (see .nanny/app.json)");
-            println!();
-            println!("Cross-machine agents, set these in your deployment config:");
-            println!("  NANNY_BRIDGE_ADDR={addr}");
-            println!("  NANNY_SESSION_TOKEN=$(cat {})", token_file.display());
-            println!(
+            eprintln!("nanny: governance server started");
+            eprintln!("  address      : {addr}");
+            eprintln!("  session token: {accepted}");
+            eprintln!("  token file   : {}", token_file.display());
+            eprintln!();
+            eprintln!("Join with: nanny run --join=<this app's id>  (see .nanny/app.json)");
+            eprintln!();
+            eprintln!("Cross-machine agents, set these in your deployment config:");
+            eprintln!("  NANNY_BRIDGE_ADDR={addr}");
+            eprintln!("  NANNY_SESSION_TOKEN=$(cat {})", token_file.display());
+            eprintln!(
                 "  NANNY_BRIDGE_CERT, NANNY_BRIDGE_KEY, NANNY_BRIDGE_CA  (from ~/.nanny/certs/)"
             );
         }
         if interactive {
-            println!();
-            println!("Press CTRL-C to stop.");
+            eprintln!();
+            eprintln!("Press CTRL-C to stop.");
         }
 
         let rt = tokio::runtime::Builder::new_multi_thread()

@@ -52,20 +52,29 @@ log = "stdout"
 }
 
 /// Config that logs to a file rather than stdout, so a test can read the
-/// append-only log back off disk the way an operator would.
-fn write_config_logging_to_file(dir: &Path, cmd: &str) {
-    let toml = format!(
-        r#"[start]
-cmd = "{cmd}"
-
-[tools]
-allowed = ["http_get"]
-
-[observability]
-log = "file"
-"#
-    );
-    fs::write(dir.join("nanny.toml"), toml).unwrap();
+/// Run `nanny run` twice in `dir` and return every NDJSON line both runs
+/// wrote to stdout, in order.
+///
+/// These tests used to read `.nanny/logs/log.ndjson`, written by the
+/// `log = "file"` target. There is one target now, stdout, so the test
+/// collects what a shell redirection would have collected.
+fn run_twice_collecting_events(dir: &Path) -> Vec<String> {
+    let mut lines = Vec::new();
+    for _ in 0..2 {
+        let out = Command::new(nanny_bin())
+            .current_dir(dir)
+            .args(["run", "--addr", "127.0.0.1:0"])
+            .output()
+            .expect("nanny run must execute");
+        assert!(out.status.success(), "run must exit cleanly");
+        lines.extend(
+            String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .filter(|l| l.trim_start().starts_with('{'))
+                .map(str::to_string),
+        );
+    }
+    lines
 }
 
 /// Write `.nanny/app.json` directly (bypassing `nanny init`, which also wants
@@ -148,7 +157,7 @@ fn fast_exit_completes_cleanly() {
 
     let output = Command::new(nanny_bin())
         .current_dir(&dir)
-        .args(["run"])
+        .args(["run", "--addr", "127.0.0.1:0"])
         .output()
         .expect("failed to run nanny");
 
@@ -162,7 +171,11 @@ fn fast_exit_completes_cleanly() {
     );
 
     // stdout must contain ExecutionStarted and ExecutionStopped NDJSON lines.
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(
         stdout.contains("ExecutionStarted"),
         "stdout must have ExecutionStarted event"
@@ -190,13 +203,17 @@ fn execution_stopped_is_always_last_line() {
 
     let output = Command::new(nanny_bin())
         .current_dir(&dir)
-        .args(["run"])
+        .args(["run", "--addr", "127.0.0.1:0"])
         .output()
         .expect("failed to run nanny");
 
     let _ = fs::remove_dir_all(&dir);
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     let lines: Vec<&str> = stdout
         .lines()
         .filter(|l| l.trim_start().starts_with('{'))
@@ -235,13 +252,17 @@ fn execution_stopped_has_accounting_fields() {
 
     let output = Command::new(nanny_bin())
         .current_dir(&dir)
-        .args(["run"])
+        .args(["run", "--addr", "127.0.0.1:0"])
         .output()
         .expect("failed to run nanny");
 
     let _ = fs::remove_dir_all(&dir);
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stopped_line = stdout
         .lines()
         .filter(|l| l.trim_start().starts_with('{'))
@@ -273,7 +294,7 @@ fn process_crash_emits_process_crashed_stop_reason() {
 
     let output = Command::new(nanny_bin())
         .current_dir(&dir)
-        .args(["run"])
+        .args(["run", "--addr", "127.0.0.1:0"])
         .output()
         .expect("failed to run nanny");
 
@@ -284,7 +305,11 @@ fn process_crash_emits_process_crashed_stop_reason() {
         "nanny must exit non-zero when the child crashes"
     );
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(
         stdout.contains("ProcessCrashed"),
         "ExecutionStopped must carry stop_reason=ProcessCrashed; stdout: {stdout}"
@@ -479,7 +504,11 @@ log = "stdout"
         String::from_utf8_lossy(&output.stderr),
     );
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(
         stdout.contains("network server detected at"),
         "nanny run --join must print 'network server detected at' when the server is reachable\ngot: {stdout}"
@@ -534,6 +563,8 @@ cmd = "echo joined-work"
         .current_dir(&server_dir)
         .env("NANNY_HOME", &home)
         .args(["run", "--addr", "127.0.0.1:0"])
+        // Its events go to its own stdout, which this test reads back.
+        .stdout(std::process::Stdio::piped())
         .spawn()
         .expect("governance server must spawn");
 
@@ -550,19 +581,14 @@ cmd = "echo joined-work"
         .output()
         .expect("nanny run --join must complete");
 
-    // The governor drains events on a 250 ms tick, so give it room to flush.
-    let log_path = server_dir.join(".nanny").join("logs").join("log.ndjson");
-    let mut events = String::new();
-    for _ in 0..40 {
-        events = fs::read_to_string(&log_path).unwrap_or_default();
-        if events.contains("AppIdentified") {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-
+    // The governor drains events on a 250 ms tick and writes them to its own
+    // stdout, so give it room to flush before taking it down and reading what
+    // it wrote. Reading a log file here used to do this; there is no file
+    // target any more, and the governor's stdout is where its events go.
+    std::thread::sleep(std::time::Duration::from_millis(1500));
     let _ = server.kill();
-    let _ = server.wait();
+    let server_out = server.wait_with_output().expect("governor must be reaped");
+    let events = String::from_utf8_lossy(&server_out.stdout).to_string();
     let _ = fs::remove_dir_all(&client_dir);
     let _ = fs::remove_dir_all(&server_dir);
     let _ = fs::remove_dir_all(&home);
@@ -687,6 +713,7 @@ log = "file"
         .env("NANNY_HOME", &home)
         .args(["run", "--addr", "127.0.0.1:0"])
         .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("governor must spawn");
 
@@ -737,7 +764,13 @@ cmd = "echo JOINED-WHILE-SERVING"
         "--serve must launch [start].cmd within 10 s of becoming ready"
     );
 
-    let server_stdout = String::from_utf8_lossy(&server_out.stdout);
+    // stdout carries the app's output and the NDJSON; stderr carries nanny's
+    // own lines. Both matter here, so both are read.
+    let server_stdout = format!(
+        "{}{}",
+        String::from_utf8_lossy(&server_out.stdout),
+        String::from_utf8_lossy(&server_out.stderr)
+    );
     assert!(
         server_stdout.contains("SERVE-RAN-THE-APP"),
         "--serve must run [start].cmd, not ignore it\ngot: {server_stdout}"
@@ -757,7 +790,11 @@ cmd = "echo JOINED-WHILE-SERVING"
          got: {server_stdout}"
     );
 
-    let joined_stdout = String::from_utf8_lossy(&joined.stdout);
+    let joined_stdout = format!(
+        "{}{}",
+        String::from_utf8_lossy(&joined.stdout),
+        String::from_utf8_lossy(&joined.stderr)
+    );
     assert!(
         joined.status.success() && joined_stdout.contains("JOINED-WHILE-SERVING"),
         "a governor running its own app must still accept joins\nstdout: {joined_stdout}\nstderr: {}",
@@ -779,6 +816,7 @@ fn serve_without_a_start_section_stays_headless() {
         .env("NANNY_HOME", &home)
         .args(["run", "--addr", "127.0.0.1:0"])
         .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("governor must spawn");
 
@@ -790,7 +828,11 @@ fn serve_without_a_start_section_stays_headless() {
     let _ = fs::remove_dir_all(&home);
 
     assert!(ready, "a headless governor must still come up");
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stdout = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(
         stdout.contains("running headless"),
         "no [start] must mean headless, and say so\ngot: {stdout}"
@@ -812,20 +854,10 @@ fn serve_without_a_start_section_stays_headless() {
 #[test]
 fn two_runs_sharing_one_log_stay_attributable() {
     let dir = temp_dir();
-    write_config_logging_to_file(&dir, "echo hello");
+    write_config(&dir, "echo hello");
 
-    for _ in 0..2 {
-        let status = Command::new(nanny_bin())
-            .current_dir(&dir)
-            .args(["run"])
-            .current_dir(&dir)
-            .status()
-            .expect("nanny run must execute");
-        assert!(status.success(), "run must exit cleanly");
-    }
-
-    let log = fs::read_to_string(dir.join(".nanny/logs/log.ndjson"))
-        .expect("file logging must produce a log");
+    let log = run_twice_collecting_events(&dir).join("
+");
     let lines: Vec<serde_json::Value> = log
         .lines()
         .filter(|l| !l.trim().is_empty())
@@ -875,18 +907,21 @@ fn two_runs_sharing_one_log_stay_attributable() {
 #[test]
 fn a_run_without_a_stop_event_is_still_attributable() {
     let dir = temp_dir();
-    write_config_logging_to_file(&dir, "echo hello");
+    write_config(&dir, "echo hello");
 
-    let status = Command::new(nanny_bin())
+    let out = Command::new(nanny_bin())
         .current_dir(&dir)
-            .args(["run"])
-        .current_dir(&dir)
-        .status()
+        .args(["run", "--addr", "127.0.0.1:0"])
+        .output()
         .expect("nanny run must execute");
-    assert!(status.success());
+    assert!(out.status.success());
 
-    let path = dir.join(".nanny/logs/log.ndjson");
-    let log = fs::read_to_string(&path).expect("log exists");
+    let log: String = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| l.trim_start().starts_with('{'))
+        .collect::<Vec<_>>()
+        .join("
+");
 
     // Drop the trailing ExecutionStopped, simulating a crashed run.
     let kept: Vec<&str> = log.lines().filter(|l| !l.trim().is_empty()).collect();
@@ -907,18 +942,10 @@ fn a_run_without_a_stop_event_is_still_attributable() {
 #[test]
 fn execution_started_carries_a_stable_config_hash() {
     let dir = temp_dir();
-    write_config_logging_to_file(&dir, "echo hello");
+    write_config(&dir, "echo hello");
 
-    for _ in 0..2 {
-        Command::new(nanny_bin())
-            .current_dir(&dir)
-            .args(["run"])
-            .current_dir(&dir)
-            .status()
-            .expect("nanny run must execute");
-    }
-
-    let log = fs::read_to_string(dir.join(".nanny/logs/log.ndjson")).unwrap();
+    let log = run_twice_collecting_events(&dir).join("
+");
     let hashes: Vec<String> = log
         .lines()
         .filter(|l| !l.trim().is_empty())
@@ -944,16 +971,19 @@ fn execution_started_carries_a_stable_config_hash() {
 #[test]
 fn execution_started_carries_the_runtime_version() {
     let dir = temp_dir();
-    write_config_logging_to_file(&dir, "echo hello");
+    write_config(&dir, "echo hello");
 
-    Command::new(nanny_bin())
+    let out = Command::new(nanny_bin())
         .current_dir(&dir)
-            .args(["run"])
-        .current_dir(&dir)
-        .status()
+        .args(["run", "--addr", "127.0.0.1:0"])
+        .output()
         .expect("nanny run must execute");
 
-    let log = fs::read_to_string(dir.join(".nanny/logs/log.ndjson")).unwrap();
+    let log: String = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| l.trim_start().starts_with('{'))
+        .collect::<Vec<_>>()
+        .join("\n");
     let started = log
         .lines()
         .filter(|l| !l.trim().is_empty())
@@ -999,7 +1029,7 @@ log = "stdout"
 
     let out = Command::new(nanny_bin())
         .current_dir(&dir)
-            .args(["run"])
+            .args(["run", "--addr", "127.0.0.1:0"])
         .current_dir(&dir)
         .output()
         .expect("nanny run must execute");
@@ -1035,7 +1065,7 @@ log = "stdout"
 
     let out = Command::new(nanny_bin())
         .current_dir(&dir)
-            .args(["run"])
+            .args(["run", "--addr", "127.0.0.1:0"])
         .current_dir(&dir)
         .output()
         .expect("nanny run must execute");
@@ -1076,7 +1106,7 @@ log = "stdout"
 
     let out = Command::new(nanny_bin())
         .current_dir(&dir)
-            .args(["run"])
+            .args(["run", "--addr", "127.0.0.1:0"])
         .current_dir(&dir)
         .output()
         .expect("nanny run must execute");
@@ -1086,7 +1116,11 @@ log = "stdout"
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stdout = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(
         stdout.contains("nanny:recommended@1.0.0"),
         "the run must name its packs"
@@ -1153,7 +1187,7 @@ fn rules_add_vendors_the_pack_and_declares_it() {
     // The run now starts, because the declared pack is present.
     let run = Command::new(nanny_bin())
         .current_dir(&dir)
-            .args(["run"])
+            .args(["run", "--addr", "127.0.0.1:0"])
         .current_dir(&dir)
         .output()
         .unwrap();

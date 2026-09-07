@@ -213,7 +213,7 @@ pub fn cmd_server_start(
     ) {
         Ok(Some(configured)) => {
             let plural = if configured.len() == 1 { "" } else { "s" };
-            println!(
+            eprintln!(
                 "nanny: {} session token{plural} taken from {}",
                 configured.len(),
                 nanny_config::SESSION_TOKEN_ENV
@@ -224,7 +224,7 @@ pub fn cmd_server_start(
         Err(message) => anyhow::bail!(message),
     };
     let target = crate::sync::resolve_sync(env, no_sync);
-    println!(
+    eprintln!(
         "{}",
         crate::sync::sync_status_line(target.as_ref().map_err(|e| *e), Some(&app.name))
     );
@@ -253,26 +253,17 @@ pub fn cmd_server_start(
     // Resolved before the forwarder is spawned so a dropped batch can name the
     // file its events also went to. `None` here is the honest answer under
     // `log = "stdout"`, which is a deliberate no-op for `--serve` (see below).
-    let local_log_path = config.observability.resolve_log_path(&cwd)?;
-
-    // The same sink `EventWriter::from_config` opens for a local run: stdout
-    // when `[observability] log` is the default, the resolved file otherwise.
-    // Opened here rather than resolved to a path, because stdout has no path
-    // and the governor writing nowhere under the default config would mean the
-    // local event stream simply vanishes for anyone who never set
-    // `log = "file"`.
-    let local_log_sink: Option<Box<dyn std::io::Write + Send>> = match &local_log_path {
-        None => Some(Box::new(std::io::stdout())),
-        Some(path) => match std::fs::OpenOptions::new().create(true).append(true).open(path) {
-            Ok(file) => Some(Box::new(file)),
-            Err(e) => {
-                // Loud, then continue: a governor that refuses to start because
-                // a log file could not be opened takes the app down with it.
-                eprintln!("nanny: cannot open the event log '{}' ({e})", path.display());
-                None
-            }
-        },
-    };
+    // Events go to stdout, always, and nowhere else. Redirect them wherever
+    // you want them: `nanny run > events.ndjson` for a file, or nothing at all
+    // in a container, where the runtime already collects stdout and every log
+    // shipper reads it from there.
+    //
+    // There used to be a second target, `log = "file"`, which wrote to a path
+    // nanny chose and refused to write anywhere else. That is the one place a
+    // deployment cannot use: inside the image, wiped on rebuild, invisible to
+    // a mounted volume. Redirection does strictly more, so there is one target
+    // now rather than two that could disagree.
+    let local_log_sink: Option<Box<dyn std::io::Write + Send>> = Some(Box::new(std::io::stdout()));
 
     // Raised once the governed app has exited, so the drain thread makes a
     // final sweep instead of the process dying between its 250ms ticks.
@@ -301,7 +292,7 @@ pub fn cmd_server_start(
                 .cloned()
                 .expect("resolve_session_token never yields an empty set"),
             &cwd,
-            local_log_path.clone(),
+            None,
         ));
         tx
     });
@@ -318,13 +309,13 @@ pub fn cmd_server_start(
     // forwarder, so the same value describes both the log and the outbox.
 
     if ephemeral {
-        println!(
+        eprintln!(
             "nanny: name ({}), no app identity (run `nanny init` to make this \
              governor joinable and give its runs a permanent id)",
             app.name
         );
     } else {
-        println!("nanny: name ({}), appId ({})", app.name, app.app_id);
+        eprintln!("nanny: name ({}), appId ({})", app.name, app.app_id);
     }
 
     // Does this governor also have an app of its own to run?
@@ -382,7 +373,7 @@ pub fn cmd_server_start(
         // ── Headless governor ────────────────────────────────────────────────
         // Blocking: returns only when the server shuts down (CTRL-C/SIGTERM).
         None => {
-            println!("nanny: no [start] in nanny.toml, running headless. Join it with --join");
+            eprintln!("nanny: no [start] in nanny.toml, running headless. Join it with --join");
             NetworkServer::start_blocking_synced(
                 addr,
                 cert_path,
@@ -460,7 +451,7 @@ pub fn cmd_server_stop(app: Option<String>) -> Result<()> {
                  Check with: nanny status --app={app_id}"
             );
         }
-        println!("nanny: governance server stopped (PID {pid}, app {app_id})");
+        eprintln!("nanny: governance server stopped (PID {pid}, app {app_id})");
     }
 
     #[cfg(windows)]
@@ -475,7 +466,7 @@ pub fn cmd_server_stop(app: Option<String>) -> Result<()> {
                  Check with: nanny status --app={app_id}"
             );
         }
-        println!("nanny: governance server stopped (PID {pid}, app {app_id})");
+        eprintln!("nanny: governance server stopped (PID {pid}, app {app_id})");
     }
 
     Ok(())
@@ -639,8 +630,8 @@ fn run_governor_with_app(
     // in a line of its own without saying it twice. Not the command: it is
     // whatever `[start].cmd` holds, routinely long, and already in nanny.toml
     // where anyone asking has better access to it than a log line gives them.
-    println!("nanny: running [start] under this governor ({transport})");
-    println!();
+    eprintln!("nanny: running [start] under this governor ({transport})");
+    eprintln!();
 
     let mut child = cmd
         .spawn()
@@ -810,19 +801,19 @@ pub fn cmd_server_status(app: Option<String>) -> Result<()> {
     // Try a TCP connection to check reachability.
     match std::net::TcpStream::connect(addr) {
         Ok(_) => {
-            println!("nanny: governance server running");
-            println!("  appId  : {app_id}");
-            println!("  address: {addr}");
+            eprintln!("nanny: governance server running");
+            eprintln!("  appId  : {app_id}");
+            eprintln!("  address: {addr}");
 
             // Read PID if available.
             if let Ok(pid) = std::fs::read_to_string(state_dir.join("server.pid")) {
-                println!("  pid    : {}", pid.trim());
+                eprintln!("  pid    : {}", pid.trim());
             }
 
             // Read token file path.
             let token_file = state_dir.join("server.token");
             if token_file.exists() {
-                println!("  token  : (see {})", token_file.display());
+                eprintln!("  token  : (see {})", token_file.display());
             }
 
             // Whether this governor forwards to Nanny Cloud. Written at start;
@@ -830,14 +821,14 @@ pub fn cmd_server_status(app: Option<String>) -> Result<()> {
             // reached after the TCP connect above succeeded, so a stale file
             // from a dead governor can never be reported as live.
             match std::fs::read_to_string(state_dir.join("server.sync")) {
-                Ok(s) if s.trim() == "off" => println!("  sync   : off (enforcing locally)"),
-                Ok(s) if !s.trim().is_empty() => println!("  sync   : {}", s.trim()),
+                Ok(s) if s.trim() == "off" => eprintln!("  sync   : off (enforcing locally)"),
+                Ok(s) if !s.trim().is_empty() => eprintln!("  sync   : {}", s.trim()),
                 _ => {}
             }
         }
         Err(_) => {
-            println!("nanny: governance server not reachable at {addr}");
-            println!("  Start with: nanny run --serve");
+            eprintln!("nanny: governance server not reachable at {addr}");
+            eprintln!("  Start with: nanny run --serve");
             std::process::exit(1);
         }
     }

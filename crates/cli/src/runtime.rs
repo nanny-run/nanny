@@ -63,7 +63,7 @@ pub fn build_bridge_components(config: &NannyConfig) -> BridgeComponents {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nanny_config::{NannyConfig, ObservabilityConfig, ToolsConfig};
+    use nanny_config::{NannyConfig, ToolsConfig};
     use std::collections::HashMap;
 
     fn test_config() -> NannyConfig {
@@ -73,7 +73,6 @@ mod tests {
                 allowed: vec!["http_get".to_string()],
                 per_tool: HashMap::new(),
             },
-            observability: ObservabilityConfig::default(),
             rules: Default::default(),
         }
     }
