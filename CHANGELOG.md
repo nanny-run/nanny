@@ -7,42 +7,6 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [0.7.0] - 2026-09-11
 
-### Changed
-
-- **One log target: stdout.** `log = "file"` wrote to `.nanny/logs/` and
-  refused any other path, which is the one place a deployment cannot use:
-  inside the image, wiped by a rebuild, invisible to a mounted volume, refused
-  outright by a read-only filesystem. Redirection does strictly more, and two
-  targets doing one job is what let one of them silently be a no-op. The whole
-  `[observability]` section is gone, with `LogTarget`, the `file` key, its
-  bare-name validation, `.nanny/logs/` and the gitignore line written for it.
-  The spool is untouched; it is the cloud outbox and the durable path.
-
-- **Nanny's own output goes to stderr.** The startup block, the sync status
-  line and every warning, so `nanny run > events.ndjson` yields NDJSON and
-  nothing else. Your app's stdout still passes through, so a consumer wanting
-  only events filters for lines beginning with a brace.
-
-- **The local transport is gone.** `Bridge` listened on a Unix socket, or a TCP
-  port on Windows, and parsed HTTP off it by hand. The governor is what an app
-  talks to now, so nothing called it. `tiny_http` goes with it, its only user
-  having been the Windows listener.
-
-- **One transport, not three.** Both SDKs resolved a bridge through a ladder: a
-  Unix socket on macOS and Linux, a TCP port on Windows, and an address for
-  anything over a network. Every SDK in every language had to implement all
-  three, and the runtime carried two servers to answer them.
-  `NANNY_BRIDGE_ADDR` is the transport now, plain HTTP on loopback and mTLS
-  anywhere else, and its absence is what passthrough means.
-  `NANNY_BRIDGE_SOCKET` and `NANNY_BRIDGE_PORT` are gone.
-
-- **`nanny run` is the governor. `--serve` is gone.** One shape: it brings up a
-  governor and runs `[start].cmd` underneath it, on a laptop and in a container
-  alike. On loopback that needs no certificates and no setup, so there was
-  never a trade to make, only a flag with one correct value and a second,
-  quieter path underneath it that nobody deployed and everybody developed
-  against. `--join` is unchanged.
-
 ### Added
 
 - **Certificate bundles are per app and per environment.** They all shared
@@ -52,7 +16,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   at `~/.nanny/servers/<app_id>/certs/{sandbox,live}/`, beside the governor
   state of the app it belongs to.
 
-- **`--live` on every `nanny certs` command, and on `nanny run --serve`.**
+- **`--live` on every `nanny certs` command, and on `nanny run`.**
   Omitted, everything targets sandbox. Two environments means two certificate
   authorities, which is the point: a CA is what a governor trusts, so one
   authority spanning both means a client certificate issued for sandbox is
@@ -72,22 +36,36 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Dockerfile ends up running `install.nanny.run`, fetching *latest*, and
   shipping a different runtime on every rebuild.
 
-### Removed
+### Changed
 
-- **`--config`.** A project has exactly one `nanny.toml` and it sits at the
-  root, which the runtime already enforces. The flag was global, so it appeared
-  in every subcommand's help, and was read by exactly one code path: plain
-  `nanny run`. `nanny run --serve` accepted it and silently ignored it, reading
-  `./nanny.toml` regardless, which matters more now that `--serve` is the
-  documented way to start an app. Both paths resolve from the working
-  directory. The integration tests that used it to target a temporary project
-  set the child's working directory instead, which is per-process and so is
-  actually safe under a parallel run.
+- **One log target: stdout.** `log = "file"` wrote to `.nanny/logs/` and
+  refused any other path, which is the one place a deployment cannot use:
+  inside the image, wiped by a rebuild, invisible to a mounted volume, refused
+  outright by a read-only filesystem. Redirection does strictly more, and two
+  targets doing one job is what let one of them silently be a no-op. The whole
+  `[observability]` section is gone, with `LogTarget`, the `file` key, its
+  bare-name validation, `.nanny/logs/` and the gitignore line written for it.
+  The spool is untouched; it is the cloud outbox and the durable path.
 
-- **`--out-dir`.** It existed only on `generate`, while `rotate`, `show`,
-  `import` and `remove` hardcoded the default directory, so a bundle written
-  with it could not be rotated or inspected afterwards. Environment scoping
-  replaces the reason to reach for it.
+- **Nanny's own output goes to stderr.** The startup block, the sync status
+  line and every warning, so `nanny run > events.ndjson` yields NDJSON and
+  nothing else. Your app's stdout still passes through, so a consumer wanting
+  only events filters for lines beginning with a brace.
+
+- **One transport, not three.** Both SDKs resolved a bridge through a ladder: a
+  Unix socket on macOS and Linux, a TCP port on Windows, and an address for
+  anything over a network. Every SDK in every language had to implement all
+  three, and the runtime carried two servers to answer them.
+  `NANNY_BRIDGE_ADDR` is the transport now, plain HTTP on loopback and mTLS
+  anywhere else, and its absence is what passthrough means.
+  `NANNY_BRIDGE_SOCKET` and `NANNY_BRIDGE_PORT` are gone.
+
+- **`nanny run` is the governor. `--serve` is gone.** One shape: it brings up a
+  governor and runs `[start].cmd` underneath it, on a laptop and in a container
+  alike. On loopback that needs no certificates and no setup, so there was
+  never a trade to make, only a flag with one correct value and a second,
+  quieter path underneath it that nobody deployed and everybody developed
+  against. `--join` is unchanged.
 
 ### Fixed
 
@@ -125,6 +103,27 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **`nanny certs` said to keep `ca.key` "on the server machine".** Backwards:
   it signs certificates, so whoever holds it can mint a client any governor
   trusting that CA will admit. It never leaves the machine that generated it.
+
+### Removed
+
+- **The local transport is gone.** `Bridge` listened on a Unix socket, or a TCP
+  port on Windows, and parsed HTTP off it by hand. The governor is what an app
+  talks to now, so nothing called it. `tiny_http` goes with it, its only user
+  having been the Windows listener.
+
+- **`--config`.** A project has exactly one `nanny.toml` and it sits at the
+  root, which the runtime already enforces. The flag was global, so it appeared
+  in every subcommand's help, and was read by exactly one code path: plain
+  `nanny run`. The governor accepted it and silently ignored it, reading
+  `./nanny.toml` regardless, which is the path everything takes now. Both
+  resolve from the working directory. The integration tests that used it to target a temporary project
+  set the child's working directory instead, which is per-process and so is
+  actually safe under a parallel run.
+
+- **`--out-dir`.** It existed only on `generate`, while `rotate`, `show`,
+  `import` and `remove` hardcoded the default directory, so a bundle written
+  with it could not be rotated or inspected afterwards. Environment scoping
+  replaces the reason to reach for it.
 
 ## [0.6.3] - 2026-09-03
 
