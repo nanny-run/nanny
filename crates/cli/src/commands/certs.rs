@@ -827,7 +827,7 @@ pub fn watch_certs_dir(
 
 /// Warn if the certs directory is inside a git-tracked tree.
 /// Certs should never be committed. ~/.nanny/certs/ is outside any project
-/// directory by default: this only fires for unusual --out-dir overrides.
+/// directory by default: this only fires when NANNY_HOME points inside one.
 fn check_git_warning(dir: &Path) {
     let inside_git = std::process::Command::new("git")
         .args([
@@ -1296,8 +1296,8 @@ mod tests {
     #[test]
     fn a_bundle_is_written_and_read_at_the_same_path() {
         // Generate, then rotate and show, against one resolved directory. The
-        // original defect was that `generate --out-dir` could write somewhere
-        // `rotate` and `show` could not see, leaving a bundle unrotatable.
+        // A bundle written by `generate` must be found by `rotate` and `show`
+        // at the same path, or it is unrotatable.
         let bundle = tmp_dir().join("certs").join("live");
         fs::create_dir_all(&bundle).unwrap();
 
