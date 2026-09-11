@@ -11,34 +11,37 @@ timestamp in milliseconds.
 
 ## Output destination
 
-By default, events are written to **stdout**, interleaved with your agent's own output.
-To separate them, configure file output:
-
-```toml
-[observability]
-log = "file"
-```
-
-This writes to `.nanny/logs/log.ndjson`, a location Nanny always owns and auto-creates,
-never something you point at a path yourself. Only set `file` if you want a different
-name: a bare name, no extension. Nanny always appends `.ndjson` itself:
-
-```toml
-[observability]
-log  = "file"
-file = "events"   # writes .nanny/logs/events.ndjson
-```
-
-`.nanny/logs/` is meant to stay out of git (Nanny adds it to `.gitignore` automatically
-the first time it's created): it's a local audit trail, not source. If you later log this
-`NANNY_API_KEY`, Cloud sync can back-fill from whatever accumulated in
-that folder before sync was ever turned on, not just events going forward.
-
-Or pipe stdout to a file at the shell level:
+Events go to **stdout**. Nanny's own output, the startup block and any warning,
+goes to stderr, so redirecting stdout gives you the event log by itself:
 
 ```bash
-nanny run --serve > nanny.log
+nanny run > events.ndjson
 ```
+
+Your agent's own stdout still passes through, since it inherits the stream, so
+a consumer that wants only events filters for lines beginning with `{`.
+
+In a container, redirect nothing. The runtime collects stdout already and every
+log shipper reads it from there. A Datadog agent, for example, needs no Nanny
+configuration at all:
+
+```yaml
+labels:
+  com.datadoghq.ad.logs: '[{"source":"nanny","service":"your-app"}]'
+```
+
+If you do want a file inside a container, redirect in the entrypoint rather
+than piping, so Nanny stays PID 1 and still receives `SIGTERM`:
+
+```sh
+exec nanny run > /var/log/nanny/events.ndjson    # redirection survives exec
+exec nanny run | tee /var/log/nanny/events.ndjson # a pipe does not: avoid
+```
+
+**Durable delivery is Cloud's job, not the log's.** Nothing on disk survives a
+container that is replaced. When `NANNY_API_KEY` is set, undelivered batches
+are held in `.nanny/spool/` and sent on the next run, which is the path worth
+mounting a volume for. See [Connect to Nanny Cloud](/v0.7/guides/managed-mode).
 
 ## Guaranteed events
 

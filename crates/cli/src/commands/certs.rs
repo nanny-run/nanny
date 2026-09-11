@@ -6,7 +6,7 @@
 //   ~/.nanny/servers/<app_id>/certs/sandbox/     (the default)
 //   ~/.nanny/servers/<app_id>/certs/live/        (--live)
 //
-// So every certs command has to run inside the project, the same way `--serve`
+// So every certs command has to run inside the project, the same way the governor
 // does: the app id comes from the committed .nanny/app.json and there is no
 // path flag to point somewhere else. A bundle that cannot be found by the
 // command that rotates it is how one ends up unrotatable.
@@ -50,7 +50,7 @@ pub enum CertsCommand {
     /// others. Partial generation is not supported.
     ///
     /// After generating, start the server with:
-    ///     nanny run --serve
+    ///     nanny run
     ///
     /// Distribute client.crt + client.key to agents running on other machines.
     Generate {
@@ -217,7 +217,7 @@ pub fn env_dir_name(live: bool) -> &'static str {
 /// Names always present on a server certificate, whatever else is asked for.
 ///
 /// Kept unconditionally so adding a deployment hostname never breaks the local
-/// path: `nanny run --serve` on loopback, `nanny status`, and every test dial
+/// path: `nanny run` on loopback, `nanny status`, and every test dial
 /// 127.0.0.1, and a certificate that stopped covering it would turn a working
 /// machine into a handshake error.
 const ALWAYS_SANS: [&str; 2] = ["localhost", "127.0.0.1"];
@@ -402,7 +402,7 @@ fn cmd_certs_generate(dir: PathBuf, force: bool, days: u32, sans: &[String]) -> 
     );
     println!();
     println!("Start the server:");
-    println!("  nanny run --serve");
+    println!("  nanny run");
     println!();
     println!("Cross-machine agents: copy client.crt + client.key to each agent machine");
     println!("and set NANNY_BRIDGE_CERT, NANNY_BRIDGE_KEY, NANNY_BRIDGE_CA in the env.");
@@ -798,12 +798,12 @@ fn cmd_certs_show(dir: PathBuf) -> Result<()> {
 /// Start watching the certs directory for file changes.
 ///
 /// Returns a channel receiver that fires on every change event.
-/// Called by `nanny run --serve` (Day 3) to hot-reload certs into
+/// Called by `nanny run` (Day 3) to hot-reload certs into
 /// `Arc<RwLock<ServerConfig>>` without restarting the server.
 ///
 /// New connections use the new cert immediately; existing connections
 /// finish on the old cert until they disconnect.
-#[allow(dead_code)] // consumed by nanny run --serve (Day 3, NetworkListener hot-reload)
+#[allow(dead_code)] // consumed by nanny run (Day 3, NetworkListener hot-reload)
 pub fn watch_certs_dir(
     dir: &Path,
 ) -> Result<std::sync::mpsc::Receiver<notify::Result<notify::Event>>> {
@@ -1033,7 +1033,7 @@ mod tests {
     #[test]
     fn extra_sans_are_added_without_dropping_the_local_ones() {
         // Adding a deployment hostname must never cost the local path:
-        // `nanny run --serve` on loopback, `nanny status` and every test dial
+        // `nanny run` on loopback, `nanny status` and every test dial
         // 127.0.0.1, and a cert that stopped covering it would turn a working
         // machine into a handshake failure.
         let sans = server_sans(&["agents-host".to_string(), "10.0.1.4".to_string()]);

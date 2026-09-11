@@ -26,7 +26,7 @@ Nanny runs as a parent process via `nanny run`. The SDK decorators communicate w
 
 ```bash
 # Governed, enforcement active
-nanny run --serve
+nanny run
 
 # Passthrough, decorators silent, agent runs normally
 python agent.py

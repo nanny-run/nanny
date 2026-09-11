@@ -9,16 +9,12 @@ from nanny_sdk.exceptions import AgentCompleted, BridgeUnavailable, ExecutionSto
 
 def test_passthrough_when_no_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """is_passthrough() returns True when no transport env vars are set."""
-    monkeypatch.delenv("NANNY_BRIDGE_SOCKET", raising=False)
-    monkeypatch.delenv("NANNY_BRIDGE_PORT", raising=False)
     monkeypatch.delenv("NANNY_BRIDGE_ADDR", raising=False)
     assert client.is_passthrough() is True
 
 
 def test_not_passthrough_when_addr_set(monkeypatch: pytest.MonkeyPatch) -> None:
     """is_passthrough() returns False when NANNY_BRIDGE_ADDR is set (network path)."""
-    monkeypatch.delenv("NANNY_BRIDGE_SOCKET", raising=False)
-    monkeypatch.delenv("NANNY_BRIDGE_PORT", raising=False)
     monkeypatch.setenv("NANNY_BRIDGE_ADDR", "10.0.0.1:62669")
     assert client.is_passthrough() is False
 
@@ -35,15 +31,12 @@ def test_bridge_addr_returns_value_when_set(monkeypatch: pytest.MonkeyPatch) -> 
     assert client._bridge_addr() == "server.example.com:62669"
 
 
-def test_not_passthrough_when_port_set(mock_bridge: HTTPServer) -> None:
-    """is_passthrough() returns False when NANNY_BRIDGE_PORT is set (Windows path)."""
-    assert client.is_passthrough() is False
+def test_not_passthrough_when_the_bridge_address_is_set(mock_bridge: HTTPServer) -> None:
+    """is_passthrough() is False once NANNY_BRIDGE_ADDR points somewhere.
 
-
-def test_not_passthrough_when_socket_set(monkeypatch: pytest.MonkeyPatch) -> None:
-    """is_passthrough() returns False when NANNY_BRIDGE_SOCKET is set (Unix path)."""
-    monkeypatch.delenv("NANNY_BRIDGE_PORT", raising=False)
-    monkeypatch.setenv("NANNY_BRIDGE_SOCKET", "/tmp/nanny-test.sock")
+    There used to be two more of these, one per extra transport. One address,
+    one test.
+    """
     assert client.is_passthrough() is False
 
 
@@ -76,7 +69,7 @@ def test_report_stop_rule_posts_correct_payload(mock_bridge: HTTPServer) -> None
 
 def test_report_stop_rule_ignores_bridge_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     """report_stop_rule is fire-and-forget, bridge unreachable must not raise."""
-    monkeypatch.setenv("NANNY_BRIDGE_PORT", "19999")  # nothing listening here
+    monkeypatch.setenv("NANNY_BRIDGE_ADDR", "127.0.0.1:19999")  # nothing listening here
     monkeypatch.setenv("NANNY_SESSION_TOKEN", "test-token")
 
     # Must not raise even though no bridge is running
@@ -93,7 +86,7 @@ def test_report_stop_rule_ignores_bridge_errors(monkeypatch: pytest.MonkeyPatch)
 def test_agent_enter_raises_bridge_unavailable_when_unreachable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("NANNY_BRIDGE_PORT", "19999")  # nothing listening here
+    monkeypatch.setenv("NANNY_BRIDGE_ADDR", "127.0.0.1:19999")  # nothing listening here
     monkeypatch.setenv("NANNY_SESSION_TOKEN", "test-token")
     with pytest.raises(BridgeUnavailable):
         client.agent_enter("researcher")
@@ -102,7 +95,7 @@ def test_agent_enter_raises_bridge_unavailable_when_unreachable(
 def test_call_tool_raises_bridge_unavailable_when_unreachable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("NANNY_BRIDGE_PORT", "19999")
+    monkeypatch.setenv("NANNY_BRIDGE_ADDR", "127.0.0.1:19999")
     monkeypatch.setenv("NANNY_SESSION_TOKEN", "test-token")
     with pytest.raises(BridgeUnavailable):
         client.call_tool("search", {})
@@ -111,7 +104,7 @@ def test_call_tool_raises_bridge_unavailable_when_unreachable(
 def test_health_raises_bridge_unavailable_when_unreachable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("NANNY_BRIDGE_PORT", "19999")
+    monkeypatch.setenv("NANNY_BRIDGE_ADDR", "127.0.0.1:19999")
     monkeypatch.setenv("NANNY_SESSION_TOKEN", "test-token")
     with pytest.raises(BridgeUnavailable):
         client.health()
@@ -120,7 +113,7 @@ def test_health_raises_bridge_unavailable_when_unreachable(
 def test_get_status_raises_bridge_unavailable_when_unreachable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("NANNY_BRIDGE_PORT", "19999")
+    monkeypatch.setenv("NANNY_BRIDGE_ADDR", "127.0.0.1:19999")
     monkeypatch.setenv("NANNY_SESSION_TOKEN", "test-token")
     with pytest.raises(BridgeUnavailable):
         client.get_status()

@@ -23,13 +23,14 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use nanny::__private::{call_tool, evaluate_local_rules};
-use nanny_bridge::{Bridge, BridgeAddress, BridgeComponents};
+use nanny_bridge::network::NetworkServer;
+use nanny_bridge::BridgeComponents;
 use nanny_core::policy::PolicyContext;
 
 // ── Serialise env-var tests ───────────────────────────────────────────────────
 //
-// Same reasoning as `macro_integration.rs`: NANNY_BRIDGE_SOCKET /
-// NANNY_BRIDGE_PORT / NANNY_SESSION_TOKEN are process-global, so tests that
+// Same reasoning as `macro_integration.rs`: NANNY_BRIDGE_ADDR and
+// NANNY_SESSION_TOKEN are process-global, so tests that
 // set them must not run in parallel. `.unwrap_or_else(|e| e.into_inner())` so
 // a poisoned mutex from a prior panicking test doesn't block the rest.
 static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -96,19 +97,85 @@ fn deny_external_effect_after_untrusted_read(ctx: &PolicyContext) -> bool {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn start_bridge(allowed: &[&str]) -> Bridge {
+/// Start a loopback governor in a background thread and point the SDK at it.
+///
+/// These tests used to run against `Bridge`, the in-process local transport,
+/// which is gone: there is one governor now and this is it. Loopback needs no
+/// certificates, so the only difference from a deployment is the address.
+fn start_bridge(allowed: &[&str]) -> TestGovernor {
     let components = BridgeComponents {
         registry: nanny_runtime::default_registry(),
         allowed_tools: allowed.iter().map(|s| s.to_string()).collect(),
         per_tool_max_calls: HashMap::new(),
         tool_labels: Default::default(),
+        config_hash: "test-config".to_string(),
+        runtime_version: "0.0.0-test".to_string(),
+        start_command: None,
     };
-    Bridge::start(components, "test-run".to_string()).expect("bridge must start in tests")
+    TestGovernor::start(components)
 }
 
-/// A bridge whose allowlist carries operator-declared labels, mirroring what
+struct TestGovernor {
+    addr: String,
+    session_token: String,
+    _state_dir: std::path::PathBuf,
+}
+
+impl TestGovernor {
+    fn start(components: BridgeComponents) -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static CNT: AtomicU64 = AtomicU64::new(0);
+        let id = CNT.fetch_add(1, Ordering::SeqCst);
+        let state_dir = std::env::temp_dir().join(format!(
+            "nanny-macro-test-{}-{}",
+            std::process::id(),
+            id
+        ));
+        std::fs::create_dir_all(&state_dir).unwrap();
+
+        let token = format!("test-token-{}-{}", std::process::id(), id);
+        let dir = state_dir.clone();
+        let tok = token.clone();
+        std::thread::spawn(move || {
+            // Port 0: the kernel picks, and the bound address is written to
+            // server.addr, which is how the test finds it without racing.
+            NetworkServer::start_blocking(
+                "127.0.0.1:0".parse().unwrap(),
+                std::path::PathBuf::new(),
+                std::path::PathBuf::new(),
+                std::path::PathBuf::new(),
+                components,
+                Some(vec![tok]),
+                1000,
+                dir,
+            )
+            .ok();
+        });
+
+        let addr_file = state_dir.join("server.addr");
+        let mut addr = String::new();
+        for _ in 0..400 {
+            if let Ok(a) = std::fs::read_to_string(&addr_file) {
+                if !a.trim().is_empty() {
+                    addr = a.trim().to_string();
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert!(!addr.is_empty(), "the governor must publish its address");
+
+        Self {
+            addr,
+            session_token: token,
+            _state_dir: state_dir,
+        }
+    }
+}
+
+/// A governor whose allowlist carries operator-declared labels, mirroring what
 /// `build_bridge_components` derives from `[tools.<name>]`.
-fn start_labelled_bridge(tools: &[(&str, &[&str])]) -> Bridge {
+fn start_labelled_bridge(tools: &[(&str, &[&str])]) -> TestGovernor {
     let components = BridgeComponents {
         registry: nanny_runtime::default_registry(),
         allowed_tools: tools.iter().map(|(n, _)| n.to_string()).collect(),
@@ -122,28 +189,23 @@ fn start_labelled_bridge(tools: &[(&str, &[&str])]) -> Bridge {
                 )
             })
             .collect(),
+        config_hash: "test-config".to_string(),
+        runtime_version: "0.0.0-test".to_string(),
+        start_command: None,
     };
-    Bridge::start(components, "test-run".to_string()).expect("bridge must start in tests")
+    TestGovernor::start(components)
 }
 
-fn inject_env(bridge: &Bridge) {
+fn inject_env(bridge: &TestGovernor) {
     unsafe {
-        #[cfg(unix)]
-        if let BridgeAddress::Unix(path) = &bridge.address {
-            std::env::set_var("NANNY_BRIDGE_SOCKET", path);
-        }
-        #[cfg(not(unix))]
-        if let BridgeAddress::Tcp(port) = &bridge.address {
-            std::env::set_var("NANNY_BRIDGE_PORT", port.to_string());
-        }
+        std::env::set_var("NANNY_BRIDGE_ADDR", &bridge.addr);
         std::env::set_var("NANNY_SESSION_TOKEN", &bridge.session_token);
     }
 }
 
 fn clear_env() {
     unsafe {
-        std::env::remove_var("NANNY_BRIDGE_SOCKET");
-        std::env::remove_var("NANNY_BRIDGE_PORT");
+        std::env::remove_var("NANNY_BRIDGE_ADDR");
         std::env::remove_var("NANNY_SESSION_TOKEN");
     }
 }

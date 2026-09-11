@@ -49,7 +49,7 @@ Always the first event in any log.
 | `tool_labels` | object | Each allowed tool's labels. Present for every allowed tool, empty when a tool carries none. |
 | `config_hash` | string | Fingerprint of the `nanny.toml` that produced this grant. |
 
-This is [declared authority](/v0.6/concepts/declared-authority): what the agent
+This is [declared authority](/v0.7/concepts/declared-authority): what the agent
 was permitted to do, written down before it did anything. A log of refusals
 alone cannot answer "what was this agent allowed to do", which is the question
 an auditor asks.
@@ -102,7 +102,7 @@ itself a fact worth reading.
 ## RulesDeclared
 
 Emitted once when the agent declares which rules it registered. The second half
-of [declared authority](/v0.6/concepts/declared-authority).
+of [declared authority](/v0.7/concepts/declared-authority).
 
 ```json
 {

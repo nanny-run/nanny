@@ -1,4 +1,4 @@
-// Governance server daemon commands (nanny run --serve, nanny stop, nanny status).
+// Governance server daemon commands (nanny run, nanny stop, nanny status).
 //
 // For single-process agents, use `nanny run` instead. This command starts a
 // standalone governance server for cross-process or cross-machine enforcement.
@@ -25,7 +25,7 @@ use crate::runtime::build_bridge_components;
 
 use super::certs::certs_dir;
 
-// The governance server is `nanny run --serve`; `nanny status` and `nanny stop`
+// The governance server is `nanny run`; `nanny status` and `nanny stop`
 // manage it. This module holds those three entry points (`cmd_server_start`,
 // `cmd_server_status`, `cmd_server_stop`) called directly from `main.rs`.
 
@@ -69,7 +69,7 @@ fn resolve_app_id(explicit: Option<String>) -> Result<String> {
     Ok(AppIdentity::load_required(&cwd)?.app_id)
 }
 
-// ── nanny run --serve (governance server start) ───────────────────────────────
+// ── nanny run (governance server start) ───────────────────────────────
 
 /// DoS protection: hard-coded 100 req/s per client IP.
 /// Not a config knob: if this is ever wrong for a real workload, bump the
@@ -110,9 +110,26 @@ pub fn cmd_server_start(
     })?;
 
     // An app identity is required to key this governor's state, without it
-    // two unrelated `--serve` instances on one machine would collide again,
+    // two unrelated the governor instances on one machine would collide again,
     // exactly the bug this keying exists to fix.
-    let app = AppIdentity::load_required(&cwd)?;
+    // Optional, not required. Now that every run is a governor, demanding
+    // `nanny init` would make a hand-written nanny.toml stop working, and
+    // "write a config, run it" is how people try this out. Without an
+    // identity the run is governed exactly the same; it just has no permanent
+    // id, so it is not discoverable by `--join`, `status` or `stop`, and its
+    // events carry no `AppIdentified`. The id below is per-run and never
+    // written to disk.
+    let app = match AppIdentity::load(&cwd)? {
+        Some(app) => app,
+        None => AppIdentity {
+            app_id: nanny_config::new_run_id().replace("run_", "eph_"),
+            name: cwd
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "app".to_string()),
+        },
+    };
+    let ephemeral = AppIdentity::load(&cwd)?.is_none();
 
     // Before the governor binds anything. A pack declared in [rules] extends
     // and missing from disk means this fleet would run less governed than its
@@ -123,17 +140,27 @@ pub fn cmd_server_start(
     // Proxy mode is opt-in.
 
     // Build BridgeComponents from config (no CLI ceiling: server uses config values).
-    let components = build_bridge_components(&config);
+    let mut components = build_bridge_components(&config);
+    // The governor knows its own `[start]`, so a run it launches opens with the
+    // command in its `ExecutionStarted`. A joiner's command it does not know,
+    // and leaves empty rather than attributing its own.
+    components.start_command = config.start.as_ref().map(|s| s.cmd.clone());
 
     // Explicit paths win. Otherwise the bundle this app generated for the
     // selected environment, which is why --live exists here as well as on
     // `nanny certs`: the governor has to look in the directory that command
     // wrote to, or a deployment generates a live bundle and the server reports
     // the sandbox one missing.
-    let bundle = certs_dir(live)?;
-    let cert_path = cert.unwrap_or_else(|| bundle.join("server.crt"));
-    let key_path = key.unwrap_or_else(|| bundle.join("server.key"));
-    let ca_path = ca.unwrap_or_else(|| bundle.join("ca.crt"));
+    // Resolved lazily. A loopback governor needs no certificates at all, and
+    // the bundle path is keyed by app id, so resolving it eagerly would make
+    // `nanny run` in a directory without `nanny init` fail over TLS material
+    // it was never going to read.
+    let bundle = || {
+        certs_dir(live).unwrap_or_else(|_| PathBuf::from(".nanny").join("certs-not-resolved"))
+    };
+    let cert_path = cert.unwrap_or_else(|| bundle().join("server.crt"));
+    let key_path = key.unwrap_or_else(|| bundle().join("server.key"));
+    let ca_path = ca.unwrap_or_else(|| bundle().join("ca.crt"));
 
     // Cert files are required only for non-loopback addresses (mTLS mandatory).
     // Loopback binds use plain HTTP: OS-enforced, no TLS overhead.
@@ -152,7 +179,7 @@ pub fn cmd_server_start(
                      \n\
                      For same-machine multi-agent use, bind to loopback instead:\n\
                      \n\
-                     \x20   nanny run --serve\n\
+                     \x20   nanny run\n\
                      \n\
                      (default is 127.0.0.1:62669, no certs needed)",
                     path.display()
@@ -186,7 +213,7 @@ pub fn cmd_server_start(
     ) {
         Ok(Some(configured)) => {
             let plural = if configured.len() == 1 { "" } else { "s" };
-            println!(
+            eprintln!(
                 "nanny: {} session token{plural} taken from {}",
                 configured.len(),
                 nanny_config::SESSION_TOKEN_ENV
@@ -197,7 +224,7 @@ pub fn cmd_server_start(
         Err(message) => anyhow::bail!(message),
     };
     let target = crate::sync::resolve_sync(env, no_sync);
-    println!(
+    eprintln!(
         "{}",
         crate::sync::sync_status_line(target.as_ref().map_err(|e| *e), Some(&app.name))
     );
@@ -225,12 +252,30 @@ pub fn cmd_server_start(
 
     // Resolved before the forwarder is spawned so a dropped batch can name the
     // file its events also went to. `None` here is the honest answer under
-    // `log = "stdout"`, which is a deliberate no-op for `--serve` (see below).
-    let local_log_path = config.observability.resolve_log_path(&cwd)?;
+    // `log = "stdout"`, which is a deliberate no-op for the governor (see below).
+    // Events go to stdout, always, and nowhere else. Redirect them wherever
+    // you want them: `nanny run > events.ndjson` for a file, or nothing at all
+    // in a container, where the runtime already collects stdout and every log
+    // shipper reads it from there.
+    //
+    let local_log_sink: Option<Box<dyn std::io::Write + Send>> = Some(Box::new(std::io::stdout()));
 
+    // Raised once the governed app has exited, so the drain thread makes a
+    // final sweep instead of the process dying between its 250ms ticks.
+    let drain_shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // Why the run ended. Only this side sees the child's exit status, so only
+    // this side can name it; the drain thread writes it into every live run as
+    // the closing `ExecutionStopped`.
+    let stop_reason: std::sync::Arc<std::sync::Mutex<Option<String>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+    // Signalled by the drain thread when its final sweep is written.
+    let drain_done: std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)> =
+        std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+
+    let mut forwarder = None;
     let event_sink = target.ok().map(|target| {
         let (tx, rx) = std::sync::mpsc::channel();
-        crate::sync::ServerForwarder::spawn(
+        forwarder = Some(crate::sync::ServerForwarder::spawn(
             rx,
             target.endpoint,
             target.api_key,
@@ -242,12 +287,12 @@ pub fn cmd_server_start(
                 .cloned()
                 .expect("resolve_session_token never yields an empty set"),
             &cwd,
-            local_log_path.clone(),
-        );
+            None,
+        ));
         tx
     });
 
-    // [observability] applies to --serve exactly the same way it applies to
+    // Events go to stdout, the same way for
     // local `nanny run`: the config makes the same promise either way ("here's
     // where your event log goes"), so it must be honored the same way either
     // way. `log = "stdout"` stays a no-op here on purpose: a long-lived
@@ -255,15 +300,23 @@ pub fn cmd_server_start(
     // stdout output would be noisy and wrong, unlike a short-lived local run
     // where that's the whole point. Uses the same resolution logic as local
     // `nanny run` (`ObservabilityConfig::resolve_log_path`), so both paths
-    // land on the same `.nanny/logs/<name>` file. Resolved above, before the
+    // Resolved above, before the
     // forwarder, so the same value describes both the log and the outbox.
 
-    println!("nanny: name ({}), appId ({})", app.name, app.app_id);
+    if ephemeral {
+        eprintln!(
+            "nanny: name ({}), no app identity (run `nanny init` to make this \
+             governor joinable and give its runs a permanent id)",
+            app.name
+        );
+    } else {
+        eprintln!("nanny: name ({}), appId ({})", app.name, app.app_id);
+    }
 
     // Does this governor also have an app of its own to run?
     //
     // `[start]` already means "here is the app" everywhere else. Plain
-    // `nanny run` requires it, so `--serve` honouring it is the consistent
+    // `nanny run` requires it, so the governor honouring it is the consistent
     // reading, not a new convention. Present: governor plus that app, one
     // command, no launcher script. Absent: headless governor, the shared-
     // governor case where the apps live elsewhere and arrive via `--join`.
@@ -298,13 +351,24 @@ pub fn cmd_server_start(
         }
     };
 
+    // Minted here, before the governor starts, so the run its app will report
+    // under is the run the governor opens. Otherwise the app's first request
+    // opens a second run beside the governor's own, and one process under one
+    // governor reports as two executions.
+    let primary_run_id = child_command
+        .is_some()
+        .then(|| std::env::var("NANNY_RUN_ID").ok().filter(|v| !v.trim().is_empty()))
+        .flatten()
+        .or_else(|| child_command.is_some().then(nanny_config::new_run_id));
+
+
     let state_dir_for_server = nanny_server_state_dir(&app.app_id)?;
 
     match child_command {
         // ── Headless governor ────────────────────────────────────────────────
         // Blocking: returns only when the server shuts down (CTRL-C/SIGTERM).
         None => {
-            println!("nanny: no [start] in nanny.toml, running headless. Join it with --join");
+            eprintln!("nanny: no [start] in nanny.toml, running headless. Join it with --join");
             NetworkServer::start_blocking_synced(
                 addr,
                 cert_path,
@@ -315,7 +379,11 @@ pub fn cmd_server_start(
                 RATE_LIMIT_RPS,
                 event_sink,
                 state_dir_for_server,
-                local_log_path,
+                local_log_sink,
+                std::sync::Arc::clone(&drain_shutdown),
+                std::sync::Arc::clone(&stop_reason),
+                std::sync::Arc::clone(&drain_done),
+                primary_run_id.clone(),
             )?;
             Ok(())
         }
@@ -331,8 +399,13 @@ pub fn cmd_server_start(
                 session_tokens,
                 event_sink,
                 state_dir: state_dir_for_server,
-                local_log_path,
+                local_log_sink,
+                drain_shutdown: std::sync::Arc::clone(&drain_shutdown),
+                stop_reason: std::sync::Arc::clone(&stop_reason),
+                drain_done: std::sync::Arc::clone(&drain_done),
+                primary_run_id: primary_run_id.clone(),
             },
+            forwarder.take(),
             command,
             &app.app_id,
         ),
@@ -349,7 +422,7 @@ pub fn cmd_server_stop(app: Option<String>) -> Result<()> {
     let raw = std::fs::read_to_string(&pid_file).with_context(|| {
         format!(
             "no running server found for app '{app_id}' (PID file not present at {})\n\
-             Start it with: nanny run --serve  (from that app's directory)",
+             Start it with: nanny run  (from that app's directory)",
             pid_file.display()
         )
     })?;
@@ -373,7 +446,7 @@ pub fn cmd_server_stop(app: Option<String>) -> Result<()> {
                  Check with: nanny status --app={app_id}"
             );
         }
-        println!("nanny: governance server stopped (PID {pid}, app {app_id})");
+        eprintln!("nanny: governance server stopped (PID {pid}, app {app_id})");
     }
 
     #[cfg(windows)]
@@ -388,7 +461,7 @@ pub fn cmd_server_stop(app: Option<String>) -> Result<()> {
                  Check with: nanny status --app={app_id}"
             );
         }
-        println!("nanny: governance server stopped (PID {pid}, app {app_id})");
+        eprintln!("nanny: governance server stopped (PID {pid}, app {app_id})");
     }
 
     Ok(())
@@ -407,7 +480,11 @@ struct GovernorSetup {
     session_tokens: Vec<String>,
     event_sink: Option<std::sync::mpsc::Sender<(String, Vec<String>)>>,
     state_dir: PathBuf,
-    local_log_path: Option<PathBuf>,
+    local_log_sink: Option<Box<dyn std::io::Write + Send>>,
+    drain_shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    stop_reason: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    drain_done: std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+    primary_run_id: Option<String>,
 }
 
 /// Run the governance server and, underneath it, the app from `[start]`.
@@ -422,11 +499,21 @@ struct GovernorSetup {
 /// governor gets its full graceful drain; it owns the child, so the child is
 /// reaped rather than orphaned; and if either side dies the other is torn
 /// down instead of left running half-governed.
-fn run_governor_with_app(setup: GovernorSetup, command: Vec<String>, app_id: &str) -> Result<()> {
+fn run_governor_with_app(
+    setup: GovernorSetup,
+    forwarder: Option<crate::sync::ServerForwarder>,
+    command: Vec<String>,
+    app_id: &str,
+) -> Result<()> {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
 
     let state_dir = setup.state_dir.clone();
+    // Captured before `setup` is moved into the governor thread below.
+    let drain_shutdown = std::sync::Arc::clone(&setup.drain_shutdown);
+    let stop_reason = std::sync::Arc::clone(&setup.stop_reason);
+    let drain_done = std::sync::Arc::clone(&setup.drain_done);
+    let primary_run_id = setup.primary_run_id.clone();
 
     // ── User-interrupt handling (Ctrl-C / SIGTERM) ───────────────────────────
     //
@@ -434,7 +521,7 @@ fn run_governor_with_app(setup: GovernorSetup, command: Vec<String>, app_id: &st
     // anywhere in this process, so the OS's default disposition kills `nanny`
     // outright: before it ever reaches the post-loop cleanup below. That
     // leaves this run's discovery files behind under `state_dir` forever, and
-    // the next `nanny run --serve` fails with "has server state but isn't
+    // the next `nanny run` fails with "has server state but isn't
     // reachable". The governed child (e.g. uvicorn) has its own signal
     // handling and shuts down fine on its own via normal terminal job-control
     // (SIGINT goes to the whole foreground process group); this handler's job
@@ -487,7 +574,11 @@ fn run_governor_with_app(setup: GovernorSetup, command: Vec<String>, app_id: &st
                 RATE_LIMIT_RPS,
                 setup.event_sink,
                 setup.state_dir,
-                setup.local_log_path,
+                setup.local_log_sink,
+                std::sync::Arc::clone(&setup.drain_shutdown),
+                std::sync::Arc::clone(&setup.stop_reason),
+                std::sync::Arc::clone(&setup.drain_done),
+                setup.primary_run_id.clone(),
             );
             if let Err(e) = outcome {
                 *result_slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(e);
@@ -522,6 +613,11 @@ fn run_governor_with_app(setup: GovernorSetup, command: Vec<String>, app_id: &st
         return Err(e);
     }
 
+    // The governor already opened this run and put its identity in it, so the
+    // child joins that one instead of opening a second beside it.
+    if let Some(id) = &primary_run_id {
+        std::env::set_var("NANNY_RUN_ID", id);
+    }
     let (mut cmd, run_id) = crate::build_governed_child(command, &server)?;
     crate::declare_app_to_governor(&server, Path::new("."), &run_id);
 
@@ -529,8 +625,8 @@ fn run_governor_with_app(setup: GovernorSetup, command: Vec<String>, app_id: &st
     // in a line of its own without saying it twice. Not the command: it is
     // whatever `[start].cmd` holds, routinely long, and already in nanny.toml
     // where anyone asking has better access to it than a log line gives them.
-    println!("nanny: running [start] under this governor ({transport})");
-    println!();
+    eprintln!("nanny: running [start] under this governor ({transport})");
+    eprintln!();
 
     let mut child = cmd
         .spawn()
@@ -562,7 +658,58 @@ fn run_governor_with_app(setup: GovernorSetup, command: Vec<String>, app_id: &st
     // discovery files first so `nanny status`/`--join` never point at a
     // governor that is on its way out.
     remove_discovery_files(&state_dir);
+
+    // Then get the events out, before anything below can exit the process.
+    //
+    // The drain thread runs on a 250ms tick and the cloud forwarder is fed by
+    // it, so simply returning here loses whatever the app wrote in its last
+    // fraction of a second: `ExecutionStopped` and the stop reason, which are
+    // written last and matter most. Raising the flag makes the drain thread
+    // sweep once more and return, which drops its sender, which ends the
+    // forwarder's loop, which is what `flush_and_join` waits for.
+    //
+    // Bounded by the forwarder's own 10s request timeout, and anything it
+    // still cannot deliver is already in the spool for the next run to
+    // backfill. So this is deliver-or-persist, never deliver-or-lose.
+    // Named before the flag is raised, so the final sweep finds it.
+    let reason = if status.success() {
+        "AgentCompleted"
+    } else {
+        "ProcessCrashed"
+    };
+    *stop_reason.lock().unwrap_or_else(|e| e.into_inner()) = Some(reason.to_string());
+    drain_shutdown.store(true, Ordering::SeqCst);
+
+    // Wait for that sweep to actually happen. Raising the flag and returning
+    // would let the process exit first, and a run that never made a governed
+    // call would emit nothing at all. Bounded: a stuck drain delays a
+    // shutdown by two seconds rather than hanging it.
+    {
+        let (lock, cv) = &*drain_done;
+        let mut done = lock.lock().unwrap_or_else(|e| e.into_inner());
+        while !*done {
+            let (guard, timeout) = cv
+                .wait_timeout(done, std::time::Duration::from_secs(2))
+                .unwrap_or_else(|e| e.into_inner());
+            done = guard;
+            if timeout.timed_out() {
+                break;
+            }
+        }
+    }
+
+    if let Some(forwarder) = forwarder {
+        forwarder.flush_and_join();
+    }
+
     drop(governor);
+
+    // Said once, on stderr, so a run that did not finish cleanly is visible
+    // without reading the event log back. The exit code carries it too, but a
+    // code alone does not say which of the reasons it was.
+    if reason != "AgentCompleted" {
+        eprintln!("nanny: stopped, {reason}");
+    }
 
     if !status.success() {
         std::process::exit(status.code().unwrap_or(1));
@@ -590,13 +737,13 @@ fn force_kill_pid(pid: u32) {
     }
 }
 
-/// Every discovery file a `nanny run --serve` invocation may have written
+/// Every discovery file a `nanny run` invocation may have written
 /// under `state_dir`, gathered in one place so no cleanup path (normal exit,
 /// governor-died early exit, or a Ctrl-C/SIGTERM interrupt) forgets one:
 /// `server.pid`, `server.addr`, `server.token` are
 /// written by `NetworkServer` in the bridge crate; and
 /// `server.sync` are written by `cmd_server_start` above. A stale leftover
-/// from any of the six is exactly what makes the next `nanny run --serve`
+/// from any of the six is exactly what makes the next `nanny run`
 /// report "has server state but isn't reachable".
 fn remove_discovery_files(state_dir: &Path) {
     for name in ["server.pid", "server.addr", "server.token", "server.sync"] {
@@ -640,7 +787,7 @@ pub fn cmd_server_status(app: Option<String>) -> Result<()> {
     let addr_str = std::fs::read_to_string(&addr_file).with_context(|| {
         format!(
             "no server address found for app '{app_id}' (file not present at {})\n\
-             Start it with: nanny run --serve  (from that app's directory)",
+             Start it with: nanny run  (from that app's directory)",
             addr_file.display()
         )
     })?;
@@ -649,19 +796,19 @@ pub fn cmd_server_status(app: Option<String>) -> Result<()> {
     // Try a TCP connection to check reachability.
     match std::net::TcpStream::connect(addr) {
         Ok(_) => {
-            println!("nanny: governance server running");
-            println!("  appId  : {app_id}");
-            println!("  address: {addr}");
+            eprintln!("nanny: governance server running");
+            eprintln!("  appId  : {app_id}");
+            eprintln!("  address: {addr}");
 
             // Read PID if available.
             if let Ok(pid) = std::fs::read_to_string(state_dir.join("server.pid")) {
-                println!("  pid    : {}", pid.trim());
+                eprintln!("  pid    : {}", pid.trim());
             }
 
             // Read token file path.
             let token_file = state_dir.join("server.token");
             if token_file.exists() {
-                println!("  token  : (see {})", token_file.display());
+                eprintln!("  token  : (see {})", token_file.display());
             }
 
             // Whether this governor forwards to Nanny Cloud. Written at start;
@@ -669,14 +816,14 @@ pub fn cmd_server_status(app: Option<String>) -> Result<()> {
             // reached after the TCP connect above succeeded, so a stale file
             // from a dead governor can never be reported as live.
             match std::fs::read_to_string(state_dir.join("server.sync")) {
-                Ok(s) if s.trim() == "off" => println!("  sync   : off (enforcing locally)"),
-                Ok(s) if !s.trim().is_empty() => println!("  sync   : {}", s.trim()),
+                Ok(s) if s.trim() == "off" => eprintln!("  sync   : off (enforcing locally)"),
+                Ok(s) if !s.trim().is_empty() => eprintln!("  sync   : {}", s.trim()),
                 _ => {}
             }
         }
         Err(_) => {
-            println!("nanny: governance server not reachable at {addr}");
-            println!("  Start with: nanny run --serve");
+            eprintln!("nanny: governance server not reachable at {addr}");
+            eprintln!("  Start with: nanny run");
             std::process::exit(1);
         }
     }

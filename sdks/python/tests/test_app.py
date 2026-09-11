@@ -62,7 +62,7 @@ def test_blank_app_id_is_ignored(mock_bridge: HTTPServer, app_id: str) -> None:
 def test_noop_in_passthrough(monkeypatch: pytest.MonkeyPatch) -> None:
     # Running outside `nanny run` must not attempt a connection, exactly as the
     # decorators and `instrument` behave. No bridge fixture here on purpose.
-    for var in ("NANNY_BRIDGE_SOCKET", "NANNY_BRIDGE_PORT", "NANNY_BRIDGE_ADDR"):
+    for var in ("NANNY_BRIDGE_ADDR",):
         monkeypatch.delenv(var, raising=False)
     set_app("app_abc", "acme-agent")  # must not raise or hang
 

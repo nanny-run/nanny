@@ -48,7 +48,7 @@ Think of it as a **deterministic enforcement layer**, auditable, and structurall
 
 ```mermaid
 flowchart TD
-    CMD(["nanny run --serve"])
+    CMD(["nanny run"])
     CMD --> NANNY
 
     subgraph NANNY["Nanny, parent process"]
@@ -112,7 +112,7 @@ and pin a pack, and its rules will not run.
 
 ## Install
 
-The Nanny CLI is a **system tool**, install it once globally and use `nanny run --serve` from any project that has a `nanny.toml`.
+The Nanny CLI is a **system tool**, install it once globally and use `nanny run` from any project that has a `nanny.toml`.
 
 **macOS**
 
@@ -166,7 +166,7 @@ pip install nanny-sdk
 nanny init
 
 # 2. Run your agent (Starts as a governance server for several processes)
-nanny run --serve
+nanny run
 ```
 
 **nanny.toml:**
@@ -311,8 +311,8 @@ Every run emits NDJSON to stdout. One event per line. Always starts with `Execut
 Pipe it to a file, stream it to your log aggregator, or query it inline:
 
 ```sh
-nanny run --serve > nanny.log
-nanny run --serve | tee nanny.log
+nanny run > nanny.log
+nanny run | tee nanny.log
 ```
 
 ---

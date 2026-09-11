@@ -34,12 +34,12 @@ event, flattened, plus two envelope fields.
 
 | Field | Meaning |
 |---|---|
-| `run_id` | Which run produced this. Under `--serve` one governor serves many. |
+| `run_id` | Which run produced this. One governor serves many. |
 | `seq` | Position in this run's stream, from 0. A gap means an event is missing. |
 | `event` | Variant tag. The remaining keys belong to that variant. |
 | `ts` | Milliseconds since the Unix epoch. |
 
-**Why the envelope exists.** `nanny run --serve` is the supported launch mode.
+**Why the envelope exists.** `nanny run` is the launch mode.
 The governor holds every live run in one map and drains all of them into one
 shared log file. Without `run_id` on the line, entries from different runs
 interleave with nothing to tell them apart, and the interleaving cannot be

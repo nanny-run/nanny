@@ -34,31 +34,26 @@ The child process communicates with the parent through an enforcement bridge. Ev
 
 The enforcement bridge runs in two configurations depending on how agents are deployed.
 
-**Local bridge (default, `nanny run`):**
+**The governor (`nanny run`):**
 
-The bridge runs as a thread inside the `nanny` process. It communicates with the agent through a Unix domain socket on macOS and Linux, or a TCP loopback port on Windows. Both are OS-enforced, no process outside the same user session can connect. The bridge starts when `nanny run` spawns the child process and exits when the child exits.
+`nanny run` brings up the governor and launches `[start].cmd` underneath it.
+Agents reach it over TCP at `NANNY_BRIDGE_ADDR`, which the CLI injects into the
+process it launches. Loopback is plain HTTP and needs no certificates; any
+other address requires mutual TLS. Several agents, on several machines, can
+connect to the same governor, and every tool call is governed by the same
+allowlist, the same rules and the same per-tool `max_calls`.
 
-**Governance server (`nanny run --serve`):**
+The address is the only thing that changes between a laptop and a fleet. There
+is no second, quieter mode to develop against and swap out later, so the shape
+that was tested is the shape that deploys.
 
-The bridge runs as a long-lived standalone daemon. Agents connect to it over TCP, with mutual TLS enforced on non-loopback addresses. Multiple agents, on multiple machines, can connect to the same server simultaneously. All of their tool calls are governed by the same allowlist and rules, and counted against the same per-tool `max_calls`.
-
-The governance server is the right choice when:
-- Agents run in separate processes or containers and need a shared enforcement boundary
-- You need cross-machine enforcement (Docker, Kubernetes, remote workers)
-- You want enforcement to persist across multiple agent runs on the same task
-
-The local bridge is the right choice for everything else. It has no setup and no cert management.
-
-**The protocol is the same regardless of mode.** The SDK client (Rust or Python) checks for `NANNY_BRIDGE_SOCKET`, then `NANNY_BRIDGE_PORT`, then `NANNY_BRIDGE_ADDR`. Whichever is set, the same HTTP-over-transport protocol runs on top. Changing from local to network enforcement is a configuration change, no code changes needed.
+A process that joins a governor already running uses `nanny run --join=<appId>`
+instead of starting one of its own.
 
 ```
-Local mode:
-  agent ──(Unix socket / loopback TCP)──► nanny process (bridge inside)
-
-Network mode:
-  agent A ──(TCP + mTLS)──►
-  agent B ──(TCP + mTLS)──► nanny run --serve (bridge as daemon)
-  agent C ──(TCP + mTLS)──►
+  agent A ──(TCP: plain on loopback, mTLS off it)──►
+  agent B ────────────────────────────────────────► nanny run (the governor)
+  agent C ────────────────────────────────────────►
 ```
 
 ---

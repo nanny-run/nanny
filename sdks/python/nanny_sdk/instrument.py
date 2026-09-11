@@ -39,8 +39,8 @@ Supported clients (detected by duck-typing, no provider package is imported):
   debited separately from ``input``, no pricing logic reads these fields in
   the engine.
 
-**Passthrough mode:** when the bridge is not present (``NANNY_BRIDGE_SOCKET``,
-``NANNY_BRIDGE_PORT``, ``NANNY_BRIDGE_ADDR`` all absent), ``instrument`` returns
+**Passthrough mode:** when the bridge is not present (``NANNY_BRIDGE_ADDR``
+is absent), ``instrument`` returns
 the client unchanged. No wrapping, no overhead.
 
 **Non-intrusive:** it monkey-patches the completion method only. It never

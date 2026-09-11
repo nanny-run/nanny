@@ -367,8 +367,6 @@ def test_passthrough_rules_not_evaluated(monkeypatch: pytest.MonkeyPatch) -> Non
         evaluated = True
         return False
 
-    monkeypatch.delenv("NANNY_BRIDGE_PORT", raising=False)
-
     @tool()
     def my_func() -> str:
         return "direct"

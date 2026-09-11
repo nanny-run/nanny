@@ -28,7 +28,7 @@ Create a key in the dashboard under **Settings → API Keys**, then set it where
 
 ```bash
 export NANNY_API_KEY=nny_...
-nanny run --serve
+nanny run
 ```
 
 That is the whole setup. There is no config field, no credential file, no login command, and nothing written to disk. That is what makes it behave identically on a laptop, in CI, on a read-only filesystem, and across twenty replicas sharing one key.
@@ -67,7 +67,7 @@ nanny: governance server running
 
 ## When the cloud is unreachable
 
-Nothing is lost and nothing blocks. A batch that cannot be delivered is retried with backoff, and if it still cannot be sent it is written to a durable outbox under `.nanny/spool/live/` or `.nanny/spool/sandbox/` (whichever your key is, see [Live and sandbox](/v0.6/guides/environments)) and delivered on the next run, oldest first.
+Nothing is lost and nothing blocks. A batch that cannot be delivered is retried with backoff, and if it still cannot be sent it is written to a durable outbox under `.nanny/spool/live/` or `.nanny/spool/sandbox/` (whichever your key is, see [Live and sandbox](/v0.7/guides/environments)) and delivered on the next run, oldest first.
 
 Each held batch carries the session it belongs to, so replayed events land under the run that actually produced them rather than being merged into whichever run happens to deliver them. Cloud de-duplicates on content, so an overlapping replay is a no-op.
 
@@ -82,7 +82,7 @@ This matters most with a governance server: one governor holds one key but can s
 ## Turning it off
 
 ```bash
-nanny run --serve --no-sync   # this run only
+nanny run --no-sync   # this run only
 export NANNY_NO_SYNC=1   # this machine
 ```
 

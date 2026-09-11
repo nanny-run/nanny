@@ -1,32 +1,29 @@
 """Bridge HTTP client.
 
-The bridge uses different transports depending on the OS and configuration:
+One transport, on every platform: TCP to the address in ``NANNY_BRIDGE_ADDR``,
+which ``nanny run`` injects into the process it launches.
 
-- **Unix (macOS/Linux):** Unix domain socket at ``/tmp/nanny-<token>.sock``.
-  The CLI injects ``NANNY_BRIDGE_SOCKET`` into the child process environment.
-- **Windows:** TCP loopback on an OS-assigned port.
-  The CLI injects ``NANNY_BRIDGE_PORT`` into the child process environment.
-- **Network (cross-process / cross-machine):** TCP + mTLS to the address in
-  ``NANNY_BRIDGE_ADDR``. The CLI auto-injects ``NANNY_BRIDGE_CERT``,
-  ``NANNY_BRIDGE_KEY``, and ``NANNY_BRIDGE_CA`` from ``~/.nanny/certs/`` when
-  ``NANNY_BRIDGE_ADDR`` is set. Cross-machine deployments set these env vars
-  manually.
+Loopback is plain HTTP; anything else requires mTLS, and the CLI injects
+``NANNY_BRIDGE_CERT``, ``NANNY_BRIDGE_KEY`` and ``NANNY_BRIDGE_CA`` alongside
+the address. Cross-machine deployments set all four themselves.
 
-``NANNY_SESSION_TOKEN`` is always injected on all platforms.
+``NANNY_SESSION_TOKEN`` is always injected.
 
-Transport priority:
-1. ``NANNY_BRIDGE_SOCKET``: Unix domain socket (macOS/Linux local)
-2. ``NANNY_BRIDGE_PORT``: TCP loopback (Windows local)
-3. ``NANNY_BRIDGE_ADDR``: TCP + mTLS (network / cross-machine)
-4. None of the above        → passthrough (all decorators are no-ops)
+There used to be three rungs here: a Unix domain socket on macOS and Linux, TCP
+loopback on Windows, and this one for anything over a network. Every SDK in
+every language had to implement all three, and the runtime had to carry two
+implementations of one enforcement surface to serve them. There is one governor
+now, so there is one way to reach it.
+
+Transport resolution:
+1. ``NANNY_BRIDGE_ADDR``: TCP, plain on loopback and mTLS anywhere else
+2. Unset → passthrough (all decorators are no-ops)
 
 All environment variables are read at call time (not import time) so tests can
 set them via ``monkeypatch`` without reloading the module.
 
-When none of the three transport env vars are set the SDK is in passthrough
-mode, every decorator is a no-op and no network calls are made. This is the
-normal state when running ``python agent.py`` directly instead of
-``nanny run agent.py``.
+Passthrough is the normal state when running ``python agent.py`` directly
+instead of under ``nanny run``.
 """
 
 from __future__ import annotations
@@ -59,16 +56,6 @@ T = TypeVar("T")
 # ---------------------------------------------------------------------------
 # Environment helpers, evaluated lazily so monkeypatch works in tests
 # ---------------------------------------------------------------------------
-
-
-def _socket_path() -> str | None:
-    """Unix domain socket path set by the CLI on macOS/Linux."""
-    return os.environ.get("NANNY_BRIDGE_SOCKET")
-
-
-def _port() -> str | None:
-    """TCP port set by the CLI on Windows."""
-    return os.environ.get("NANNY_BRIDGE_PORT")
 
 
 def _bridge_addr() -> str | None:
@@ -207,15 +194,12 @@ def _build_ssl_context(cert_val: str, key_val: str | None, ca_val: str) -> ssl.S
 def is_passthrough() -> bool:
     """True when the SDK is running outside ``nanny run`` (no bridge present).
 
-    All three transport env vars must be absent for passthrough mode:
-    - ``NANNY_BRIDGE_SOCKET`` (Unix domain socket)
-    - ``NANNY_BRIDGE_PORT``   (TCP loopback)
-    - ``NANNY_BRIDGE_ADDR``   (network mTLS)
-
-    Checking only the first two would silently skip enforcement when the
-    process was started with ``NANNY_BRIDGE_ADDR`` set.
+    ``NANNY_BRIDGE_ADDR`` is the one transport, so its absence is the whole
+    test. It used to be three, a Unix socket and a Windows TCP port beside
+    this one, which meant every SDK carried a resolution ladder and the
+    runtime carried two servers to answer it.
     """
-    return _socket_path() is None and _port() is None and _bridge_addr() is None
+    return _bridge_addr() is None
 
 
 def _split_host(addr: str) -> str:
@@ -260,15 +244,6 @@ def _make_client(**kwargs: Any) -> httpx.Client:
     Raises ``RuntimeError`` if called in passthrough mode (should never happen
     because decorators check ``is_passthrough()`` first).
     """
-    sock = _socket_path()
-    if sock is not None:
-        transport = httpx.HTTPTransport(uds=sock)
-        return httpx.Client(transport=transport, base_url="http://localhost", **kwargs)
-
-    port = _port()
-    if port is not None:
-        return httpx.Client(base_url=f"http://127.0.0.1:{port}", **kwargs)
-
     addr = _bridge_addr()
     if addr is not None:
         # Mirror the server's transport (crates/bridge/src/network.rs): loopback is
@@ -287,8 +262,7 @@ def _make_client(**kwargs: Any) -> httpx.Client:
             return httpx.Client(base_url=f"https://{addr}", verify=ssl_ctx, **kwargs)
 
     raise RuntimeError(  # pragma: no cover
-        "nanny: bridge not available "
-        "(NANNY_BRIDGE_SOCKET, NANNY_BRIDGE_PORT, and NANNY_BRIDGE_ADDR are all unset)"
+        "nanny: bridge not available (NANNY_BRIDGE_ADDR is unset)"
     )
 
 

@@ -1,7 +1,7 @@
-// nanny-bridge: local enforcement server + network bridge server.
+// nanny-bridge: the governance server, and the enforcement handlers it serves.
 pub mod network;
 
-// nanny-bridge: local enforcement server.
+// nanny-bridge: the governance server.
 //
 // Runs as a background thread inside the `nanny run` process.
 // The child process communicates with it over a Unix domain socket (macOS/Linux)
@@ -57,34 +57,7 @@ pub struct BridgeMetrics {
     pub declared_rule_count: usize,
 }
 
-// ── BridgeAddress ─────────────────────────────────────────────────────────────
 
-/// How the child process reaches the bridge.
-///
-/// On Unix (macOS / Linux): a Unix domain socket. No port, no conflicts.
-///   Inject `NANNY_BRIDGE_SOCKET` into the child environment.
-///   The socket path embeds the session token UUID, and Unix filesystem
-///   permissions restrict access to the creating user: no extra auth needed
-///   to connect, but the `X-Nanny-Session-Token` header is still required.
-///
-/// On Windows: TCP loopback on an OS-assigned port.
-///   Inject `NANNY_BRIDGE_PORT` into the child environment.
-///   **Security note:** any local process on the machine can attempt a TCP
-///   connection to 127.0.0.1:<port>. The session token (a random UUID passed
-///   via `NANNY_SESSION_TOKEN` and required as `X-Nanny-Session-Token` on
-///   every request) is the sole authentication mechanism. The token is
-///   visible to child processes spawned by the agent: do not spawn untrusted
-///   sub-processes from within a governed agent on Windows.
-///
-/// In both cases inject `NANNY_SESSION_TOKEN`.
-#[derive(Debug, Clone)]
-pub enum BridgeAddress {
-    /// Unix domain socket: macOS and Linux only.
-    #[cfg(unix)]
-    Unix(std::path::PathBuf),
-    /// TCP port on 127.0.0.1: Windows fallback.
-    Tcp(u16),
-}
 
 // ── BridgeComponents ──────────────────────────────────────────────────────────
 
@@ -98,15 +71,31 @@ pub struct BridgeComponents {
     /// Carried into every `PolicyContext` so rules can reason about what a
     /// tool is rather than what it is called.
     pub tool_labels: HashMap<String, Vec<String>>,
+
+    /// The two scalars `ExecutionStarted` needs that the bridge cannot derive:
+    /// the config fingerprint and the runtime version. Seeded into every run so
+    /// a governed execution opens with the authority it was granted, the same
+    /// way a local one always has.
+    pub config_hash: String,
+    pub runtime_version: String,
+
+    /// `[start].cmd`, when this governor launches an app of its own. `None` for
+    /// a headless governor, and for a run that arrived over `--join` the
+    /// governor genuinely does not know what the joiner is running, so the
+    /// field is empty rather than guessed at.
+    pub start_command: Option<String>,
 }
 
 // ── Internal state ────────────────────────────────────────────────────────────
 
 pub(crate) struct BridgeState {
+    /// Checked by the test router; the governor authenticates against its own
+    /// accepted set, so nothing in production reads this.
+    #[cfg_attr(not(test), allow(dead_code))]
     session_token: String,
     execution: ExecutionState,
 
-    /// Which run this state governs. Under `--serve` one governor holds many;
+    /// Which run this state governs. One governor holds many;
     /// locally there is exactly one. Stamped onto every event so the log is
     /// self-describing rather than only interpretable alongside the transport
     /// header that carried it.
@@ -144,7 +133,7 @@ pub(crate) struct BridgeState {
 
     // Last-recorded app attribution `(app_id, name)`. Dedups `AppIdentified`
     // the same way, so a caller may safely (re)declare its identity on every
-    // request. Under `--serve` this changes as different apps join.
+    // request. This changes as different apps join.
     last_app: Option<(String, String)>,
 
     // Last-recorded governor identity `(name, address, version)`. Dedups
@@ -157,13 +146,19 @@ pub(crate) struct BridgeState {
 /// A running bridge instance.
 ///
 /// Inject `address` and `session_token` into the child process environment
-/// before spawning it. On Unix set `NANNY_BRIDGE_SOCKET`; on Windows set
-/// `NANNY_BRIDGE_PORT`. Always set `NANNY_SESSION_TOKEN`.
+/// before spawning it: `NANNY_BRIDGE_ADDR` and `NANNY_SESSION_TOKEN`.
+/// An in-process bridge: the run state, the tool registry, and the token a
+/// request must present. It listens on nothing.
+///
+/// The governor is what an app talks to, over the network, and the SDKs reach
+/// it at `NANNY_BRIDGE_ADDR`. This exists so the handlers can be exercised
+/// without standing one up.
 pub struct Bridge {
     shared: Arc<Mutex<BridgeState>>,
-    /// How the child process connects to the bridge.
-    pub address: BridgeAddress,
-    /// Session token the child process must present on every request.
+    #[cfg_attr(not(test), allow(dead_code))]
+    registry: Arc<ToolRegistry>,
+    /// Session token a request must present.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub session_token: String,
 }
 
@@ -189,7 +184,7 @@ impl Bridge {
             session_token: token.clone(),
             execution: ExecutionState::Running,
             run_id,
-            next_seq: 1,
+            next_seq: 0,
             tool_permission_policy,
             rule_evaluator,
             agent_name_stack: Vec::new(),
@@ -206,83 +201,15 @@ impl Bridge {
             last_governor: None,
         }));
 
-        let registry = Arc::new(components.registry);
-
-        start_transport(token, shared, registry)
+        Ok(Self {
+            shared,
+            registry: Arc::new(components.registry),
+            session_token: token,
+        })
     }
 }
 
-// ── Transport startup ─────────────────────────────────────────────────────────
 
-#[cfg(unix)]
-fn start_transport(
-    token: String,
-    shared: Arc<Mutex<BridgeState>>,
-    registry: Arc<ToolRegistry>,
-) -> Result<Bridge, BridgeError> {
-    let socket_path = std::path::PathBuf::from(format!("/tmp/nanny-{}.sock", token));
-
-    // Remove stale socket if present (shouldn't happen with UUID names).
-    let _ = std::fs::remove_file(&socket_path);
-
-    // Bind in the main thread: socket is ready before start() returns.
-    let listener = std::os::unix::net::UnixListener::bind(&socket_path)
-        .map_err(|e| BridgeError::Start(format!("socket bind failed: {e}")))?;
-
-    {
-        let shared = shared.clone();
-        let registry = registry.clone();
-        std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(mut s) = stream else { continue };
-                let Some(req) = parse_http_request(&mut s) else {
-                    continue;
-                };
-                let resp = dispatch(req, &shared, &registry);
-                write_http_response(&mut s, &resp);
-            }
-        });
-    }
-
-    Ok(Bridge {
-        shared,
-        address: BridgeAddress::Unix(socket_path),
-        session_token: token,
-    })
-}
-
-#[cfg(not(unix))]
-fn start_transport(
-    token: String,
-    shared: Arc<Mutex<BridgeState>>,
-    registry: Arc<ToolRegistry>,
-) -> Result<Bridge, BridgeError> {
-    // Bind to port 0: the OS assigns a free ephemeral port per bridge instance.
-    // This supports concurrent `nanny run` processes on the same machine without
-    // conflict. The actual bound port is read back via server_addr() and injected
-    // into the child process environment as NANNY_BRIDGE_PORT: child processes
-    // never hardcode the port themselves.
-    let server =
-        tiny_http::Server::http("127.0.0.1:0").map_err(|e| BridgeError::Start(e.to_string()))?;
-
-    let port = server
-        .server_addr()
-        .to_ip()
-        .ok_or_else(|| BridgeError::Start("could not read bound TCP port".to_string()))?
-        .port();
-
-    {
-        let shared = shared.clone();
-        let registry = registry.clone();
-        std::thread::spawn(move || serve_tcp(server, shared, registry));
-    }
-
-    Ok(Bridge {
-        shared,
-        address: BridgeAddress::Tcp(port),
-        session_token: token,
-    })
-}
 
 impl Bridge {
     /// Read the current execution state.
@@ -340,7 +267,7 @@ impl Bridge {
     }
 
     /// Declare this governance server's identity, emitting `GovernorIdentified`
-    ///. Called once, by `--serve`'s startup path: a plain (non-serve)
+    ///. Called once, by the governor's startup path: a process that
     /// `nanny run` has no governor to identify and never calls this.
     pub fn declare_governor(
         &self,
@@ -365,19 +292,11 @@ impl Bridge {
     }
 }
 
-impl Drop for Bridge {
-    fn drop(&mut self) {
-        // Clean up the socket file so it doesn't linger between runs.
-        #[cfg(unix)]
-        if let BridgeAddress::Unix(ref path) = self.address {
-            let _ = std::fs::remove_file(path);
-        }
-    }
-}
 
 // ── Transport-agnostic request / response ─────────────────────────────────────
 
 /// A parsed incoming request: transport-independent.
+#[cfg(test)]
 struct BridgeReq {
     method: String,
     path: String,
@@ -418,6 +337,12 @@ impl BridgeResp {
 
 // ── Dispatch ──────────────────────────────────────────────────────────────────
 
+/// Route a request to a handler, for tests.
+///
+/// The governor's router in `network.rs` is what serves traffic. This exists so
+/// the handler tests below can assert status codes and bodies by path without
+/// standing a governor up, and it is deliberately not a second live surface.
+#[cfg(test)]
 fn dispatch(
     req: BridgeReq,
     shared: &Arc<Mutex<BridgeState>>,
@@ -1003,130 +928,11 @@ pub(crate) fn handle_app(body: &[u8], shared: &Arc<Mutex<BridgeState>>) -> Bridg
 
 // ── Unix domain socket transport ──────────────────────────────────────────────
 
-/// Read a minimal HTTP/1.x request from any byte stream.
-///
-/// Handles the subset the bridge needs: method, path,
-/// `X-Nanny-Session-Token`, `Content-Length`, and body.
-/// Returns `None` if the stream ends unexpectedly or headers are malformed.
-#[cfg(unix)]
-fn parse_http_request(stream: &mut impl std::io::Read) -> Option<BridgeReq> {
-    // Read byte-by-byte until we see the end-of-headers marker.
-    let mut header_buf: Vec<u8> = Vec::with_capacity(512);
-    let mut byte = [0u8; 1];
-    loop {
-        stream.read_exact(&mut byte).ok()?;
-        header_buf.push(byte[0]);
-        if header_buf.ends_with(b"\r\n\r\n") {
-            break;
-        }
-        if header_buf.len() > 8192 {
-            return None; // guard against oversized headers
-        }
-    }
 
-    let header_str = std::str::from_utf8(&header_buf).ok()?;
-    let mut lines = header_str.lines();
-
-    // Request line: METHOD /path HTTP/1.x
-    let first = lines.next()?;
-    let mut parts = first.split_ascii_whitespace();
-    let method = parts.next()?.to_string();
-    let path = parts.next()?.to_string();
-
-    let mut token: Option<String> = None;
-    let mut content_length: usize = 0;
-
-    for line in lines {
-        if line.is_empty() {
-            break;
-        }
-        if let Some((name, value)) = line.split_once(':') {
-            let name = name.trim();
-            let value = value.trim();
-            if name.eq_ignore_ascii_case("x-nanny-session-token") {
-                token = Some(value.to_string());
-            } else if name.eq_ignore_ascii_case("content-length") {
-                content_length = value.parse().unwrap_or(0);
-            }
-        }
-    }
-
-    let mut body = vec![0u8; content_length];
-    if content_length > 0 {
-        stream.read_exact(&mut body).ok()?;
-    }
-
-    Some(BridgeReq {
-        method,
-        path,
-        token,
-        body,
-    })
-}
-
-/// Write an HTTP/1.1 response to any byte stream.
-#[cfg(unix)]
-fn write_http_response(stream: &mut impl std::io::Write, resp: &BridgeResp) {
-    let ct = match resp.content_type {
-        ContentType::Json => "application/json",
-        ContentType::Ndjson => "application/x-ndjson",
-    };
-    let body = resp.body.as_bytes();
-    let _ = write!(
-        stream,
-        "HTTP/1.1 {status} \r\nContent-Type: {ct}\r\nContent-Length: {len}\r\n\r\n",
-        status = resp.status,
-        ct = ct,
-        len = body.len(),
-    );
-    let _ = stream.write_all(body);
-}
 
 // ── TCP transport (Windows / non-Unix) ────────────────────────────────────────
 
-#[cfg(not(unix))]
-fn serve_tcp(
-    server: tiny_http::Server,
-    shared: Arc<Mutex<BridgeState>>,
-    registry: Arc<ToolRegistry>,
-) {
-    use std::io::Read;
-    for mut request in server.incoming_requests() {
-        let token = request
-            .headers()
-            .iter()
-            .find(|h| {
-                h.field
-                    .as_str()
-                    .as_str()
-                    .eq_ignore_ascii_case("x-nanny-session-token")
-            })
-            .map(|h| h.value.as_str().to_string());
 
-        let mut body = Vec::new();
-        request.as_reader().read_to_end(&mut body).unwrap_or(0);
-
-        let req = BridgeReq {
-            method: request.method().as_str().to_string(),
-            path: request.url().to_string(),
-            token,
-            body,
-        };
-        let resp = dispatch(req, &shared, &registry);
-        let _ = request.respond(make_tiny_response(resp));
-    }
-}
-
-#[cfg(not(unix))]
-fn make_tiny_response(resp: BridgeResp) -> tiny_http::Response<std::io::Cursor<Vec<u8>>> {
-    let ct = match resp.content_type {
-        ContentType::Json => "application/json",
-        ContentType::Ndjson => "application/x-ndjson",
-    };
-    tiny_http::Response::from_data(resp.body.into_bytes())
-        .with_status_code(tiny_http::StatusCode(resp.status))
-        .with_header(tiny_http::Header::from_bytes("Content-Type", ct).unwrap())
-}
 
 // ── Request / response types ──────────────────────────────────────────────────
 
@@ -1369,12 +1175,11 @@ pub(crate) fn stopped_reason(shared: &Arc<Mutex<BridgeState>>) -> Option<String>
     }
 }
 
-/// Build the 410 Gone body for a stopped run.
-///
-/// `error` stays `"execution stopped"` for backward compatibility; `reason`
-/// carries the specific stop-reason name so clients surface the true cause.
-/// `reason` is always one of the closed set of stop-reason identifiers, so it
-/// needs no JSON escaping.
+
+/// The 410 a stopped run returns. `error` stays `"execution stopped"` for
+/// backward compatibility; `reason` carries the specific stop-reason name, and
+/// is always one of a closed set, so it needs no JSON escaping.
+#[cfg(test)]
 pub(crate) fn stopped_response(reason: &str) -> BridgeResp {
     BridgeResp::json(
         410,
@@ -1395,6 +1200,27 @@ pub(crate) struct RunTemplate {
     allowed_tools: Vec<String>,
     per_tool_max_calls: HashMap<String, u32>,
     tool_labels: HashMap<String, Vec<String>>,
+    config_hash: String,
+    runtime_version: String,
+    start_command: Option<String>,
+}
+
+/// Build a `RunTemplate` directly, for tests that need to inspect what a fresh
+/// run is seeded with without standing up a whole governor.
+#[cfg(test)]
+pub(crate) fn run_template_for_test(
+    components: BridgeComponents,
+    session_token: String,
+) -> RunTemplate {
+    RunTemplate {
+        session_token,
+        allowed_tools: components.allowed_tools,
+        per_tool_max_calls: components.per_tool_max_calls,
+        tool_labels: components.tool_labels,
+        config_hash: components.config_hash,
+        runtime_version: components.runtime_version,
+        start_command: components.start_command,
+    }
 }
 
 impl RunTemplate {
@@ -1402,6 +1228,20 @@ impl RunTemplate {
     ///
     /// Each call produces a distinct execution with zeroed counters, so a
     /// stop on one run never touches another.
+    /// A run with no opening `ExecutionStarted`, for the placeholder a
+    /// headless governor keeps so `GovernorIdentified` has somewhere to land.
+    /// Nothing runs under it, so bracketing it would report an execution that
+    /// never happened.
+    pub(crate) fn build_placeholder_state(&self, run_id: &str) -> Arc<Mutex<BridgeState>> {
+        let state = self.build_state(run_id);
+        {
+            let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
+            guard.events.clear();
+            guard.next_seq = 0;
+        }
+        state
+    }
+
     pub(crate) fn build_state(&self, run_id: &str) -> Arc<Mutex<BridgeState>> {
         let tool_permission_policy = ToolPermissionPolicy::new(self.allowed_tools.clone());
         let rule_evaluator = RuleEvaluator::new(self.per_tool_max_calls.clone());
@@ -1410,7 +1250,8 @@ impl RunTemplate {
             session_token: self.session_token.clone(),
             execution: ExecutionState::Running,
             run_id: run_id.to_string(),
-            next_seq: 0,
+            // 1, not 0: the seeded `ExecutionStarted` above is seq 0.
+            next_seq: 1,
             tool_permission_policy,
             rule_evaluator,
             agent_name_stack: Vec::new(),
@@ -1420,7 +1261,25 @@ impl RunTemplate {
             tool_call_counts: HashMap::new(),
             tool_call_history: Vec::new(),
             start_time: std::time::Instant::now(),
-            events: Vec::new(),
+            // Seeded, not left empty. Every run opens with `ExecutionStarted`
+            // as seq 0, which is where the config half of declared authority
+            // lives: the allowlist, the tool labels, the config fingerprint and
+            // the runtime version. A governed run used to emit none, so an
+            // execution reached the cloud with a null config hash and no record
+            // of what it had been authorised to do.
+            events: vec![serde_json::to_string(&LoggedEvent::new(
+                run_id.to_string(),
+                0,
+                ExecutionEvent::ExecutionStarted {
+                    ts: now_ms(),
+                    command: self.start_command.clone().unwrap_or_default(),
+                    allowed_tools: self.allowed_tools.clone(),
+                    tool_labels: self.tool_labels.clone().into_iter().collect(),
+                    config_hash: self.config_hash.clone(),
+                    runtime_version: self.runtime_version.clone(),
+                },
+            ))
+            .expect("ExecutionStarted always serialises")],
             last_harness: None,
             last_rules: None,
             last_app: None,
@@ -1437,6 +1296,9 @@ pub(crate) fn init_run_template(
     token: String,
 ) -> (RunTemplate, Arc<ToolRegistry>) {
     let template = RunTemplate {
+        config_hash: components.config_hash.clone(),
+        runtime_version: components.runtime_version.clone(),
+        start_command: components.start_command.clone(),
         session_token: token,
         allowed_tools: components.allowed_tools,
         per_tool_max_calls: components.per_tool_max_calls,
@@ -1485,6 +1347,9 @@ mod tests {
             allowed_tools: vec!["echo".to_string()],
             per_tool_max_calls: Default::default(),
             tool_labels: Default::default(),
+            config_hash: "test-config".to_string(),
+            runtime_version: "0.0.0-test".to_string(),
+            start_command: None,
         }
     }
 
@@ -1503,6 +1368,9 @@ mod tests {
             allowed_tools,
             per_tool_max_calls: Default::default(),
             tool_labels: Default::default(),
+            config_hash: "test-config".to_string(),
+            runtime_version: "0.0.0-test".to_string(),
+            start_command: None,
         };
         let b = Bridge::start(components, "test-run".to_string()).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
@@ -1514,104 +1382,44 @@ mod tests {
     // On Unix the bridge uses a Unix domain socket; on Windows it uses TCP.
     // These helpers abstract over the transport so all tests are identical.
 
-    fn http_get(addr: &BridgeAddress, token: &str, path: &str) -> (u16, String) {
-        #[cfg(unix)]
-        if let BridgeAddress::Unix(socket_path) = addr {
-            use std::io::{Read, Write};
-            use std::os::unix::net::UnixStream;
-            let mut s = UnixStream::connect(socket_path).unwrap();
-            write!(
-                s,
-                "GET {path} HTTP/1.0\r\nX-Nanny-Session-Token: {token}\r\n\r\n"
-            )
-            .unwrap();
-            let mut raw = String::new();
-            s.read_to_string(&mut raw).unwrap();
-            return parse_http(raw);
-        }
-        // TCP fallback (Windows)
-        #[allow(unreachable_patterns)]
-        let BridgeAddress::Tcp(port) = addr
-        else {
-            unreachable!()
-        };
-        tcp_get(*port, token, path)
+    /// Send a request to the bridge without a socket.
+    ///
+    /// These helpers used to open a Unix socket or a TCP connection and speak
+    /// HTTP over it. They call the router directly now: what they assert is
+    /// status codes and bodies, which is `dispatch`'s job, and a listener in
+    /// between only added a transport to go wrong.
+    fn http_get(b: &Bridge, token: &str, path: &str) -> (u16, String) {
+        request(b, "GET", token, path, "")
     }
 
-    fn http_post(addr: &BridgeAddress, token: &str, path: &str, body: &str) -> (u16, String) {
-        #[cfg(unix)]
-        if let BridgeAddress::Unix(socket_path) = addr {
-            use std::io::{Read, Write};
-            use std::os::unix::net::UnixStream;
-            let mut s = UnixStream::connect(socket_path).unwrap();
-            write!(
-                s,
-                "POST {path} HTTP/1.0\r\nX-Nanny-Session-Token: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
-                body.len()
-            ).unwrap();
-            let mut raw = String::new();
-            s.read_to_string(&mut raw).unwrap();
-            return parse_http(raw);
-        }
-        // TCP fallback (Windows)
-        #[allow(unreachable_patterns)]
-        let BridgeAddress::Tcp(port) = addr
-        else {
-            unreachable!()
-        };
-        tcp_post(*port, token, path, body)
+    fn http_post(b: &Bridge, token: &str, path: &str, body: &str) -> (u16, String) {
+        request(b, "POST", token, path, body)
+    }
+
+    fn request(b: &Bridge, method: &str, token: &str, path: &str, body: &str) -> (u16, String) {
+        let resp = dispatch(
+            BridgeReq {
+                method: method.to_string(),
+                path: path.to_string(),
+                token: Some(token.to_string()),
+                body: body.as_bytes().to_vec(),
+            },
+            &b.shared,
+            &b.registry,
+        );
+        (resp.status, resp.body)
     }
 
     fn get(b: &Bridge, path: &str) -> (u16, String) {
-        http_get(&b.address, &b.session_token, path)
+        http_get(b, &b.session_token, path)
     }
 
     fn post(b: &Bridge, path: &str, body: &str) -> (u16, String) {
-        http_post(&b.address, &b.session_token, path, body)
+        http_post(b, &b.session_token, path, body)
     }
 
-    // TCP helpers (used directly on Windows, used by http_get/http_post fallback)
-    fn tcp_get(port: u16, token: &str, path: &str) -> (u16, String) {
-        use std::io::{Read, Write};
-        use std::net::TcpStream;
-        let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
-        write!(
-            s,
-            "GET {path} HTTP/1.0\r\nHost: 127.0.0.1\r\nX-Nanny-Session-Token: {token}\r\n\r\n"
-        )
-        .unwrap();
-        let mut raw = String::new();
-        s.read_to_string(&mut raw).unwrap();
-        parse_http(raw)
-    }
 
-    fn tcp_post(port: u16, token: &str, path: &str, body: &str) -> (u16, String) {
-        use std::io::{Read, Write};
-        use std::net::TcpStream;
-        let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
-        write!(
-            s,
-            "POST {path} HTTP/1.0\r\nHost: 127.0.0.1\r\nX-Nanny-Session-Token: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
-            body.len()
-        ).unwrap();
-        let mut raw = String::new();
-        s.read_to_string(&mut raw).unwrap();
-        parse_http(raw)
-    }
 
-    fn parse_http(raw: String) -> (u16, String) {
-        let status = raw
-            .lines()
-            .next()
-            .and_then(|l| l.split_whitespace().nth(1))
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0u16);
-        let body = raw
-            .split_once("\r\n\r\n")
-            .map(|(_, b)| b.to_string())
-            .unwrap_or_default();
-        (status, body)
-    }
 
     fn json_val(s: &str) -> serde_json::Value {
         serde_json::from_str(s).expect("expected valid JSON")
@@ -1619,15 +1427,6 @@ mod tests {
 
     // ── Day 1 tests ───────────────────────────────────────────────────────────
 
-    #[test]
-    fn bridge_has_valid_address() {
-        let b = started(1000);
-        match &b.address {
-            #[cfg(unix)]
-            BridgeAddress::Unix(path) => assert!(path.exists(), "socket file must exist"),
-            BridgeAddress::Tcp(port) => assert!(*port > 0, "TCP port must be non-zero"),
-        }
-    }
 
     #[test]
     fn each_bridge_gets_a_unique_token() {
@@ -1647,14 +1446,14 @@ mod tests {
     #[test]
     fn wrong_token_returns_401() {
         let b = started(1000);
-        let (s, _) = http_get(&b.address, "wrong-token", "/health");
+        let (s, _) = http_get(&b, "wrong-token", "/health");
         assert_eq!(s, 401);
     }
 
     #[test]
     fn missing_token_returns_401() {
         let b = started(1000);
-        let (s, _) = http_get(&b.address, "", "/health");
+        let (s, _) = http_get(&b, "", "/health");
         assert_eq!(s, 401);
     }
 
@@ -1766,7 +1565,10 @@ mod tests {
                 allowed_tools: vec![], // empty allowlist, all tools denied
                 per_tool_max_calls: Default::default(),
                 tool_labels: Default::default(),
-            },
+            config_hash: "test-config".to_string(),
+            runtime_version: "0.0.0-test".to_string(),
+            start_command: None,
+        },
             "test-run".to_string(),
         )
         .unwrap();
@@ -1788,7 +1590,10 @@ mod tests {
                 allowed_tools: vec![],
                 per_tool_max_calls: Default::default(),
                 tool_labels: Default::default(),
-            },
+            config_hash: "test-config".to_string(),
+            runtime_version: "0.0.0-test".to_string(),
+            start_command: None,
+        },
             "test-run".to_string(),
         )
         .unwrap();
@@ -1865,7 +1670,10 @@ mod tests {
                 allowed_tools: vec!["echo".to_string()],
                 per_tool_max_calls,
                 tool_labels: Default::default(),
-            },
+            config_hash: "test-config".to_string(),
+            runtime_version: "0.0.0-test".to_string(),
+            start_command: None,
+        },
             "test-run".to_string(),
         )
         .unwrap();
@@ -1904,7 +1712,10 @@ mod tests {
                 allowed_tools: vec!["echo".to_string()],
                 per_tool_max_calls,
                 tool_labels: Default::default(),
-            },
+            config_hash: "test-config".to_string(),
+            runtime_version: "0.0.0-test".to_string(),
+            start_command: None,
+        },
             "test-run".to_string(),
         )
         .unwrap();
@@ -1929,7 +1740,10 @@ mod tests {
                 allowed_tools: vec!["echo".to_string()],
                 per_tool_max_calls,
                 tool_labels: Default::default(),
-            },
+            config_hash: "test-config".to_string(),
+            runtime_version: "0.0.0-test".to_string(),
+            start_command: None,
+        },
             "test-run".to_string(),
         )
         .unwrap();
@@ -2062,7 +1876,10 @@ mod tests {
                 allowed_tools: vec!["echo".to_string(), "quiet".to_string()],
                 per_tool_max_calls: Default::default(),
                 tool_labels,
-            },
+            config_hash: "test-config".to_string(),
+            runtime_version: "0.0.0-test".to_string(),
+            start_command: None,
+        },
             "test-run".to_string(),
         )
         .unwrap();
@@ -2513,7 +2330,10 @@ mod tests {
                 allowed_tools: vec!["fail".to_string()],
                 per_tool_max_calls: Default::default(),
                 tool_labels: Default::default(),
-            },
+            config_hash: "test-config".to_string(),
+            runtime_version: "0.0.0-test".to_string(),
+            start_command: None,
+        },
             "test-run".to_string(),
         )
         .unwrap();
@@ -2576,40 +2396,6 @@ mod tests {
 
     // ── Day 7: Security ──────────────────────────────────────────────────────
 
-    /// On Unix: the bridge uses a socket file: no port, no conflicts.
-    /// On Windows: the bridge binds to loopback and the port is reachable.
-    #[test]
-    fn bridge_has_valid_and_reachable_address() {
-        let b = started(1000);
-        match &b.address {
-            #[cfg(unix)]
-            BridgeAddress::Unix(path) => {
-                assert!(path.exists(), "socket file must exist after start");
-                // Reachable
-                let conn = std::os::unix::net::UnixStream::connect(path);
-                assert!(conn.is_ok(), "Unix socket must be connectable");
-            }
-            BridgeAddress::Tcp(port) => {
-                assert!(*port > 0);
-                let conn = std::net::TcpStream::connect(("127.0.0.1", *port));
-                assert!(conn.is_ok(), "TCP loopback must be connectable");
-            }
-        }
-    }
-
-    /// Socket file is cleaned up when the Bridge is dropped.
-    #[cfg(unix)]
-    #[test]
-    fn socket_file_is_removed_on_drop() {
-        let path = {
-            let b = started(1000);
-            let BridgeAddress::Unix(ref p) = b.address else {
-                panic!("expected Unix")
-            };
-            p.clone()
-        }; // bridge dropped here
-        assert!(!path.exists(), "socket file must be removed on drop");
-    }
 
     /// Action endpoints return 410 once execution is stopped.
     #[test]
@@ -2649,7 +2435,7 @@ mod tests {
     fn stale_token_is_rejected_after_stop() {
         let b = started(1000);
         b.stop("AgentCompleted");
-        let (status, _) = http_get(&b.address, "wrong-token", "/health");
+        let (status, _) = http_get(&b, "wrong-token", "/health");
         assert_eq!(status, 401);
     }
 
@@ -2815,6 +2601,9 @@ mod tests {
             allowed_tools: vec!["echo".into()],
             per_tool_max_calls: HashMap::new(),
             tool_labels: HashMap::new(),
+            config_hash: "test-config".to_string(),
+            runtime_version: "0.0.0-test".to_string(),
+            start_command: None,
         };
         init_run_template(components, "tok".into()).0
     }
@@ -2842,7 +2631,10 @@ mod tests {
                     .unwrap()
             })
             .collect();
-        assert_eq!(seqs, vec![0, 1, 2]);
+        // 0 is the `ExecutionStarted` every run is seeded with; the three
+        // appended events follow it. The property is the monotonicity, not
+        // where it starts.
+        assert_eq!(seqs, vec![0, 1, 2, 3]);
     }
 
     #[test]
@@ -2900,8 +2692,18 @@ mod tests {
                 .collect()
         };
 
-        assert_eq!(read(&a), vec![("run-a".into(), 0), ("run-a".into(), 1)]);
-        assert_eq!(read(&b), vec![("run-b".into(), 0)]);
+        // Seq 0 of each run is the `ExecutionStarted` a run is seeded with, so
+        // appended events start at 1. The property under test is unchanged:
+        // the counters are per run and never shared.
+        assert_eq!(
+            read(&a),
+            vec![
+                ("run-a".into(), 0),
+                ("run-a".into(), 1),
+                ("run-a".into(), 2)
+            ]
+        );
+        assert_eq!(read(&b), vec![("run-b".into(), 0), ("run-b".into(), 1)]);
     }
 
     // ── cleared_by ────────────────────────────────────────────────────────────
@@ -2915,7 +2717,10 @@ mod tests {
                 allowed_tools: vec![tool.to_string()],
                 per_tool_max_calls: [(tool.to_string(), max)].into_iter().collect(),
                 tool_labels: HashMap::new(),
-            },
+            config_hash: "test-config".to_string(),
+            runtime_version: "0.0.0-test".to_string(),
+            start_command: None,
+        },
             "test-run".to_string(),
         )
         .unwrap()

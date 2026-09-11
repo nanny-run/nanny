@@ -1,6 +1,6 @@
 // network.rs: TCP + mTLS governance server for cross-process enforcement.
 //
-// Started by `nanny run --serve`. Multiple agents on the same or different
+// Started by `nanny run`. Multiple agents on the same or different
 // machines connect to it. All connections share one execution context:
 // one tool call history, one set of call counts, one stop state. This is
 // cross-process enforcement without a cloud dependency.
@@ -11,7 +11,7 @@
 //            defense-in-depth and per-execution identity.
 //
 // Usage from CLI:
-//     nanny run --serve [--addr 0.0.0.0:62669] [--cert ...] [--key ...] [--ca ...]
+//     nanny run [--addr 0.0.0.0:62669] [--cert ...] [--key ...] [--ca ...]
 //
 // Agents point to the server via:
 //     NANNY_BRIDGE_ADDR=host:port
@@ -112,7 +112,7 @@ fn bind_with_fallforward(requested: SocketAddr) -> Result<std::net::TcpListener>
                     .set_nonblocking(true)
                     .context("failed to set the listener non-blocking")?;
                 if attempt > 0 {
-                    println!(
+                    eprintln!(
                         "nanny: port {} was in use, listening on {} instead",
                         requested.port(),
                         addr.port()
@@ -189,7 +189,7 @@ fn write_secret_file(path: &Path, contents: &str) -> Result<()> {
 
 /// Sliding-window per-IP rate limiter.  DoS protection only: never a
 /// business-tier gate and never in nanny.toml.  Hardcoded safe default;
-/// power users override with `--rate-limit` on `nanny run --serve`.
+/// power users override with `--rate-limit` on `nanny run`.
 #[derive(Clone)]
 struct RateLimiter {
     inner: Arc<Mutex<std::collections::HashMap<IpAddr, (u32, Instant)>>>,
@@ -693,6 +693,11 @@ impl NetworkServer {
             None,
             state_dir,
             None,
+            // No sink and no log, so nothing drains and neither is read.
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            Arc::new(Mutex::new(None)),
+            Arc::new((Mutex::new(false), std::sync::Condvar::new())),
+            None,
         )
     }
 
@@ -701,15 +706,10 @@ impl NetworkServer {
     /// `(run_id, lines)` to it. This is the ONLY hook cloud sync uses; the engine
     /// stays auth free: it never talks to the cloud, it just hands off strings.
     ///
-    /// `local_log_path`: when `Some`, the same drain thread also appends each
-    /// drained line to this file, flushed per write. This is what makes
-    /// `[observability] log = "file"` behave identically whether the process
-    /// is local `nanny run` or `nanny run --serve`: before this, `nanny.toml`
-    /// promised a log file and `--serve` silently never wrote one, the config
-    /// was only ever honored by the local, single-process run path. The
-    /// caller (`commands/server.rs`) resolves this from the server's own
-    /// `nanny.toml`, the same `[observability]` table local `nanny run`
-    /// already reads via `EventWriter::from_config`.
+    /// `local_log`: when `Some`, the same drain thread also writes each drained
+    /// line to it, flushed per write. The caller resolves it from
+    /// Taking an opened writer rather than a path is what lets stdout reach
+    /// this at all: a path cannot name it.
     #[allow(clippy::too_many_arguments)]
     pub fn start_blocking_synced(
         addr: SocketAddr,
@@ -721,7 +721,33 @@ impl NetworkServer {
         rate_limit_rps: u32, // max req/s per client IP, DoS protection, default 100
         event_sink: Option<Sender<(String, Vec<String>)>>,
         state_dir: PathBuf, // ~/.nanny/servers/<app_id>/, keyed, per-app, never shared
-        local_log_path: Option<PathBuf>,
+        local_log: Option<Box<dyn std::io::Write + Send>>,
+        // Raised by the caller when the app it governs has exited. The drain
+        // thread makes one final sweep and returns, dropping its sender, which
+        // is what lets the cloud forwarder finish and be joined. Without it the
+        // process exits between 250ms ticks and the last batch, the one holding
+        // ExecutionStopped and the stop reason, is never drained at all.
+        drain_shutdown: Arc<std::sync::atomic::AtomicBool>,
+        // Why the run ended, set by the caller alongside `drain_shutdown`. The
+        // bridge does not know: only the CLI sees the child's exit status, a
+        // signal, or a spawn failure. Written into every live run as its
+        // closing `ExecutionStopped` on the final sweep, so an execution is
+        // bracketed rather than simply stopping mid-log.
+        stop_reason: Arc<Mutex<Option<String>>>,
+        // Raised by the drain thread once its final sweep has been written.
+        // The caller waits on this before letting the process exit: without it
+        // the main thread raises `drain_shutdown` and returns, and the process
+        // dies before the sweep runs, so a run that never made a governed call
+        // emits no events at all.
+        drain_done: Arc<(Mutex<bool>, std::sync::Condvar)>,
+        // The run this governor's own app will report under, when it launches
+        // one. Created eagerly so `GovernorIdentified` has somewhere to land,
+        // and so the app's first request joins the run already open rather
+        // than opening a second beside it: one process under one governor is
+        // one execution, not two. `None` for a headless governor, where the
+        // placeholder run carries only the governor's identity and never
+        // pretends to be an execution.
+        primary_run_id: Option<String>,
     ) -> Result<()> {
         // Install ring crypto provider: safe to call multiple times.
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -752,10 +778,19 @@ impl NetworkServer {
         // action endpoint is hit. Distinct run ids are minted lazily on demand.
         let runs: Arc<Mutex<HashMap<String, Arc<Mutex<BridgeState>>>>> =
             Arc::new(Mutex::new(HashMap::new()));
-        let default_state = template.build_state(DEFAULT_RUN_ID);
+        let primary = primary_run_id
+            .clone()
+            .unwrap_or_else(|| DEFAULT_RUN_ID.to_string());
+        let default_state = if primary_run_id.is_some() {
+            template.build_state(&primary)
+        } else {
+            // No app of its own, so nothing here is an execution. Opening it
+            // with `ExecutionStarted` would report a run that never ran.
+            template.build_placeholder_state(&primary)
+        };
         runs.lock()
             .unwrap()
-            .insert(DEFAULT_RUN_ID.to_string(), default_state.clone());
+            .insert(primary.clone(), default_state.clone());
 
         // GovernorIdentified: declared once, into the default run's
         // own event stream, so it drains and forwards the same way every other
@@ -783,31 +818,57 @@ impl NetworkServer {
         // copy of the same drained lines, neither steals from the other.
         // Cloud sink: hands `(run_id, lines)` to the cli-layer forwarder, no
         // cloud code lives here. Local log: appends each line to
-        // `local_log_path`, flushed per write, same guarantee
-        // `EventWriter` (the local `nanny run` path) already gives: this is
-        // what makes `[observability] log = "file"` behave the same whether
-        // the process is local `nanny run` or `nanny run --serve`.
-        if event_sink.is_some() || local_log_path.is_some() {
+        // `local_log`, flushed per write, the same guarantee `EventWriter`
+        // gives. The sink arrives already open, so this code path does not
+        // care whether it is stdout or something a caller redirected it to.
+        if event_sink.is_none() && local_log.is_none() {
+            // Nothing drains, so a caller waiting for a sweep would wait for
+            // one that never comes.
+            let (lock, cv) = &*drain_done;
+            *lock.lock().unwrap_or_else(|e| e.into_inner()) = true;
+            cv.notify_all();
+        }
+        if event_sink.is_some() || local_log.is_some() {
             let drain_runs = Arc::clone(&runs);
-            let mut local_log_file = match &local_log_path {
-                Some(path) => match std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(path)
-                {
-                    Ok(f) => Some(f),
-                    Err(e) => {
-                        eprintln!(
-                            "nanny: failed to open local log file '{}': {e}",
-                            path.display()
-                        );
-                        None
-                    }
-                },
-                None => None,
-            };
+            let drain_done = Arc::clone(&drain_done);
+            let mut local_log_file = local_log;
             std::thread::spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_millis(250));
+                // Checked after the sweep, not before, so a shutdown raised
+                // during the sleep still gets its final pass.
+                let stopping = drain_shutdown.load(std::sync::atomic::Ordering::SeqCst);
+                if !stopping {
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                } else if let Some(reason) =
+                    stop_reason.lock().unwrap_or_else(|e| e.into_inner()).take()
+                {
+                    // Close every run still open, before the sweep below picks
+                    // the events up. `ExecutionStarted` opened them; this is the
+                    // other half of the bracket, and without it a governed
+                    // execution simply stops mid-log.
+                    let guard = drain_runs.lock().unwrap_or_else(|e| e.into_inner());
+                    for state in guard.values() {
+                        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                        let elapsed_ms = st.start_time.elapsed().as_millis() as u64;
+                        let tokens_spent = st.tokens_spent;
+                        // A run that reported its own reason keeps it: the
+                        // child may have posted /stop with RuleDenied or
+                        // ToolDenied before dying, and the exit status the
+                        // caller saw is only the fallback.
+                        let reason = match &st.execution {
+                            crate::ExecutionState::Stopped { reason } => reason.clone(),
+                            crate::ExecutionState::Running => reason.clone(),
+                        };
+                        crate::append_event(
+                            &mut st,
+                            nanny_core::events::event::ExecutionEvent::ExecutionStopped {
+                                ts: crate::now_ms(),
+                                reason,
+                                tokens_spent,
+                                elapsed_ms,
+                            },
+                        );
+                    }
+                }
                 let ids: Vec<String> = {
                     let guard = drain_runs.lock().unwrap();
                     guard.keys().cloned().collect()
@@ -831,6 +892,16 @@ impl NetworkServer {
                             }
                         }
                     }
+                }
+                if stopping {
+                    // The sweep above was the last one. Tell the caller it is
+                    // safe to exit, then return, which drops `event_sink` and
+                    // closes the channel the forwarder is draining, which is
+                    // how `flush_and_join` knows to finish.
+                    let (lock, cv) = &*drain_done;
+                    *lock.lock().unwrap_or_else(|e| e.into_inner()) = true;
+                    cv.notify_all();
+                    return;
                 }
             });
         }
@@ -915,34 +986,34 @@ impl NetworkServer {
             format!("{} (+{} more accepted)", token_fingerprint(&token), tokens.len() - 1)
         };
         if addr.ip().is_loopback() {
-            println!("nanny: governance server started");
-            println!("  address      : {addr}");
-            println!("  session token: {accepted}");
+            eprintln!("nanny: governance server started");
+            eprintln!("  address      : {addr}");
+            eprintln!("  session token: {accepted}");
             if state_dir_ok {
-                println!("  token file   : {}", token_file.display());
+                eprintln!("  token file   : {}", token_file.display());
             }
             if interactive {
-                println!();
-                println!("Join with: nanny run --join=<this app's id>  (see .nanny/app.json)");
+                eprintln!();
+                eprintln!("Join with: nanny run --join=<this app's id>  (see .nanny/app.json)");
             }
         } else {
-            println!("nanny: governance server started");
-            println!("  address      : {addr}");
-            println!("  session token: {accepted}");
-            println!("  token file   : {}", token_file.display());
-            println!();
-            println!("Join with: nanny run --join=<this app's id>  (see .nanny/app.json)");
-            println!();
-            println!("Cross-machine agents, set these in your deployment config:");
-            println!("  NANNY_BRIDGE_ADDR={addr}");
-            println!("  NANNY_SESSION_TOKEN=$(cat {})", token_file.display());
-            println!(
+            eprintln!("nanny: governance server started");
+            eprintln!("  address      : {addr}");
+            eprintln!("  session token: {accepted}");
+            eprintln!("  token file   : {}", token_file.display());
+            eprintln!();
+            eprintln!("Join with: nanny run --join=<this app's id>  (see .nanny/app.json)");
+            eprintln!();
+            eprintln!("Cross-machine agents, set these in your deployment config:");
+            eprintln!("  NANNY_BRIDGE_ADDR={addr}");
+            eprintln!("  NANNY_SESSION_TOKEN=$(cat {})", token_file.display());
+            eprintln!(
                 "  NANNY_BRIDGE_CERT, NANNY_BRIDGE_KEY, NANNY_BRIDGE_CA  (from ~/.nanny/certs/)"
             );
         }
         if interactive {
-            println!();
-            println!("Press CTRL-C to stop.");
+            eprintln!();
+            eprintln!("Press CTRL-C to stop.");
         }
 
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -1136,7 +1207,7 @@ mod tests {
 
     // Path parity ─────────────────────────────────────────────────────────────
 
-    /// Every POST path the socket dispatch in `lib.rs` answers.
+    /// Every POST path the test router in `lib.rs` answers.
     ///
     /// Read out of the source rather than maintained by hand, so the test
     /// cannot pass against a list that has drifted from the code it describes.
@@ -1188,17 +1259,18 @@ mod tests {
     /// The two transports must answer the same set of POST paths.
     ///
     /// This is the defect that produced the test. `POST /rules` was added to
-    /// the socket dispatch and never to the router, so under `--serve` it fell
+    /// the socket dispatch and never to the router, so under the governor it fell
     /// through to `route_not_found` and 404'd: and both SDKs post it
     /// fire-and-forget (`let _ = http_post("/rules", …)`), so nothing surfaced.
     /// The rules half of declared authority silently never arrived for exactly
     /// the fleet deployments most likely to be paying for it.
     ///
-    /// Asserting set *equality*, not "rules is present", is the point: the
-    /// class of bug is a path added to one transport and not the other, in
-    /// either direction, and only equality catches the next one.
+    /// Asserting set *equality* is still the point, for a narrower reason now
+    /// that the governor is the only thing serving traffic: the handler tests
+    /// in `lib.rs` route through their own table, and if the router gains a
+    /// path that table does not, those tests quietly stop covering it.
     #[test]
-    fn socket_and_network_answer_the_same_post_paths() {
+    fn the_handler_tests_route_over_the_paths_the_governor_serves() {
         let dispatch = dispatch_post_paths();
         let router = router_post_paths();
 
@@ -1210,9 +1282,9 @@ mod tests {
         assert_eq!(
             dispatch,
             router,
-            "socket dispatch and axum router disagree on POST paths.\n\
-             only in dispatch: {:?}\n\
-             only in router:   {:?}",
+            "the test router and the governor's router disagree on POST paths.\n\
+             only in the test router: {:?}\n\
+             only in the governor:    {:?}",
             dispatch.difference(&router).collect::<Vec<_>>(),
             router.difference(&dispatch).collect::<Vec<_>>(),
         );
@@ -1256,6 +1328,9 @@ mod tests {
             allowed_tools: vec!["echo".to_string()],
             per_tool_max_calls: HashMap::new(),
             tool_labels: Default::default(),
+            config_hash: "test-config".to_string(),
+            runtime_version: "0.0.0-test".to_string(),
+            start_command: None,
         }
     }
 
@@ -1276,11 +1351,27 @@ mod tests {
     /// binding, but the kernel does not hand out the same ephemeral port twice
     /// in quick succession, so this is dramatically better than a fixed range.
     fn next_port() -> u16 {
-        std::net::TcpListener::bind("127.0.0.1:0")
-            .expect("the OS must be able to hand out an ephemeral port")
-            .local_addr()
-            .expect("a bound listener always has a local address")
-            .port()
+        use std::collections::HashSet;
+        static ISSUED: std::sync::Mutex<Option<HashSet<u16>>> = std::sync::Mutex::new(None);
+
+        // The kernel will hand a just-released ephemeral port to the next
+        // caller, so two tests in this process can be given the same one and
+        // race to bind it. One loses with "address already in use", which
+        // reads as flakiness. Remembering what has been issued removes that.
+        // What is left is another process taking the port between the release
+        // and the bind, which no bookkeeping here can prevent.
+        for _ in 0..64 {
+            let port = std::net::TcpListener::bind("127.0.0.1:0")
+                .expect("the OS must be able to hand out an ephemeral port")
+                .local_addr()
+                .expect("a bound listener always has a local address")
+                .port();
+            let mut guard = ISSUED.lock().unwrap_or_else(|e| e.into_inner());
+            if guard.get_or_insert_with(HashSet::new).insert(port) {
+                return port;
+            }
+        }
+        panic!("no ephemeral port left that this process has not already issued");
     }
 
     fn test_certs_dir() -> PathBuf {
@@ -1543,6 +1634,9 @@ mod tests {
 
         // Wait for the server to bind (poll instead of fixed sleep).
         let port = wait_for_bound_port(&state_dir);
+        // The address file lands before the listener accepts; under a full
+        // parallel run that gap can outlast a client timeout.
+        wait_for_port(port);
 
         // Connect with valid client cert
         let ca_pem = std::fs::read(&ca).unwrap();
@@ -1613,6 +1707,9 @@ mod tests {
             .ok();
         });
         let port = wait_for_bound_port(&state_dir);
+        // The address file lands before the listener accepts; under a full
+        // parallel run that gap can outlast a client timeout.
+        wait_for_port(port);
 
         let ca_pem = std::fs::read(&ca).unwrap();
         let ca_cert = reqwest::Certificate::from_pem(&ca_pem).unwrap();
@@ -1694,6 +1791,9 @@ mod tests {
             .ok();
         });
         let port = wait_for_bound_port(&state_dir);
+        // The address file lands before the listener accepts; under a full
+        // parallel run that gap can outlast a client timeout.
+        wait_for_port(port);
 
         let ca_pem = std::fs::read(&ca).unwrap();
         let ca_cert = reqwest::Certificate::from_pem(&ca_pem).unwrap();
@@ -1919,6 +2019,9 @@ mod tests {
             .ok();
         });
         let port = wait_for_bound_port(&state_dir);
+        // The address file lands before the listener accepts; under a full
+        // parallel run that gap can outlast a client timeout.
+        wait_for_port(port);
 
         // Connect WITHOUT a client cert: TLS handshake must fail
         let ca_pem = std::fs::read(&ca).unwrap();
@@ -2032,6 +2135,9 @@ mod tests {
             allowed_tools: vec!["http_get".to_string()],
             per_tool_max_calls: HashMap::new(),
             tool_labels: Default::default(),
+            config_hash: "test-config".to_string(),
+            runtime_version: "0.0.0-test".to_string(),
+            start_command: None,
         }
     }
 
@@ -2042,6 +2148,9 @@ mod tests {
             allowed_tools: vec!["http_get".to_string()],
             per_tool_max_calls: HashMap::new(),
             tool_labels: Default::default(),
+            config_hash: "test-config".to_string(),
+            runtime_version: "0.0.0-test".to_string(),
+            start_command: None,
         }
     }
 
@@ -2410,6 +2519,9 @@ mod tests {
             .ok();
         });
         let port = wait_for_bound_port(&state_dir);
+        // The address file lands before the listener accepts; under a full
+        // parallel run that gap can outlast a client timeout.
+        wait_for_port(port);
 
         // Build a client that trusts CA-A but presents a cert signed by CA-B.
         let ca_pem_a = std::fs::read(dir_a.join("ca.crt")).unwrap();
@@ -2451,10 +2563,13 @@ mod tests {
         // the TLS layer does not bypass the session-token gate.
         let dir = test_certs_dir();
         gen_certs_for_test(&dir);
-        let port = next_port();
         let state_dir = test_state_dir();
-        let addr: SocketAddr = format!("0.0.0.0:{port}").parse().unwrap();
-        let correct_token = format!("correct-{port}");
+        // Port 0: the kernel picks and the server publishes what it bound, read
+        // back below. Reserving a port here first and binding it a moment later
+        // leaves a window another test process can take it in, which is what
+        // made this test look flaky.
+        let addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
+        let correct_token = format!("correct-{}", std::process::id());
 
         let cert = dir.join("server.crt");
         let key = dir.join("server.key");
@@ -2475,6 +2590,13 @@ mod tests {
             .ok();
         });
         let port = wait_for_bound_port(&state_dir);
+        // The address file lands before the listener accepts; under a full
+        // parallel run that gap can outlast a client timeout.
+        wait_for_port(port);
+        // The address file is written before the listener accepts, and under a
+        // full parallel run that gap is long enough to outlast the client
+        // timeout. Wait for the socket, not just for the file.
+        wait_for_port(port);
 
         // Valid client cert: TLS succeeds.
         let client = make_mtls_client(&dir, port);
@@ -3154,5 +3276,42 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn every_governed_run_opens_with_execution_started() {
+        // A governed run used to emit none at all: runs are created lazily on
+        // first request, and nothing seeded them. So an execution reached the
+        // cloud with a null config hash and no record of the authority it had
+        // been granted, while a local run had carried both since 0.1.
+        let components = BridgeComponents {
+            registry: nanny_runtime::default_registry(),
+            allowed_tools: vec!["http_get".to_string()],
+            per_tool_max_calls: HashMap::new(),
+            tool_labels: [("http_get".to_string(), vec!["reads_untrusted".to_string()])]
+                .into_iter()
+                .collect(),
+            config_hash: "cafebabe".to_string(),
+            runtime_version: "9.9.9".to_string(),
+            start_command: Some("python agent.py".to_string()),
+        };
+        let template = crate::run_template_for_test(components, "tok".to_string());
+        let state = template.build_state("run-abc");
+
+        let events = { state.lock().unwrap().events.clone() };
+        let first: serde_json::Value =
+            serde_json::from_str(events.first().expect("a run opens with an event")).unwrap();
+
+        assert_eq!(first["event"], "ExecutionStarted");
+        assert_eq!(first["seq"], 0, "it is seq 0, so the log is one sequence");
+        assert_eq!(first["run_id"], "run-abc");
+        assert_eq!(first["config_hash"], "cafebabe");
+        assert_eq!(first["runtime_version"], "9.9.9");
+        assert_eq!(first["command"], "python agent.py");
+        assert_eq!(first["allowed_tools"][0], "http_get");
+        assert_eq!(
+            first["tool_labels"]["http_get"][0], "reads_untrusted",
+            "the labels are the half a rule reasons about"
+        );
     }
 }

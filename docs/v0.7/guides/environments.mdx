@@ -46,7 +46,7 @@ disposable.
 
 Enforcement never depends on the network, so a batch the cloud could not take
 yet is held locally under `.nanny/spool/` until it can be delivered, see
-[Connect to Nanny Cloud](/v0.6/guides/managed-mode#when-the-cloud-is-unreachable).
+[Connect to Nanny Cloud](/v0.7/guides/managed-mode#when-the-cloud-is-unreachable).
 That outbox is partitioned by environment (`.nanny/spool/live/`,
 `.nanny/spool/sandbox/`), so switching from a sandbox key back to a live one
 (or the reverse) never sends one environment's held batches under the other's

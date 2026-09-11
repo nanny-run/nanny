@@ -5,7 +5,7 @@
 //!
 //! # Passthrough mode
 //!
-//! All macros are no-ops when `NANNY_BRIDGE_SOCKET` / `NANNY_BRIDGE_PORT` are
+//! All macros are no-ops when `NANNY_BRIDGE_ADDR` is
 //! absent. The original function runs exactly as written: no overhead.
 
 use proc_macro::TokenStream;

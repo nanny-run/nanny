@@ -3,7 +3,7 @@ title: Deploying a governed app
 description: The ordered path from a working app to a governed one running on a host, and how to read the log it prints on the way up.
 ---
 
-This page is the sequence. [Governance server](/v0.6/guides/governance-server)
+This page is the sequence. [Governance server](/v0.7/guides/governance-server)
 is the reference for everything it touches: certificate operations, token
 rotation, port behaviour, server management. Follow the steps here, and read
 that page when a step raises a question.
@@ -14,7 +14,7 @@ There are two, and the choice decides everything after it.
 
 | | Shape | What it needs |
 | --- | --- | --- |
-| **One container** | Your app runs under a governor in the same container. | Nothing beyond `--serve`. |
+| **One container** | Your app runs under a governor in the same container. | Nothing. `nanny run` is already this. |
 | **Governor and joiners** | One service runs the governor, others connect to it from their own containers or machines. | mTLS certificates and a session token. |
 
 Start with one container if you can. Not everything has to move at once: a
@@ -22,11 +22,10 @@ second process joins later without the first one changing shape, and the rule
 set it is evaluated against is the same one.
 
 <Note>
-  **`--serve` is how a governed app starts, here and on your laptop.** On
-  loopback it needs no certificates and no setup, so there is nothing to trade
-  away by using it everywhere, and it is the shape verified against a real
-  container, a real port, and a real restart. Using it in development too means
-  the thing you tested is the thing you deploy.
+  **`nanny run` is the same command here and on your laptop.** It brings up a
+  governor and runs your app underneath it; on loopback that needs no
+  certificates and no setup. There is no second, quieter mode to develop
+  against and then swap out, so the shape you tested is the shape you deploy.
 </Note>
 
 ## 2. Install dependencies at build time
@@ -55,7 +54,7 @@ which is right on a laptop and wrong in an image: rebuild in three months and
 you silently ship a different runtime.
 
 ```dockerfile
-ARG NANNY_VERSION=0.6.3
+ARG NANNY_VERSION=0.7.0
 RUN curl -fsSL "https://github.com/nanny-run/nanny/releases/download/v${NANNY_VERSION}/nanny-linux-x86_64.tar.gz" | tar -xz -C /usr/local/bin nanny
 ```
 
@@ -72,11 +71,11 @@ NANNY_API_KEY=nny_...
 Create it in the dashboard under **Settings → API Keys**, then set it however
 your platform sets secrets: a Fly secret, a Kubernetes `Secret`, a Coolify
 environment variable. That single variable decides whether runs sync; see
-[Connect to Nanny Cloud](/v0.6/guides/managed-mode).
+[Connect to Nanny Cloud](/v0.7/guides/managed-mode).
 
 The key's prefix (`nny_live_` or `nny_sdbx_`) also decides whether this
 deployment writes real evidence or throwaway sandbox data. Read
-[Live and sandbox](/v0.6/guides/environments) before deploying against a live
+[Live and sandbox](/v0.7/guides/environments) before deploying against a live
 key for the first time.
 
 Leave it unset and everything still works. Enforcement is local and never
@@ -126,7 +125,7 @@ can mint a client the governor will trust.
 The session token is the exception and is always an environment variable, on
 both sides. Both ends read the same variable, so a second form to interpret is
 only a way for them to disagree. See
-[Rotating the token](/v0.6/guides/governance-server#rotating-the-token) for
+[Rotating the token](/v0.7/guides/governance-server#rotating-the-token) for
 moving a fleet onto a new one without stopping it.
 
 ## 6. One image, both shapes
@@ -145,14 +144,14 @@ set -e
 CERT_DIR=/run/secrets/nanny
 
 if [ -f "$CERT_DIR/server.crt" ]; then
-  exec nanny run --serve --addr "0.0.0.0:${NANNY_BRIDGE_PORT:-62669}" \
+  exec nanny run --addr "0.0.0.0:62669" \
     --cert "$CERT_DIR/server.crt" \
     --key  "$CERT_DIR/server.key" \
     --ca   "$CERT_DIR/ca.crt"
 fi
 
 echo "nanny: no certificates at $CERT_DIR, serving on loopback only"
-exec nanny run --serve
+exec nanny run
 ```
 
 The two branches match how the runtime already behaves: it picks its transport

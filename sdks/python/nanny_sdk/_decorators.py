@@ -51,7 +51,7 @@ def tool() -> Callable[[F], F]:
     Contacts the bridge before each call to enforce the tool allowlist,
     per-tool call caps, and rules.
 
-    In passthrough mode (no ``NANNY_BRIDGE_PORT``) the decorated function
+    In passthrough mode (no ``NANNY_BRIDGE_ADDR``) the decorated function
     is returned unchanged, zero overhead, zero import errors.
     """
 

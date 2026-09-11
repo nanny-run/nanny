@@ -274,7 +274,7 @@ def test_extract_usage_cache_patterns() -> None:
 
 
 def test_passthrough_returns_client_unwrapped(monkeypatch: pytest.MonkeyPatch) -> None:
-    for var in ("NANNY_BRIDGE_SOCKET", "NANNY_BRIDGE_PORT", "NANNY_BRIDGE_ADDR"):
+    for var in ("NANNY_BRIDGE_ADDR",):
         monkeypatch.delenv(var, raising=False)
     client = FakeOpenAI()
     assert instrument(client) is client
