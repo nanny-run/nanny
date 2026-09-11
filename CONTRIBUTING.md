@@ -206,15 +206,15 @@ entry, then tag.
 
 ```sh
 git checkout main && git pull --ff-only
-git tag v0.6.0
-git push origin v0.6.0
+git tag vX.Y.Z
+git push origin vX.Y.Z
 ```
 
 If a publish job fails after the GitHub Release already exists, re-run just the
 publishing jobs without rebuilding:
 
 ```sh
-gh workflow run Release -f version=v0.6.0
+gh workflow run Release -f version=vX.Y.Z
 ```
 
 Crate publishing is idempotent: a crate already on crates.io is skipped, so a
