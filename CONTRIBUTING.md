@@ -158,7 +158,7 @@ If your PR changes user-facing behaviour, CLI output, config schema, or event fo
 | `cli`     | `nannyd`        | ✓                | The `nanny` binary and Rust SDK (`#[tool]`, `#[rule]`, `#[agent]`)                             |
 | `core`    | `nanny-core`    | ✗                | Traits (`Policy`, `ToolExecutor`) and the `ExecutionEvent` type. No implementations.           |
 | `runtime` | `nanny-runtime` | ✗                | Concrete impls: `ToolPermissionPolicy`, `RuleEvaluator`, `ChainPolicy`, `ToolRegistry`, built-in tools |
-| `bridge`  | `nanny-bridge`  | ✗                | Local HTTP enforcement server (Unix socket / TCP); holds all execution state                   |
+| `bridge`  | `nanny-bridge`  | ✗                | The governance server and the enforcement handlers it serves; holds all execution state       |
 | `config`  | `nanny-config`  | ✗                | Parses `nanny.toml`; owns `NannyConfig`                                                        |
 | `macros`  | `nanny-macros`  | ✗                | The `#[tool]`, `#[rule]`, `#[agent]` proc-macros (re-exported by `cli`)                        |
 

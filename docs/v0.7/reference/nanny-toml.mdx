@@ -32,7 +32,7 @@ extends = ["nanny:recommended@1.0.0"]   # installed with nanny rules add
 # ── Not config ────────────────────────────────────────────────────────────────
 
 # The event log has no field here. Events go to stdout; redirect them where
-# you want them. See /v0.6/concepts/event-log.
+# you want them. See /v0.7/concepts/event-log.
 
 # Nor does cloud sync. It turns on for any machine that sets the
 # NANNY_API_KEY environment variable. There is no endpoint or key here.
@@ -71,7 +71,7 @@ reads_untrusted = true
 | `moves_money` | boolean | `false` | Financial transaction. |
 | `reads_sensitive` | boolean | `false` | Touches secrets or personal data. |
 
-The five booleans are [tool labels](/v0.6/concepts/tool-labels). Rules read
+The five booleans are [tool labels](/v0.7/concepts/tool-labels). Rules read
 labels rather than tool names, which is what lets one rule govern any
 application whose operator has labelled their tools.
 
@@ -96,7 +96,7 @@ the newest version: a control that changes without you deciding to change it is
 not a control, and it would mean past evidence no longer describes what ran.
 
 A pack named here but not installed stops the run before it starts. Add it with
-[`nanny rules add`](/v0.6/reference/cli-rules).
+[`nanny rules add`](/v0.7/reference/cli-rules).
 
 ---
 
@@ -104,5 +104,5 @@ A pack named here but not installed stops the run before it starts. Add it with
 
 Cloud sync has no config block. It turns on wherever the `NANNY_API_KEY` environment variable is set, and there is no field to flip. No key, endpoint, or org lives in `nanny.toml`, because it is committed, and a committed file must never hold a secret or differ between your staging and production deploys.
 
-See [Connect to Nanny Cloud](/v0.6/guides/managed-mode) for the full flow, and [Deploying a governed app](/v0.6/guides/deploying) for containers and CI.
+See [Connect to Nanny Cloud](/v0.7/guides/managed-mode) for the full flow, and [Deploying a governed app](/v0.7/guides/deploying) for containers and CI.
 

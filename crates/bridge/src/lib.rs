@@ -1,7 +1,7 @@
-// nanny-bridge: local enforcement server + network bridge server.
+// nanny-bridge: the governance server, and the enforcement handlers it serves.
 pub mod network;
 
-// nanny-bridge: local enforcement server.
+// nanny-bridge: the governance server.
 //
 // Runs as a background thread inside the `nanny run` process.
 // The child process communicates with it over a Unix domain socket (macOS/Linux)
@@ -57,7 +57,6 @@ pub struct BridgeMetrics {
     pub declared_rule_count: usize,
 }
 
-// ── BridgeAddress ─────────────────────────────────────────────────────────────
 
 
 // ── BridgeComponents ──────────────────────────────────────────────────────────
@@ -96,7 +95,7 @@ pub(crate) struct BridgeState {
     session_token: String,
     execution: ExecutionState,
 
-    /// Which run this state governs. Under `--serve` one governor holds many;
+    /// Which run this state governs. One governor holds many;
     /// locally there is exactly one. Stamped onto every event so the log is
     /// self-describing rather than only interpretable alongside the transport
     /// header that carried it.
@@ -134,7 +133,7 @@ pub(crate) struct BridgeState {
 
     // Last-recorded app attribution `(app_id, name)`. Dedups `AppIdentified`
     // the same way, so a caller may safely (re)declare its identity on every
-    // request. Under `--serve` this changes as different apps join.
+    // request. This changes as different apps join.
     last_app: Option<(String, String)>,
 
     // Last-recorded governor identity `(name, address, version)`. Dedups
@@ -147,8 +146,7 @@ pub(crate) struct BridgeState {
 /// A running bridge instance.
 ///
 /// Inject `address` and `session_token` into the child process environment
-/// before spawning it. On Unix set `NANNY_BRIDGE_SOCKET`; on Windows set
-/// `NANNY_BRIDGE_PORT`. Always set `NANNY_SESSION_TOKEN`.
+/// before spawning it: `NANNY_BRIDGE_ADDR` and `NANNY_SESSION_TOKEN`.
 /// An in-process bridge: the run state, the tool registry, and the token a
 /// request must present. It listens on nothing.
 ///
@@ -269,7 +267,7 @@ impl Bridge {
     }
 
     /// Declare this governance server's identity, emitting `GovernorIdentified`
-    ///. Called once, by `--serve`'s startup path: a plain (non-serve)
+    ///. Called once, by the governor's startup path: a process that
     /// `nanny run` has no governor to identify and never calls this.
     pub fn declare_governor(
         &self,

@@ -272,7 +272,7 @@ enum Dropped {
 /// `Spool::other_environment_notice` already uses. It exists because the two
 /// call sites below both used to state that the events "remain in the local
 /// log" unconditionally, which is false whenever no log file was written:
-/// `LogTarget` defaults to `Stdout`, and under `--serve` a stdout target is a
+/// `LogTarget` defaults to `Stdout`, and under the governor a stdout target is a
 /// deliberate no-op, so the default fleet deployment has no local log at all.
 /// Telling an operator their evidence is safe in a file that does not exist is
 /// the one thing a compliance product must never do.
@@ -294,9 +294,8 @@ fn dropped_notice(dropped: Dropped, log_path: Option<&Path>) -> String {
             path.display()
         ),
         None => format!(
-            "nanny: sync: {cause}. Those events were not written to a log file, so they are \
-             gone: set [observability] log = \"file\" to keep a local copy. Enforcement is \
-             unaffected."
+            "nanny: sync: {cause}. Those events went to stdout and nowhere else, so keep a \
+             copy by redirecting it if you need one. Enforcement is unaffected."
         ),
     }
 }
@@ -338,7 +337,7 @@ pub struct Spool {
     base_dir: PathBuf,
     /// Where this run also wrote its events locally, when it wrote them to a
     /// file at all. `None` under `log = "stdout"` (the default) and under
-    /// `--serve`, where a file is the only local target. Carried so that a
+    /// the governor, where a file is the only local target. Carried so that a
     /// message about dropping a batch can say what actually happened to those
     /// events instead of assuming a file exists.
     log_path: Option<PathBuf>,
@@ -441,7 +440,7 @@ impl Spool {
     }
 
     /// Best-effort `.gitignore` entry for the outbox, mirroring what the config
-    /// crate already does for `.nanny/logs/`. A missed entry is a nudge, not a
+    /// crate already does for its own state. A missed entry is a nudge, not a
     /// failure, but committed event data would be a real leak.
     fn ensure_gitignored(&self) {
         const LINE: &str = ".nanny/spool/";
@@ -1097,10 +1096,10 @@ mod tests {
 
     #[test]
     fn a_dropped_batch_names_the_log_file_when_one_exists() {
-        let path = PathBuf::from("/app/.nanny/logs/log.ndjson");
+        let path = PathBuf::from("/var/log/nanny/events.ndjson");
         let notice = dropped_notice(Dropped::RefusedStored(400), Some(&path));
         assert!(
-            notice.contains("/app/.nanny/logs/log.ndjson"),
+            notice.contains("/var/log/nanny/events.ndjson"),
             "an operator needs the actual path to go and look: {notice}"
         );
         assert!(
@@ -1111,11 +1110,10 @@ mod tests {
 
     #[test]
     fn a_dropped_batch_never_claims_a_log_that_was_not_written() {
-        // The defect this closes: both call sites used to say "the events
-        // remain in the local log" unconditionally, while `LogTarget` defaults
-        // to `Stdout` and `--serve` treats stdout as a no-op. On the default
-        // fleet deployment that sentence was false at the exact moment Cloud
-        // dropped the evidence.
+        // A notice that names a file must only do so when one was written.
+        // Events go to stdout, so unless the operator redirected it there is
+        // nothing on disk, and saying otherwise is a false claim made at the
+        // exact moment Cloud dropped the evidence.
         for dropped in [
             Dropped::RefusedLive(400),
             Dropped::RefusedStored(400),
@@ -1127,12 +1125,12 @@ mod tests {
                 "must not claim the events are kept anywhere: {notice}"
             );
             assert!(
-                notice.contains("not written to a log file"),
-                "must say plainly that nothing was kept: {notice}"
+                notice.contains("stdout and nowhere else"),
+                "must say plainly where they went: {notice}"
             );
             assert!(
-                notice.contains("log = \"file\""),
-                "and must say how to keep it next time: {notice}"
+                notice.contains("redirecting"),
+                "and must say how to keep a copy next time: {notice}"
             );
         }
     }

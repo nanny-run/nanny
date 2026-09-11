@@ -2,7 +2,7 @@
 //
 // Checks three things:
 //   1. Local bridge  : is the per-run bridge socket/port accepting connections?
-//   2. Network server: is NANNY_BRIDGE_ADDR reachable? (v0.2.0)
+//   2. The governor: is NANNY_BRIDGE_ADDR reachable?
 //   3. Certs         : do ~/.nanny/certs/ exist and when do they expire?
 //
 // Exits 0 if every *active* component is healthy.
@@ -23,38 +23,20 @@ use super::certs::{certs_dir_opt, env_dir_name, read_meta};
 pub fn cmd_health() -> Result<()> {
     let mut all_healthy = true;
 
-    // ── 1. Local bridge ───────────────────────────────────────────────────────
-    // The bridge is started by `nanny run`: it injects NANNY_BRIDGE_SOCKET
-    // (Unix) or NANNY_BRIDGE_PORT (Windows) into the child process env.
-    // Checking health from *within* a governed process makes sense; checking
-    // from a separate terminal won't see these vars.
-    let bridge_status = check_local_bridge();
-    match &bridge_status {
-        BridgeStatus::Running => {
-            println!("local enforcement: running");
-        }
-        BridgeStatus::NotRunning => {
-            println!("local enforcement: not running");
-        }
-        BridgeStatus::Unreachable(detail) => {
-            println!("local enforcement: unreachable, {detail}");
-            all_healthy = false;
-        }
-    }
-
-    // ── 2. Network server ─────────────────────────────────────────────────────
-    // Set by `nanny run` (or manually) when NANNY_BRIDGE_ADDR points at a
-    // remote governance server started with `nanny run --serve`.
+    // ── 1. The governor ───────────────────────────────────────────────────────
+    // `nanny run` injects NANNY_BRIDGE_ADDR into the process it launches, so
+    // this answers from inside a governed process. Run from a plain terminal
+    // there is nothing to find, which is not a failure.
     let server_status = check_network_server();
     match &server_status {
         ServerStatus::NotConfigured => {
-            println!("network server   : not running");
+            println!("governor         : not reachable from here (NANNY_BRIDGE_ADDR is unset)");
         }
         ServerStatus::Reachable(addr, how) => {
-            println!("network server   : running  ({addr})  [{how}]");
+            println!("governor         : running  ({addr})  [{how}]");
         }
         ServerStatus::Unreachable(addr, detail) => {
-            println!("network server   : unreachable  ({addr}), {detail}");
+            println!("governor         : unreachable  ({addr}), {detail}");
             all_healthy = false;
         }
     }
@@ -115,38 +97,6 @@ pub fn cmd_health() -> Result<()> {
 }
 
 // ── Local bridge check ────────────────────────────────────────────────────────
-
-enum BridgeStatus {
-    Running,
-    NotRunning,
-    Unreachable(String),
-}
-
-fn check_local_bridge() -> BridgeStatus {
-    // On Unix: NANNY_BRIDGE_SOCKET points at the Unix domain socket.
-    #[cfg(unix)]
-    if let Ok(socket_path) = std::env::var("NANNY_BRIDGE_SOCKET") {
-        return match std::os::unix::net::UnixStream::connect(&socket_path) {
-            Ok(_) => BridgeStatus::Running,
-            Err(e) => BridgeStatus::Unreachable(format!("cannot connect to {socket_path}: {e}")),
-        };
-    }
-
-    // On Windows (and Unix fallback): NANNY_BRIDGE_PORT is a TCP loopback port.
-    if let Ok(port_str) = std::env::var("NANNY_BRIDGE_PORT") {
-        if let Ok(port) = port_str.parse::<u16>() {
-            return match std::net::TcpStream::connect(("127.0.0.1", port)) {
-                Ok(_) => BridgeStatus::Running,
-                Err(e) => {
-                    BridgeStatus::Unreachable(format!("cannot connect to 127.0.0.1:{port}: {e}"))
-                }
-            };
-        }
-        return BridgeStatus::Unreachable(format!("invalid NANNY_BRIDGE_PORT: {port_str}"));
-    }
-
-    BridgeStatus::NotRunning
-}
 
 // ── Network server check ──────────────────────────────────────────────────────
 
@@ -287,7 +237,7 @@ fn tcp_probe_status(addr: String) -> ServerStatus {
         Some(true) => ServerStatus::Reachable(addr, "TCP ping"),
         _ => ServerStatus::Unreachable(
             addr,
-            "TCP connection refused, is `nanny run --serve` running?".to_string(),
+            "TCP connection refused, is `nanny run` running?".to_string(),
         ),
     }
 }

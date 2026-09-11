@@ -82,7 +82,7 @@ so every verdict in the log can be attributed to the agent that produced it.
 Tool calls from every agent flow through the same allowlist and the same rules:
 one `nanny run` governs the whole fleet.
 
-For cross-process and cross-machine enforcement, use the [governance server](/v0.6/guides/governance-server).
+For cross-process and cross-machine enforcement, use the [governance server](/v0.7/guides/governance-server).
 
 ---
 
@@ -93,10 +93,10 @@ Two things, and both are about authority:
 | Check | Declared in | Behaviour |
 | --- | --- | --- |
 | Tool permission | `[tools] allowed` in `nanny.toml` | A call to an undeclared tool fires `ToolDenied` and ends the run |
-| Rules | `@rule` in your code, or an installed [rule pack](/v0.6/guides/rule-packs) | The first rule to refuse fires `RuleDenied` and ends the run |
+| Rules | `@rule` in your code, or an installed [rule pack](/v0.7/guides/rule-packs) | The first rule to refuse fires `RuleDenied` and ends the run |
 
 Both require the agent to report its tool calls, through the
-[Rust SDK](/v0.6/guides/rust-sdk) macros or the [Python SDK](/v0.6/guides/python-sdk)
+[Rust SDK](/v0.7/guides/rust-sdk) macros or the [Python SDK](/v0.7/guides/python-sdk)
 decorators.
 
 Tokens are **measured, never enforced**. They are recorded for attribution, so

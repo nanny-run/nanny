@@ -1,4 +1,4 @@
-// Governance server daemon commands (nanny run --serve, nanny stop, nanny status).
+// Governance server daemon commands (nanny run, nanny stop, nanny status).
 //
 // For single-process agents, use `nanny run` instead. This command starts a
 // standalone governance server for cross-process or cross-machine enforcement.
@@ -25,7 +25,7 @@ use crate::runtime::build_bridge_components;
 
 use super::certs::certs_dir;
 
-// The governance server is `nanny run --serve`; `nanny status` and `nanny stop`
+// The governance server is `nanny run`; `nanny status` and `nanny stop`
 // manage it. This module holds those three entry points (`cmd_server_start`,
 // `cmd_server_status`, `cmd_server_stop`) called directly from `main.rs`.
 
@@ -69,7 +69,7 @@ fn resolve_app_id(explicit: Option<String>) -> Result<String> {
     Ok(AppIdentity::load_required(&cwd)?.app_id)
 }
 
-// ── nanny run --serve (governance server start) ───────────────────────────────
+// ── nanny run (governance server start) ───────────────────────────────
 
 /// DoS protection: hard-coded 100 req/s per client IP.
 /// Not a config knob: if this is ever wrong for a real workload, bump the
@@ -110,7 +110,7 @@ pub fn cmd_server_start(
     })?;
 
     // An app identity is required to key this governor's state, without it
-    // two unrelated `--serve` instances on one machine would collide again,
+    // two unrelated the governor instances on one machine would collide again,
     // exactly the bug this keying exists to fix.
     // Optional, not required. Now that every run is a governor, demanding
     // `nanny init` would make a hand-written nanny.toml stop working, and
@@ -179,7 +179,7 @@ pub fn cmd_server_start(
                      \n\
                      For same-machine multi-agent use, bind to loopback instead:\n\
                      \n\
-                     \x20   nanny run --serve\n\
+                     \x20   nanny run\n\
                      \n\
                      (default is 127.0.0.1:62669, no certs needed)",
                     path.display()
@@ -252,17 +252,12 @@ pub fn cmd_server_start(
 
     // Resolved before the forwarder is spawned so a dropped batch can name the
     // file its events also went to. `None` here is the honest answer under
-    // `log = "stdout"`, which is a deliberate no-op for `--serve` (see below).
+    // `log = "stdout"`, which is a deliberate no-op for the governor (see below).
     // Events go to stdout, always, and nowhere else. Redirect them wherever
     // you want them: `nanny run > events.ndjson` for a file, or nothing at all
     // in a container, where the runtime already collects stdout and every log
     // shipper reads it from there.
     //
-    // There used to be a second target, `log = "file"`, which wrote to a path
-    // nanny chose and refused to write anywhere else. That is the one place a
-    // deployment cannot use: inside the image, wiped on rebuild, invisible to
-    // a mounted volume. Redirection does strictly more, so there is one target
-    // now rather than two that could disagree.
     let local_log_sink: Option<Box<dyn std::io::Write + Send>> = Some(Box::new(std::io::stdout()));
 
     // Raised once the governed app has exited, so the drain thread makes a
@@ -297,7 +292,7 @@ pub fn cmd_server_start(
         tx
     });
 
-    // [observability] applies to --serve exactly the same way it applies to
+    // Events go to stdout, the same way for
     // local `nanny run`: the config makes the same promise either way ("here's
     // where your event log goes"), so it must be honored the same way either
     // way. `log = "stdout"` stays a no-op here on purpose: a long-lived
@@ -305,7 +300,7 @@ pub fn cmd_server_start(
     // stdout output would be noisy and wrong, unlike a short-lived local run
     // where that's the whole point. Uses the same resolution logic as local
     // `nanny run` (`ObservabilityConfig::resolve_log_path`), so both paths
-    // land on the same `.nanny/logs/<name>` file. Resolved above, before the
+    // Resolved above, before the
     // forwarder, so the same value describes both the log and the outbox.
 
     if ephemeral {
@@ -321,7 +316,7 @@ pub fn cmd_server_start(
     // Does this governor also have an app of its own to run?
     //
     // `[start]` already means "here is the app" everywhere else. Plain
-    // `nanny run` requires it, so `--serve` honouring it is the consistent
+    // `nanny run` requires it, so the governor honouring it is the consistent
     // reading, not a new convention. Present: governor plus that app, one
     // command, no launcher script. Absent: headless governor, the shared-
     // governor case where the apps live elsewhere and arrive via `--join`.
@@ -427,7 +422,7 @@ pub fn cmd_server_stop(app: Option<String>) -> Result<()> {
     let raw = std::fs::read_to_string(&pid_file).with_context(|| {
         format!(
             "no running server found for app '{app_id}' (PID file not present at {})\n\
-             Start it with: nanny run --serve  (from that app's directory)",
+             Start it with: nanny run  (from that app's directory)",
             pid_file.display()
         )
     })?;
@@ -526,7 +521,7 @@ fn run_governor_with_app(
     // anywhere in this process, so the OS's default disposition kills `nanny`
     // outright: before it ever reaches the post-loop cleanup below. That
     // leaves this run's discovery files behind under `state_dir` forever, and
-    // the next `nanny run --serve` fails with "has server state but isn't
+    // the next `nanny run` fails with "has server state but isn't
     // reachable". The governed child (e.g. uvicorn) has its own signal
     // handling and shuts down fine on its own via normal terminal job-control
     // (SIGINT goes to the whole foreground process group); this handler's job
@@ -742,13 +737,13 @@ fn force_kill_pid(pid: u32) {
     }
 }
 
-/// Every discovery file a `nanny run --serve` invocation may have written
+/// Every discovery file a `nanny run` invocation may have written
 /// under `state_dir`, gathered in one place so no cleanup path (normal exit,
 /// governor-died early exit, or a Ctrl-C/SIGTERM interrupt) forgets one:
 /// `server.pid`, `server.addr`, `server.token` are
 /// written by `NetworkServer` in the bridge crate; and
 /// `server.sync` are written by `cmd_server_start` above. A stale leftover
-/// from any of the six is exactly what makes the next `nanny run --serve`
+/// from any of the six is exactly what makes the next `nanny run`
 /// report "has server state but isn't reachable".
 fn remove_discovery_files(state_dir: &Path) {
     for name in ["server.pid", "server.addr", "server.token", "server.sync"] {
@@ -792,7 +787,7 @@ pub fn cmd_server_status(app: Option<String>) -> Result<()> {
     let addr_str = std::fs::read_to_string(&addr_file).with_context(|| {
         format!(
             "no server address found for app '{app_id}' (file not present at {})\n\
-             Start it with: nanny run --serve  (from that app's directory)",
+             Start it with: nanny run  (from that app's directory)",
             addr_file.display()
         )
     })?;
@@ -828,7 +823,7 @@ pub fn cmd_server_status(app: Option<String>) -> Result<()> {
         }
         Err(_) => {
             eprintln!("nanny: governance server not reachable at {addr}");
-            eprintln!("  Start with: nanny run --serve");
+            eprintln!("  Start with: nanny run");
             std::process::exit(1);
         }
     }

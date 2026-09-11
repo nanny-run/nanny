@@ -1,6 +1,6 @@
 // network.rs: TCP + mTLS governance server for cross-process enforcement.
 //
-// Started by `nanny run --serve`. Multiple agents on the same or different
+// Started by `nanny run`. Multiple agents on the same or different
 // machines connect to it. All connections share one execution context:
 // one tool call history, one set of call counts, one stop state. This is
 // cross-process enforcement without a cloud dependency.
@@ -11,7 +11,7 @@
 //            defense-in-depth and per-execution identity.
 //
 // Usage from CLI:
-//     nanny run --serve [--addr 0.0.0.0:62669] [--cert ...] [--key ...] [--ca ...]
+//     nanny run [--addr 0.0.0.0:62669] [--cert ...] [--key ...] [--ca ...]
 //
 // Agents point to the server via:
 //     NANNY_BRIDGE_ADDR=host:port
@@ -189,7 +189,7 @@ fn write_secret_file(path: &Path, contents: &str) -> Result<()> {
 
 /// Sliding-window per-IP rate limiter.  DoS protection only: never a
 /// business-tier gate and never in nanny.toml.  Hardcoded safe default;
-/// power users override with `--rate-limit` on `nanny run --serve`.
+/// power users override with `--rate-limit` on `nanny run`.
 #[derive(Clone)]
 struct RateLimiter {
     inner: Arc<Mutex<std::collections::HashMap<IpAddr, (u32, Instant)>>>,
@@ -708,12 +708,8 @@ impl NetworkServer {
     ///
     /// `local_log`: when `Some`, the same drain thread also writes each drained
     /// line to it, flushed per write. The caller resolves it from
-    /// `[observability]`, so `log = "stdout"` (the default) and `log = "file"`
-    /// both arrive here as a sink and are honoured identically. Taking a writer
-    /// rather than a path is what lets stdout reach this at all: a path cannot
-    /// name it, and the governor writing nowhere under the default config would
-    /// mean the local event stream disappears for anyone who never set
-    /// `log = "file"`.
+    /// Taking an opened writer rather than a path is what lets stdout reach
+    /// this at all: a path cannot name it.
     #[allow(clippy::too_many_arguments)]
     pub fn start_blocking_synced(
         addr: SocketAddr,
@@ -823,8 +819,8 @@ impl NetworkServer {
         // Cloud sink: hands `(run_id, lines)` to the cli-layer forwarder, no
         // cloud code lives here. Local log: appends each line to
         // `local_log`, flushed per write, the same guarantee `EventWriter`
-        // gives. Whatever `[observability]` resolved to, stdout or a file,
-        // arrives here already open, so both are honoured by one code path.
+        // gives. The sink arrives already open, so this code path does not
+        // care whether it is stdout or something a caller redirected it to.
         if event_sink.is_none() && local_log.is_none() {
             // Nothing drains, so a caller waiting for a sweep would wait for
             // one that never comes.
@@ -1263,7 +1259,7 @@ mod tests {
     /// The two transports must answer the same set of POST paths.
     ///
     /// This is the defect that produced the test. `POST /rules` was added to
-    /// the socket dispatch and never to the router, so under `--serve` it fell
+    /// the socket dispatch and never to the router, so under the governor it fell
     /// through to `route_not_found` and 404'd: and both SDKs post it
     /// fire-and-forget (`let _ = http_post("/rules", …)`), so nothing surfaced.
     /// The rules half of declared authority silently never arrived for exactly

@@ -22,7 +22,7 @@ They share the same repo and version number but have no toolchain overlap.
 | **tool** | Function annotated with `#[nanny::tool]` / `@tool`, passes through bridge for enforcement |
 | **rule** | Function annotated with `#[nanny::rule]` / `@rule`, returns `false` to stop execution |
 | **agent scope** | Named phase of a run, labelled by `#[nanny::agent]` / `@agent`. Labels verdicts for the audit log; changes nothing about what is allowed |
-| **bridge** | Internal enforcement layer (Unix socket / TCP). **Never mention in user-facing docs.** |
+| **bridge** | Internal enforcement layer inside the governor. **Never mention in user-facing docs.** |
 
 ### Two stop reasons
 
@@ -146,4 +146,4 @@ uv run pytest ../../packs/nanny-recommended/tests
 3. **Stop reasons**, four, and the set is closed: `ToolDenied`, `RuleDenied`, `AgentCompleted`, `ManualStop`. Only the first two are policy violations
 4. **Rules reference labels, not tool names**, a rule naming `send_outreach` governs one app; a rule reading `external_effect` governs every app whose operator labelled their tools
 5. **Token tracking**, Python: `nanny_sdk.instrument(client)` once at startup. Rust: `nanny::report_usage(...)` after each LLM call. Measured for attribution, never enforced
-6. **`--serve` is the launch mode**, one governor, many runs, one shared log. Every event carries its `run_id`
+6. **`nanny run` is the launch mode**, one governor, many runs, one shared log. Every event carries its `run_id`

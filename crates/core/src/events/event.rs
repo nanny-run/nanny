@@ -233,7 +233,7 @@ pub enum ExecutionEvent {
         name: String,
     },
 
-    /// Emitted once when a `--serve` governance server starts.
+    /// Emitted once when a governor starts.
     ///
     /// the cloud currently derives a governor handle by HMAC of the
     /// server secret. That groups a governor's runs correctly, but gives no
@@ -242,7 +242,7 @@ pub enum ExecutionEvent {
     /// the stable identity to show instead, parallel to `AppIdentified`:
     /// attribution only, never affects enforcement or a stop.
     ///
-    /// Not emitted by a plain (non-`--serve`) `nanny run`: there is no
+    /// Not emitted when there is no
     /// governor to identify; that run's `governorId` stays absent, as today.
     GovernorIdentified {
         ts: u64,
@@ -299,7 +299,7 @@ pub enum ExecutionEvent {
 ///
 /// Every event written to the log or forwarded to a sink goes through this.
 /// Without it the log is not self-describing, which is a correctness problem
-/// rather than a convenience one: under `nanny run --serve` a single governor
+/// rather than a convenience one: a single governor
 /// drains many concurrent runs into one shared file, so lines from different
 /// runs interleave with nothing to tell them apart. The drain loop holds the
 /// run id at the moment it writes and used to discard it.
@@ -325,7 +325,7 @@ pub enum ExecutionEvent {
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoggedEvent {
-    /// Which run this event belongs to. Under `--serve` one governor serves
+    /// Which run this event belongs to. One governor serves
     /// many; under a local run there is exactly one.
     pub run_id: String,
     /// Position in this run's stream, from 0. A gap means an event is missing.

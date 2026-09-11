@@ -47,7 +47,7 @@ impl AppIdentity {
 
     /// Load identity from the current directory, or fail with a clear pointer
     /// to `nanny init`, used by commands that require an app id to function
-    /// (`--serve`, self-minting) rather than treating it as optional.
+    /// (self-minting) rather than treating it as optional.
     pub fn load_required(dir: &Path) -> Result<Self> {
         Self::load(dir)?.ok_or_else(|| {
             anyhow::anyhow!(

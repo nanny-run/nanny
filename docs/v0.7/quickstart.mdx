@@ -36,7 +36,7 @@ Verify the installation:
 nanny --version
 ```
 
-For upgrade paths, uninstall, and troubleshooting on each platform, see [Installing Nanny](/v0.6/install).
+For upgrade paths, uninstall, and troubleshooting on each platform, see [Installing Nanny](/v0.7/install).
 
 The CLI is the enforcement engine. The SDK instruments your functions. You need both: `nanny run` owns the process lifecycle and enforces limits; `@tool`, `@rule`, and `@agent` report tool calls and activate named limit sets from inside your agent code.
 
@@ -88,7 +88,7 @@ reads_untrusted = true
 external_effect = true
 ```
 
-See [Tool labels](/v0.6/concepts/tool-labels) for all five.
+See [Tool labels](/v0.7/concepts/tool-labels) for all five.
 
 ## Add rules
 
@@ -106,7 +106,7 @@ That writes one line into `nanny.toml` and vendors the pack into
 extends = ["nanny:recommended@1.0.0"]
 ```
 
-Your own source is untouched. See [Rule packs](/v0.6/guides/rule-packs).
+Your own source is untouched. See [Rule packs](/v0.7/guides/rule-packs).
 
 ## Read the event log
 
@@ -127,4 +127,4 @@ nanny run > events.ndjson
 
 In a container you redirect nothing: the runtime already collects stdout, which
 is where every log shipper reads it from. See
-[Event Log](/v0.6/concepts/event-log).
+[Event Log](/v0.7/concepts/event-log).

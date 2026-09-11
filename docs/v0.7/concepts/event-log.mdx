@@ -41,7 +41,7 @@ exec nanny run | tee /var/log/nanny/events.ndjson # a pipe does not: avoid
 **Durable delivery is Cloud's job, not the log's.** Nothing on disk survives a
 container that is replaced. When `NANNY_API_KEY` is set, undelivered batches
 are held in `.nanny/spool/` and sent on the next run, which is the path worth
-mounting a volume for. See [Connect to Nanny Cloud](/v0.6/guides/managed-mode).
+mounting a volume for. See [Connect to Nanny Cloud](/v0.7/guides/managed-mode).
 
 ## Guaranteed events
 

@@ -194,7 +194,7 @@ fn call_tool_not_in_allowlist_returns_stop() {
 /// Must hold ENV_LOCK: `evaluate_local_rules` calls `fetch_bridge_status`,
 /// which calls `is_active()` (reads env vars) and: if active, makes an HTTP
 /// request to the bridge. If this test runs concurrently with a test that has
-/// set `NANNY_BRIDGE_SOCKET`, `fetch_bridge_status` may fail while `is_active`
+/// set `NANNY_BRIDGE_ADDR`, `fetch_bridge_status` may fail while `is_active`
 /// returns true, causing `evaluate_local_rules` to call `std::process::exit(1)`.
 #[test]
 fn evaluate_local_rules_no_rules_registered_allows_all() {

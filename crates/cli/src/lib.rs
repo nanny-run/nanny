@@ -277,7 +277,7 @@ pub fn declare_rules() {
 /// which is exactly the bug this exists to prevent.
 ///
 /// Only meaningful when governed through a governance server (`nanny run
-/// --serve` / `--join`), which keys state per run id. Under local `nanny run`
+/// `nanny run` / `--join`), which keys state per run id. Under one run
 /// one process is always exactly one run, so this is a safe no-op there and
 /// code that runs under either mode does not need to branch.
 ///
@@ -1159,8 +1159,6 @@ mod tests {
         // readers, so the mutation is safe here. Do not copy this pattern
         // into multi-threaded production code.
         unsafe {
-            std::env::remove_var("NANNY_BRIDGE_SOCKET");
-            std::env::remove_var("NANNY_BRIDGE_PORT");
             std::env::remove_var("NANNY_BRIDGE_ADDR");
         }
         assert!(!is_active());
@@ -1179,8 +1177,6 @@ mod tests {
     fn report_usage_noop_in_passthrough() {
         // SAFETY: see `inactive_when_no_env_vars`: single-threaded harness.
         unsafe {
-            std::env::remove_var("NANNY_BRIDGE_SOCKET");
-            std::env::remove_var("NANNY_BRIDGE_PORT");
             std::env::remove_var("NANNY_BRIDGE_ADDR");
         }
         // No bridge active → no-op. Must not panic or attempt any connection.
@@ -1202,8 +1198,6 @@ mod tests {
     fn set_harness_noop_in_passthrough() {
         // SAFETY: see `inactive_when_no_env_vars`: single-threaded harness.
         unsafe {
-            std::env::remove_var("NANNY_BRIDGE_SOCKET");
-            std::env::remove_var("NANNY_BRIDGE_PORT");
             std::env::remove_var("NANNY_BRIDGE_ADDR");
         }
         // No bridge active → no-op. Must not panic or attempt any connection.

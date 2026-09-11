@@ -273,7 +273,7 @@ fn cmd_init() -> Result<()> {
     // declining the config replace above must never skip identity creation,
     // since a project with a perfectly good hand-tuned nanny.toml (the common
     // case for re-running `nanny init` at all) still needs an id to use
-    // `--serve`/`--join` or cloud sync.
+    // the governor/`--join` or cloud sync.
     match identity::AppIdentity::load(cwd)? {
         Some(existing) => {
             println!(
@@ -388,7 +388,7 @@ fn cmd_uninstall_impl(exe: &Path) -> Result<()> {
 
 // ── Network server discovery, by explicit --join=<appId> only ───────────────────
 
-/// State written to `~/.nanny/servers/<app_id>/` by `nanny run --serve`, read
+/// State written to `~/.nanny/servers/<app_id>/` by `nanny run`, read
 /// here by `nanny run --join=<appId>`. There is no auto-detection, joining a
 /// governor is always an explicit, ID-only choice, never "whatever's running
 /// on this machine": that blind-join behavior was the exact collision this
@@ -409,7 +409,7 @@ fn detect_joined_server(app_id: &str) -> Result<NetworkServerInfo> {
     let state_dir = commands::server::nanny_server_state_dir(app_id)?;
     let addr_raw = std::fs::read_to_string(state_dir.join("server.addr")).with_context(|| {
         format!(
-            "no governance server found for app '{app_id}', is `nanny run --serve` \
+            "no governance server found for app '{app_id}', is `nanny run` \
              running for it? (expected state at {})",
             state_dir.display()
         )
@@ -524,7 +524,7 @@ fn command_program(cmd: &std::process::Command) -> String {
 /// Build a child process wired to a governance server: transport, credentials,
 /// run id, and mTLS certs.
 ///
-/// Shared by `--join` (joining someone else's governor) and `--serve` (running
+/// Shared by `--join` (joining someone else's governor) and the governor (running
 /// the app under the governor this process just started), so the two can never
 /// drift on how a governed child is wired.
 /// Resolve the rule packs a config declares, refusing to start without them.
@@ -533,9 +533,9 @@ fn command_program(cmd: &std::process::Command) -> String {
 /// believes controls are in force that are not, so the honest response is to
 /// refuse rather than run an agent less governed than its config says.
 ///
-/// **Shared by `nanny run` and `nanny run --serve` deliberately.** It lived
+/// **Shared by `nanny run` and `nanny run` deliberately.** It lived
 /// only in the former until 2026-08-29, which meant the fail-closed guarantee
-/// held for local development and not for `--serve`: the shape every container
+/// held for local development and not for the governor: the shape every container
 /// runs. An image missing its vendored pack booted and ran unguarded, silently,
 /// because nothing else checks: the SDK loads whatever is on disk and carries on
 /// when that is nothing. Same defect as `/rules` being registered on the socket

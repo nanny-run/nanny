@@ -43,9 +43,6 @@ cmd = "{cmd}"
 
 [tools]
 allowed = ["http_get"]
-
-[observability]
-log = "stdout"
 "#
     );
     fs::write(dir.join("nanny.toml"), toml).unwrap();
@@ -55,9 +52,7 @@ log = "stdout"
 /// Run `nanny run` twice in `dir` and return every NDJSON line both runs
 /// wrote to stdout, in order.
 ///
-/// These tests used to read `.nanny/logs/log.ndjson`, written by the
-/// `log = "file"` target. There is one target now, stdout, so the test
-/// collects what a shell redirection would have collected.
+/// Collects what a shell redirection would have collected.
 fn run_twice_collecting_events(dir: &Path) -> Vec<String> {
     let mut lines = Vec::new();
     for _ in 0..2 {
@@ -322,7 +317,7 @@ fn process_crash_emits_process_crashed_stop_reason() {
     );
 }
 
-// ── nanny run --serve: non-loopback without certs fails fast ────────────
+// ── nanny run: non-loopback without certs fails fast ───────────────────
 //
 // `server.rs` bails before starting the server when the bind address is
 // non-loopback and cert files don't exist. Tests the error message content
@@ -334,14 +329,11 @@ fn server_start_nonloopback_without_certs_exits_with_message() {
     let home = temp_dir(); // override HOME so no ~/.nanny/certs/ exists
 
     // Write a minimal nanny.toml so the config load succeeds, plus an app
-    // identity, `--serve` requires one to key its state.
+    // identity, a governor requires one to key its state.
     fs::write(
         dir.join("nanny.toml"),
         r#"[start]
 cmd = "echo hello"
-
-[observability]
-log = "stdout"
 "#,
     )
     .unwrap();
@@ -353,14 +345,14 @@ log = "stdout"
         .env("HOME", &home)
         .args(["run", "--addr", "0.0.0.0:62998"])
         .output()
-        .expect("nanny run --serve must run");
+        .expect("nanny run must run");
 
     let _ = fs::remove_dir_all(&dir);
     let _ = fs::remove_dir_all(&home);
 
     assert!(
         !output.status.success(),
-        "nanny run --serve must exit non-zero when certs are missing for non-loopback"
+        "nanny run must exit non-zero when certs are missing for non-loopback"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -371,14 +363,14 @@ log = "stdout"
     );
 }
 
-// ── nanny run --serve: loopback does NOT require cert files ─────────────
+// ── nanny run: loopback does NOT require cert files ────────────────────
 //
 // Default addr is 127.0.0.1 (loopback) → no cert check → server binds
 // successfully even when ~/.nanny/certs/ doesn't exist.
 // Regression guard: if the cert check accidentally runs for loopback, the
 // server would fail to start and this test would catch it.
 //
-// Deliberately no [start]: `--serve` runs [start] under the governor and tears
+// Deliberately no [start]: the governor runs [start] under the governor and tears
 // the governor down the moment that app exits, so a fixture like
 // `cmd = "echo hello"` leaves the listener open for only a few milliseconds.
 // This test is about the bind, not about running an app, so it keeps the
@@ -397,8 +389,7 @@ fn server_start_loopback_does_not_require_cert_files() {
 
     fs::write(
         dir.join("nanny.toml"),
-        r#"[observability]
-log = "stdout"
+        r#"
 "#,
     )
     .unwrap();
@@ -409,7 +400,7 @@ log = "stdout"
         .env("NANNY_HOME", &home)
         .args(["run", "--addr", "127.0.0.1:0"])
         .spawn()
-        .expect("nanny run --serve must spawn");
+        .expect("nanny run must spawn");
 
     // Wait for the governor to record the address it bound (up to 5s).
     let ready = wait_for_bound_addr(&home, &app_id, 50).is_some();
@@ -422,7 +413,7 @@ log = "stdout"
 
     assert!(
         ready,
-        "nanny run --serve on loopback must bind successfully without cert files"
+        "nanny run on loopback must bind successfully without cert files"
     );
 }
 
@@ -430,7 +421,7 @@ log = "stdout"
 //
 // There is no auto-detection anymore, two unrelated apps' governors on one
 // machine must never collide by one silently absorbing the other's run. A
-// server started with `nanny run --serve` (which requires an app identity, to
+// server started with `nanny run` (which requires an app identity, to
 // key its state) is joined only by `nanny run --join=<that id>`.
 //
 // Sandboxed via NANNY_HOME, not HOME, for the reason given above the
@@ -447,23 +438,19 @@ fn nanny_run_joins_explicit_server_and_prints_message() {
         dir.join("nanny.toml"),
         r#"[start]
 cmd = "echo nanny-detection-test"
-
-[observability]
-log = "stdout"
 "#,
     )
     .unwrap();
 
     // Start a plain-HTTP governance server on a loopback port, with its own
-    // app identity, `--serve` requires one to key its state.
+    // app identity, the governor requires one to key its state.
     let server_toml_dir = temp_dir();
     fs::write(
         server_toml_dir.join("nanny.toml"),
-        // No [start]: these tests want a headless governor. `--serve` runs
+        // No [start]: these tests want a headless governor. the governor runs
         // [start].cmd when nanny.toml declares one, so a dummy command here
         // would launch, exit instantly, and take the governor down with it.
-        r#"[observability]
-log = "stdout"
+        r#"
 "#,
     )
     .unwrap();
@@ -533,11 +520,10 @@ fn joined_app_is_attributed_to_its_own_identity() {
     let server_dir = temp_dir();
     fs::write(
         server_dir.join("nanny.toml"),
-        // No [start]: these tests want a headless governor. `--serve` runs
+        // No [start]: these tests want a headless governor. the governor runs
         // [start].cmd when nanny.toml declares one, so a dummy command here
         // would launch, exit instantly, and take the governor down with it.
-        r#"[observability]
-log = "file"
+        r#"
 "#,
     )
     .unwrap();
@@ -629,9 +615,6 @@ fn join_to_unreachable_server_fails_loudly() {
         dir.join("nanny.toml"),
         r#"[start]
 cmd = "echo nanny-stale-test"
-
-[observability]
-log = "stdout"
 "#,
     )
     .unwrap();
@@ -668,9 +651,9 @@ log = "stdout"
     );
 }
 
-// ── `--serve` runs [start] under the governor, and stays joinable ───────────
+// ── the governor runs [start] under the governor, and stays joinable ───────────
 //
-// The whole point of letting --serve launch the app: one command, no launcher
+// The whole point of letting the governor launch the app: one command, no launcher
 // script. A script has to poll for readiness, runs `sh` as PID 1 so SIGTERM
 // never reaches the governor, and orphans one half if the other dies. Doing it
 // in-process removes all three.
@@ -699,8 +682,6 @@ fn serve_runs_the_start_command_and_remains_joinable() {
             r#"[start]
 cmd = "sh -c \"echo SERVE-RAN-THE-APP; touch {}; sleep 5\""
 
-[observability]
-log = "file"
 "#,
             app_marker_display
         ),
@@ -761,7 +742,7 @@ cmd = "echo JOINED-WHILE-SERVING"
 
     assert!(
         app_started,
-        "--serve must launch [start].cmd within 10 s of becoming ready"
+        "the governor must launch [start].cmd within 10 s of becoming ready"
     );
 
     // stdout carries the app's output and the NDJSON; stderr carries nanny's
@@ -773,11 +754,11 @@ cmd = "echo JOINED-WHILE-SERVING"
     );
     assert!(
         server_stdout.contains("SERVE-RAN-THE-APP"),
-        "--serve must run [start].cmd, not ignore it\ngot: {server_stdout}"
+        "the governor must run [start].cmd, not ignore it\ngot: {server_stdout}"
     );
     assert!(
         server_stdout.contains("running [start] under this governor"),
-        "--serve must say it is launching the app\ngot: {server_stdout}"
+        "the governor must say it is launching the app\ngot: {server_stdout}"
     );
     assert!(
         server_stdout.contains("under this governor (plain HTTP, loopback)"),
@@ -802,7 +783,7 @@ cmd = "echo JOINED-WHILE-SERVING"
     );
 }
 
-// ── `--serve` with no [start] stays headless ────────────────────────────────
+// ── the governor with no [start] stays headless ────────────────────────────────
 
 #[test]
 fn serve_without_a_start_section_stays_headless() {
@@ -844,7 +825,7 @@ fn serve_without_a_start_section_stays_headless() {
 /// Two runs of the same project append to the same log file. Every line must
 /// say which run it belongs to.
 ///
-/// This is the shape `nanny run --serve` produces by default, where one
+/// This is the shape `nanny run` produces by default, where one
 /// governor drains many concurrent runs into one file. It cannot be recovered
 /// after the fact: draining is per-run and batched, so sorting by `ts` does not
 /// reconstruct the interleaving, and pairing `ExecutionStarted` with
@@ -1020,9 +1001,6 @@ allowed = ["http_get"]
 
 [rules]
 extends = ["nanny:owasp@2.1.0"]
-
-[observability]
-log = "stdout"
 "#,
     )
     .unwrap();
@@ -1056,9 +1034,6 @@ allowed = ["http_get"]
 
 [rules]
 extends = ["nanny:owasp"]
-
-[observability]
-log = "stdout"
 "#,
     )
     .unwrap();
@@ -1089,9 +1064,6 @@ allowed = ["http_get"]
 
 [rules]
 extends = ["nanny:recommended@1.0.0"]
-
-[observability]
-log = "stdout"
 "#,
     )
     .unwrap();
@@ -1251,7 +1223,7 @@ fn rules_add_refuses_a_tampered_pack() {
 // ── Fail-closed on a missing rule pack, on both start paths ──────────────────
 
 /// A config declaring a pack that is not on disk, plus an app identity so
-/// `--serve` gets far enough to reach the pack check.
+/// the governor gets far enough to reach the pack check.
 fn write_config_declaring_a_missing_pack(dir: &Path) {
     fs::write(
         dir.join("nanny.toml"),
@@ -1272,7 +1244,7 @@ fn write_config_declaring_a_missing_pack(dir: &Path) {
 /// The guarantee is that a pack named in `[rules] extends` and missing from
 /// disk stops the run: the operator believes controls are in force that are
 /// not. It was implemented in `cmd_run` only, so it held for local development
-/// and not for `--serve`, which is the shape every container runs: an image
+/// and not for the governor, which is the shape every container runs: an image
 /// missing its vendored pack booted and ran unguarded, silently, because
 /// nothing else checks. Testing one path would have passed throughout.
 #[test]
