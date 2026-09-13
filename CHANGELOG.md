@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A deployed governor printed instructions for someone at a keyboard.**
+  0.7.0 gated "Join with:" and the cross-machine block on stdout being a
+  terminal, and gated only the loopback branch. The other branch, the one that
+  only ever runs in a container, printed them on every boot. The two copies
+  are one function now, so the gate cannot be applied to one path and not the
+  other.
+
+- **That block named `0.0.0.0` as the address to dial.** It is what a governor
+  binds when told to serve every interface, and the one value that cannot work
+  in a joiner, so it was advice guaranteed to fail. It names the certificate
+  instead, which is what a client verifies anyway.
+
 ## [0.7.0] - 2026-09-11
 
 ### Added

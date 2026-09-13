@@ -312,6 +312,48 @@ impl AppState {
 /// Enough to recognise, not enough to use: the floor is 32 characters, so this
 /// leaves at least 20 of them unseen, and the full value is on disk in
 /// `server.token` for anything that actually needs it.
+/// The lines addressed to a person at a keyboard, after the block that says
+/// what the governor is doing.
+///
+/// Empty when nothing is reading, which is the whole point: in a container
+/// these are instructions nobody can act on, in a log nobody can type into.
+/// One function rather than a copy per transport, because the copies drifted:
+/// the loopback branch gated them and the non-loopback branch did not, so the
+/// path that only ever runs in a container was the one that always printed.
+fn joiner_hint(addr: SocketAddr, token_file: &Path, interactive: bool) -> Vec<String> {
+    if !interactive {
+        return Vec::new();
+    }
+    let mut out = vec![
+        String::new(),
+        "Join with: nanny run --join=<this app's id>  (see .nanny/app.json)".to_string(),
+    ];
+    if addr.ip().is_loopback() {
+        return out;
+    }
+    out.push(String::new());
+    out.push("Cross-machine agents, set these in your deployment config:".to_string());
+    // Never the bound address. A governor serving every interface knows what
+    // it listens on, not what anyone dials, and `0.0.0.0` is the one value
+    // guaranteed not to work in a joiner. The certificate's name is the
+    // honest answer: a client verifies what it dialled against that list, so
+    // a joiner using anything else fails the handshake regardless.
+    out.push(if addr.ip().is_unspecified() {
+        format!(
+            "  NANNY_BRIDGE_ADDR=<a name on this server's certificate>:{}",
+            addr.port()
+        )
+    } else {
+        format!("  NANNY_BRIDGE_ADDR={addr}")
+    });
+    out.push(format!(
+        "  NANNY_SESSION_TOKEN=$(cat {})",
+        token_file.display()
+    ));
+    out.push("  NANNY_BRIDGE_CERT, NANNY_BRIDGE_KEY, NANNY_BRIDGE_CA".to_string());
+    out
+}
+
 fn token_fingerprint(token: &str) -> String {
     let chars: Vec<char> = token.chars().collect();
     let head: String = chars.iter().take(8).collect();
@@ -992,24 +1034,17 @@ impl NetworkServer {
             if state_dir_ok {
                 eprintln!("  token file   : {}", token_file.display());
             }
-            if interactive {
-                eprintln!();
-                eprintln!("Join with: nanny run --join=<this app's id>  (see .nanny/app.json)");
+            for line in joiner_hint(addr, &token_file, interactive) {
+                eprintln!("{line}");
             }
         } else {
             eprintln!("nanny: governance server started");
             eprintln!("  address      : {addr}");
             eprintln!("  session token: {accepted}");
             eprintln!("  token file   : {}", token_file.display());
-            eprintln!();
-            eprintln!("Join with: nanny run --join=<this app's id>  (see .nanny/app.json)");
-            eprintln!();
-            eprintln!("Cross-machine agents, set these in your deployment config:");
-            eprintln!("  NANNY_BRIDGE_ADDR={addr}");
-            eprintln!("  NANNY_SESSION_TOKEN=$(cat {})", token_file.display());
-            eprintln!(
-                "  NANNY_BRIDGE_CERT, NANNY_BRIDGE_KEY, NANNY_BRIDGE_CA  (from ~/.nanny/certs/)"
-            );
+            for line in joiner_hint(addr, &token_file, interactive) {
+                eprintln!("{line}");
+            }
         }
         if interactive {
             eprintln!();
@@ -3313,5 +3348,60 @@ mod tests {
             first["tool_labels"]["http_get"][0], "reads_untrusted",
             "the labels are the half a rule reasons about"
         );
+    }
+
+    // ── Person-facing startup output ──────────────────────────────────────
+
+    #[test]
+    fn a_deployment_is_told_nothing_it_cannot_act_on() {
+        // The regression this exists for. These lines were gated on the
+        // loopback branch and printed unconditionally on the other, so the
+        // one path that only ever runs in a container was the one that always
+        // printed instructions for someone at a keyboard.
+        let token_file = Path::new("/state/server.token");
+        for addr in ["127.0.0.1:62669", "0.0.0.0:62669", "10.0.1.4:62669"] {
+            let addr: SocketAddr = addr.parse().unwrap();
+            assert!(
+                joiner_hint(addr, token_file, false).is_empty(),
+                "nothing is reading, so nothing addressed to a reader: {addr}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_terminal_is_told_how_to_join() {
+        let token_file = Path::new("/state/server.token");
+        let local = joiner_hint("127.0.0.1:62669".parse().unwrap(), token_file, true);
+        assert!(local.iter().any(|l| l.contains("Join with:")));
+        assert!(
+            !local.iter().any(|l| l.contains("Cross-machine")),
+            "a loopback governor has no cross-machine story: {local:?}"
+        );
+
+        let remote = joiner_hint("10.0.1.4:62669".parse().unwrap(), token_file, true);
+        assert!(remote.iter().any(|l| l.contains("Cross-machine")));
+        assert!(
+            remote.iter().any(|l| l.contains("NANNY_BRIDGE_ADDR=10.0.1.4:62669")),
+            "a real address is dialable and is what it should say: {remote:?}"
+        );
+    }
+
+    #[test]
+    fn the_wildcard_address_is_never_offered_as_one_to_dial() {
+        // `0.0.0.0` is what a governor binds when told to serve every
+        // interface. It is also the one value that cannot work in a joiner,
+        // so printing it was advice guaranteed to fail.
+        let hint = joiner_hint(
+            "0.0.0.0:62669".parse().unwrap(),
+            Path::new("/state/server.token"),
+            true,
+        );
+        let addr_line = hint
+            .iter()
+            .find(|l| l.contains("NANNY_BRIDGE_ADDR"))
+            .expect("the hint names the address variable");
+        assert!(!addr_line.contains("0.0.0.0"), "got: {addr_line}");
+        assert!(addr_line.contains("certificate"), "got: {addr_line}");
+        assert!(addr_line.ends_with(":62669"), "the port still has to be there: {addr_line}");
     }
 }
