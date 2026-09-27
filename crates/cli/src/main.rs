@@ -99,7 +99,7 @@ enum Command {
         #[arg(long)]
         ca: Option<PathBuf>,
 
-        /// Extra arguments appended to [start].cmd.
+        /// The command to govern. Replaces [start].cmd for this run.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         extra_args: Vec<String>,
     },

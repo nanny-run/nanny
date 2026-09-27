@@ -7,7 +7,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-## [0.7.1] - 2026-09-27
+## [0.8.0] - 2026-09-27
 
 ### Changed
 
@@ -18,6 +18,30 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   visible nowhere except the key an operator had already pasted. It now reads
   `syncing to sandbox`. A key whose prefix is not recognised reads as `live`,
   because that is where those events will actually go.
+
+- **Trailing arguments are the command, not an addition to it.**
+  `nanny run -- arq worker` governs `arq worker`. It used to append to
+  `[start].cmd`, so the same line ran the configured command with those words
+  glued on the end.
+
+  It cannot mean both. The arguments arrive as one list, so
+  `nanny run -- --verbose` and `nanny run -- arq worker` are the same shape,
+  and choosing between them would mean guessing whether the first token looks
+  like a program. Appending served one narrow case, adding a flag to a command
+  `nanny.toml` already describes, and that flag belongs in `[start].cmd` beside
+  the command it modifies. Replacing is what `--` means in `env`, `nice`,
+  `timeout` and `docker run`.
+
+  `nanny run` on its own is unchanged and still runs `[start].cmd`.
+
+  This is how a process `nanny.toml` does not describe gets a governor of its
+  own. An app with a web tier and a worker tier needs one governor each, and
+  previously the only way to reach that was `--join`, which discovers over the
+  local filesystem and so never worked between containers.
+
+- **A command given with no `[start]` section now runs.** It was an error
+  saying there was nothing to append to. There is nothing to append to because
+  the argument is the command.
 
 ### Fixed
 
