@@ -26,7 +26,6 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
   The SDK still connects wherever `NANNY_BRIDGE_ADDR` points. What is gone is
   the CLI convenience for pointing it at another process on the same machine.
->>>>>>> 24f123c (feat(run)!: delete --join)
 
 ### Changed
 
