@@ -43,11 +43,12 @@ enum Command {
     /// Run the project under nanny enforcement.
     ///
     /// Brings up the governor and runs [start].cmd from nanny.toml underneath
-    /// it. On loopback that needs no certificates and no setup, so the same
-    /// command covers a laptop and a deployment. Other processes and machines
-    /// join the same governor with --join, sharing one rule set. Without
-    /// [start] it stays headless, for the case where every app arrives via
-    /// --join.
+    /// it, or the command given after `--`. On loopback that needs no
+    /// certificates and no setup, so the same command covers a laptop and a
+    /// deployment. An app with more than one process runs one of these per
+    /// process: every input a rule reads describes a single run, so a process
+    /// governing itself decides exactly what sharing a governor would have.
+    /// Without [start] and without a command it stays headless.
     ///
     /// Example: nanny run
     ///
@@ -65,19 +66,11 @@ enum Command {
         #[arg(long, value_enum, default_value_t = cloud::CloudEnv::Prod, hide = true)]
         env: cloud::CloudEnv,
 
-        /// Join an existing governance server by appId (from that server's
-        /// `.nanny/app.json`), instead of starting a governor. Explicit and
-        /// appId-only, never a name, and never auto-detected: two unrelated
-        /// governors on one machine must never be able to collide by accident.
-        /// Example: nanny run --join=app_3f9c2a1e...
-        #[arg(long)]
-        join: Option<String>,
-
         /// Listen address for the governance API.
         /// Loopback is plain HTTP; a non-loopback address makes mTLS mandatory.
         ///
         /// Left at the default, a busy port steps forward to the next free one
-        /// and the real address is recorded for `--join`/`--app` to find.
+        /// and the real address is recorded for `--app` to find.
         /// Named explicitly, a busy port is an error rather than a silent move.
         #[arg(long, default_value_t = nanny_bridge::network::default_governor_addr())]
         addr: SocketAddr,
@@ -157,7 +150,6 @@ fn main() {
         Command::Run {
             no_sync,
             env,
-            join,
             addr,
             cert,
             key,
@@ -165,27 +157,23 @@ fn main() {
             live,
             extra_args,
         } => {
-            // One shape. `nanny run` starts a governor and launches
-            // [start].cmd underneath it; without [start] it stays headless for
-            // the shared-governor case. There is no second, quieter run path
-            // to fall through to, so what a laptop exercises is what a
-            // deployment runs.
-            if let Some(app_id) = join {
-                cmd_run_joined(&app_id, extra_args)
-            } else {
-                commands::server::cmd_server_start(
-                    addr,
-                    commands::server::TlsSource {
-                        cert,
-                        key,
-                        ca,
-                        live,
-                    },
-                    no_sync,
-                    env,
-                    extra_args,
-                )
-            }
+            // One shape, and now one path. `nanny run` starts a governor and
+            // launches [start].cmd underneath it, or the command given after
+            // `--`, or nothing at all and stays headless. There is no second,
+            // quieter run path to fall through to, so what a laptop exercises
+            // is what a deployment runs.
+            commands::server::cmd_server_start(
+                addr,
+                commands::server::TlsSource {
+                    cert,
+                    key,
+                    ca,
+                    live,
+                },
+                no_sync,
+                env,
+                extra_args,
+            )
         }
         Command::Uninstall => cmd_uninstall(),
         Command::Status { app } => commands::server::cmd_server_status(app),
@@ -273,7 +261,7 @@ fn cmd_init() -> Result<()> {
     // declining the config replace above must never skip identity creation,
     // since a project with a perfectly good hand-tuned nanny.toml (the common
     // case for re-running `nanny init` at all) still needs an id to use
-    // the governor/`--join` or cloud sync.
+    // the governor or cloud sync.
     match identity::AppIdentity::load(cwd)? {
         Some(existing) => {
             println!(
@@ -386,13 +374,14 @@ fn cmd_uninstall_impl(exe: &Path) -> Result<()> {
 
 // ── nanny run ─────────────────────────────────────────────────────────────────
 
-// ── Network server discovery, by explicit --join=<appId> only ───────────────────
+// ── Reading a governor's own recorded address and token ─────────────────────
 
-/// State written to `~/.nanny/servers/<app_id>/` by `nanny run`, read
-/// here by `nanny run --join=<appId>`. There is no auto-detection, joining a
-/// governor is always an explicit, ID-only choice, never "whatever's running
-/// on this machine": that blind-join behavior was the exact collision this
-/// keying scheme exists to fix.
+/// State written to `~/.nanny/servers/<app_id>/` by `nanny run`, and read back
+/// by the governor itself while it waits for its own address to appear, and by
+/// `nanny status` and `nanny stop`.
+///
+/// Keyed by app id and never by "whatever is running on this machine": two
+/// unrelated governors on one host must not be able to collide by accident.
 struct NetworkServerInfo {
     /// Address to inject as NANNY_BRIDGE_ADDR (0.0.0.0 → 127.0.0.1 for local use).
     addr: String,
@@ -402,10 +391,11 @@ struct NetworkServerInfo {
 }
 
 /// Look up the governor for `app_id` and confirm it's actually reachable.
-/// Fails loudly (no silent fallback to a local bridge) if the id is unknown or
-/// the server isn't up, an explicit `--join` that doesn't find its target is
-/// a mistake worth surfacing, not something to quietly paper over.
-fn detect_joined_server(app_id: &str) -> Result<NetworkServerInfo> {
+/// Fails loudly if the id is unknown or the server isn't up: the callers are
+/// the governor reading its own address back while it waits to start, and
+/// `status` and `stop`, and for all three a missing governor is the answer
+/// rather than something to paper over.
+fn read_server_state(app_id: &str) -> Result<NetworkServerInfo> {
     let state_dir = commands::server::nanny_server_state_dir(app_id)?;
     let addr_raw = std::fs::read_to_string(state_dir.join("server.addr")).with_context(|| {
         format!(
@@ -445,88 +435,10 @@ fn detect_joined_server(app_id: &str) -> Result<NetworkServerInfo> {
     })
 }
 
-/// `nanny run --join=<appId>`: run `[start].cmd` against a governor that is
-/// already up, instead of starting one.
-///
-/// The governor owns the rules, the event log and the cloud forwarding for
-/// every run it holds, so this reads `nanny.toml` only for the command to
-/// launch. Everything else about how the run is governed arrives from the
-/// other end of the connection.
-fn cmd_run_joined(app_id: &str, extra_args: Vec<String>) -> Result<()> {
-    let cwd = std::env::current_dir().context("failed to read the current directory")?;
-    let config_path = cwd.join("nanny.toml");
-
-    let existing = nanny_tomls_in_dir(&cwd)?;
-    if existing.len() > 1 {
-        let mut names: Vec<String> = existing
-            .iter()
-            .filter_map(|p| p.file_name())
-            .map(|n| n.to_string_lossy().into_owned())
-            .collect();
-        names.sort();
-        anyhow::bail!(
-            "multiple nanny configuration files found in '{}': {}\n\
-             A project must have exactly one nanny.toml. Remove the extras.",
-            cwd.display(),
-            names.join(", ")
-        );
-    }
-
-    let config = nanny_config::load(&config_path)
-        .with_context(|| format!("failed to load config from '{}'", config_path.display()))?;
-    let start = config.start.as_ref().ok_or_else(|| {
-        anyhow::anyhow!(
-            "no [start] in nanny.toml, so there is no command to run under the \
-             governor you joined. Add [start] cmd = \"...\" here."
-        )
-    })?;
-    let mut command: Vec<String> = shlex::split(&start.cmd)
-        .ok_or_else(|| anyhow::anyhow!("could not parse [start].cmd: {}", start.cmd))?;
-    if command.is_empty() {
-        anyhow::bail!("[start].cmd is empty");
-    }
-    command.extend(extra_args);
-
-    let server = detect_joined_server(app_id)?;
-    cmd_run_via_network_server(command, server)
-}
-
-fn cmd_run_via_network_server(command: Vec<String>, server: NetworkServerInfo) -> Result<()> {
-    eprintln!("nanny: network server detected at {}", server.addr);
-    eprintln!("nanny: governance enforced remotely, tool permission and rules apply");
-    eprintln!();
-
-    let (mut cmd, run_id) = build_governed_child(command, &server)?;
-
-    // Declare this app to the governor for this run, before the child can do
-    // anything attributable. A governor holds one credential but serves many
-    // apps, so identity has to travel per run in the event stream; without
-    // this, everything a joined process does would be filed under the
-    // governor's own app.
-    declare_app_to_governor(&server, Path::new("."), &run_id);
-
-    let status = cmd
-        .status()
-        .with_context(|| format!("failed to run '{}'", command_program(&cmd)))?;
-
-    if !status.success() {
-        std::process::exit(status.code().unwrap_or(1));
-    }
-
-    Ok(())
-}
-
-/// The program name from a built command, for error messages.
-fn command_program(cmd: &std::process::Command) -> String {
-    cmd.get_program().to_string_lossy().into_owned()
-}
-
 /// Build a child process wired to a governance server: transport, credentials,
 /// run id, and mTLS certs.
 ///
-/// Shared by `--join` (joining someone else's governor) and the governor (running
-/// the app under the governor this process just started), so the two can never
-/// drift on how a governed child is wired.
+/// One place, so nothing can drift on how a governed child is wired.
 /// Resolve the rule packs a config declares, refusing to start without them.
 ///
 /// A pack named in `[rules] extends` but absent from disk means the operator

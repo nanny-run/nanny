@@ -277,7 +277,7 @@ pub fn declare_rules() {
 /// which is exactly the bug this exists to prevent.
 ///
 /// Only meaningful when governed through a governance server (`nanny run
-/// `nanny run` / `--join`), which keys state per run id. Under one run
+/// `nanny run`), which keys state per run id. Under one run
 /// one process is always exactly one run, so this is a safe no-op there and
 /// code that runs under either mode does not need to branch.
 ///

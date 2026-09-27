@@ -582,7 +582,7 @@ impl ServerForwarder {
 
             // Deliver anything a previous governor could not, before this one's
             // own traffic. A fleet's history matters more than one app's, since
-            // every joined process reports through here.
+            // every run this governor holds reports through here.
             let recovered = spool.drain(&client, &endpoint, &api_key);
             if recovered > 0 {
                 eprintln!("nanny: sync: delivered {recovered} batch(es) held from an earlier run");

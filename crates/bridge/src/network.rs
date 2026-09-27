@@ -298,62 +298,6 @@ impl AppState {
 // construction, so it is structurally the wrong place for anything that
 // must cover every request.
 
-/// Checks the `X-Nanny-Session-Token` header; guards every ordinary request.
-/// A session token, shortened so it can appear in a log.
-///
-/// The governor used to print the token in full at startup, in both transport
-/// modes. That is a convenience on a laptop and a credential leak in a
-/// deployment: a container writes it to stdout on every boot, straight into
-/// whatever aggregates the logs, and the one thing it admits is a process to
-/// this governor.
-///
-/// It is still printed, because "is it using the token I set?" is a real
-/// question and the line above only says that a token was taken, not which.
-/// Enough to recognise, not enough to use: the floor is 32 characters, so this
-/// leaves at least 20 of them unseen, and the full value is on disk in
-/// `server.token` for anything that actually needs it.
-/// The lines addressed to a person at a keyboard, after the block that says
-/// what the governor is doing.
-///
-/// Empty when nothing is reading, which is the whole point: in a container
-/// these are instructions nobody can act on, in a log nobody can type into.
-/// One function rather than a copy per transport, because the copies drifted:
-/// the loopback branch gated them and the non-loopback branch did not, so the
-/// path that only ever runs in a container was the one that always printed.
-fn joiner_hint(addr: SocketAddr, token_file: &Path, interactive: bool) -> Vec<String> {
-    if !interactive {
-        return Vec::new();
-    }
-    let mut out = vec![
-        String::new(),
-        "Join with: nanny run --join=<this app's id>  (see .nanny/app.json)".to_string(),
-    ];
-    if addr.ip().is_loopback() {
-        return out;
-    }
-    out.push(String::new());
-    out.push("Cross-machine agents, set these in your deployment config:".to_string());
-    // Never the bound address. A governor serving every interface knows what
-    // it listens on, not what anyone dials, and `0.0.0.0` is the one value
-    // guaranteed not to work in a joiner. The certificate's name is the
-    // honest answer: a client verifies what it dialled against that list, so
-    // a joiner using anything else fails the handshake regardless.
-    out.push(if addr.ip().is_unspecified() {
-        format!(
-            "  NANNY_BRIDGE_ADDR=<a name on this server's certificate>:{}",
-            addr.port()
-        )
-    } else {
-        format!("  NANNY_BRIDGE_ADDR={addr}")
-    });
-    out.push(format!(
-        "  NANNY_SESSION_TOKEN=$(cat {})",
-        token_file.display()
-    ));
-    out.push("  NANNY_BRIDGE_CERT, NANNY_BRIDGE_KEY, NANNY_BRIDGE_CA".to_string());
-    out
-}
-
 fn token_fingerprint(token: &str) -> String {
     let chars: Vec<char> = token.chars().collect();
     let head: String = chars.iter().take(8).collect();
@@ -706,7 +650,7 @@ impl NetworkServer {
     ///
     /// `session_token`: if `Some`, use that token; if `None`, generate a fresh UUID.
     /// The token is printed to stdout and written to `<state_dir>/server.token` so
-    /// `nanny run --join=<id>` can auto-inject it into child environments.
+    /// `nanny run` can inject it into the environment of the child it starts.
     /// `state_dir` is per-app (`~/.nanny/servers/<app_id>/`, resolved by the
     /// caller), never the shared `~/.nanny`, so two unrelated apps' governors
     /// on one machine can never collide or overwrite each other's state.
@@ -796,7 +740,7 @@ impl NetworkServer {
 
         // Bind before writing any state, so the files record the port actually
         // in use rather than the one that was requested, since an occupied default
-        // steps forward, and `--join`/`--app` must find the real one.
+        // steps forward, and `--app` must find the real one.
         let listener = bind_with_fallforward(addr)?;
         let addr = listener
             .local_addr()
@@ -956,26 +900,23 @@ impl NetworkServer {
             rate_limiter: RateLimiter::new(rate_limit_rps),
         };
 
-        // Write token to <state_dir>/server.token for auto-injection by
-        // `nanny run --join=<id>`. Keyed per-app, never the shared ~/.nanny.
+        // Write token to <state_dir>/server.token. Keyed per-app, never the
+        // shared ~/.nanny.
         //
-        // **None of this is fatal.** These files exist so another process on
-        // this machine can discover a governor: `--join` reads the address and
-        // token, `status` and `stop` find the pid. A process joining from
-        // another host is given all of that as configuration and never reads
-        // them, so a deployment on a read-only filesystem would otherwise be
-        // refused a governor over bookkeeping it cannot use. When the address
-        // was passed with `--addr` and the token supplied through the
-        // environment, the governor is declining to start because it cannot
-        // write down what it was just told.
+        // **None of this is fatal.** These files are bookkeeping: the governor
+        // reads its own address back while waiting to start, and `status` and
+        // `stop` find the pid. A deployment on a read-only filesystem would
+        // otherwise be refused a governor over bookkeeping it does not need,
+        // and when the address came from `--addr` and the token from the
+        // environment, the governor would be declining to start because it
+        // cannot write down what it was just told.
         let state_dir_ok = match std::fs::create_dir_all(&state_dir) {
             Ok(()) => true,
             Err(e) => {
                 eprintln!(
                     "nanny: cannot write {} ({e}); serving anyway. \
-                     `nanny status`, `nanny stop` and `nanny run --join` cannot \
-                     discover this governor on this machine, so a joining process \
-                     needs NANNY_BRIDGE_ADDR and NANNY_SESSION_TOKEN set explicitly.",
+                     `nanny status` and `nanny stop` cannot find this governor \
+                     on this machine.",
                     state_dir.display()
                 );
                 false
@@ -983,7 +924,7 @@ impl NetworkServer {
         };
 
         // The address actually bound, which is not necessarily the one
-        // requested. `nanny status --app` and `nanny run --join` read this file
+        // requested. `nanny status --app` and `nanny stop` read this file
         // to find the real server, so it has to be written here, after the
         // bind, by the code that owns the socket. Writing the *requested*
         // address (as the CLI used to) would point every joiner at a port
@@ -1034,17 +975,11 @@ impl NetworkServer {
             if state_dir_ok {
                 eprintln!("  token file   : {}", token_file.display());
             }
-            for line in joiner_hint(addr, &token_file, interactive) {
-                eprintln!("{line}");
-            }
         } else {
             eprintln!("nanny: governance server started");
             eprintln!("  address      : {addr}");
             eprintln!("  session token: {accepted}");
             eprintln!("  token file   : {}", token_file.display());
-            for line in joiner_hint(addr, &token_file, interactive) {
-                eprintln!("{line}");
-            }
         }
         if interactive {
             eprintln!();
@@ -3350,58 +3285,4 @@ mod tests {
         );
     }
 
-    // ── Person-facing startup output ──────────────────────────────────────
-
-    #[test]
-    fn a_deployment_is_told_nothing_it_cannot_act_on() {
-        // The regression this exists for. These lines were gated on the
-        // loopback branch and printed unconditionally on the other, so the
-        // one path that only ever runs in a container was the one that always
-        // printed instructions for someone at a keyboard.
-        let token_file = Path::new("/state/server.token");
-        for addr in ["127.0.0.1:62669", "0.0.0.0:62669", "10.0.1.4:62669"] {
-            let addr: SocketAddr = addr.parse().unwrap();
-            assert!(
-                joiner_hint(addr, token_file, false).is_empty(),
-                "nothing is reading, so nothing addressed to a reader: {addr}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_terminal_is_told_how_to_join() {
-        let token_file = Path::new("/state/server.token");
-        let local = joiner_hint("127.0.0.1:62669".parse().unwrap(), token_file, true);
-        assert!(local.iter().any(|l| l.contains("Join with:")));
-        assert!(
-            !local.iter().any(|l| l.contains("Cross-machine")),
-            "a loopback governor has no cross-machine story: {local:?}"
-        );
-
-        let remote = joiner_hint("10.0.1.4:62669".parse().unwrap(), token_file, true);
-        assert!(remote.iter().any(|l| l.contains("Cross-machine")));
-        assert!(
-            remote.iter().any(|l| l.contains("NANNY_BRIDGE_ADDR=10.0.1.4:62669")),
-            "a real address is dialable and is what it should say: {remote:?}"
-        );
-    }
-
-    #[test]
-    fn the_wildcard_address_is_never_offered_as_one_to_dial() {
-        // `0.0.0.0` is what a governor binds when told to serve every
-        // interface. It is also the one value that cannot work in a joiner,
-        // so printing it was advice guaranteed to fail.
-        let hint = joiner_hint(
-            "0.0.0.0:62669".parse().unwrap(),
-            Path::new("/state/server.token"),
-            true,
-        );
-        let addr_line = hint
-            .iter()
-            .find(|l| l.contains("NANNY_BRIDGE_ADDR"))
-            .expect("the hint names the address variable");
-        assert!(!addr_line.contains("0.0.0.0"), "got: {addr_line}");
-        assert!(addr_line.contains("certificate"), "got: {addr_line}");
-        assert!(addr_line.ends_with(":62669"), "the port still has to be there: {addr_line}");
-    }
 }

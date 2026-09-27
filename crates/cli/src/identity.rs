@@ -19,7 +19,7 @@ const DIR_NAME: &str = ".nanny";
 const FILE_NAME: &str = "app.json";
 
 /// An app's permanent identity. `app_id` is generated once and never changes;
-/// it's the only thing ever used for addressing (`--join`, `--app`, Cloud
+/// it's the only thing ever used for addressing (`--app`, Cloud
 /// linking). `name` is purely for humans: easier to recognize than a hash in
 /// `nanny status` output, never used to look anything up, and, unlike
 /// `app_id`, free to edit by hand at any time.
@@ -88,7 +88,7 @@ impl AppIdentity {
             "app_id": identity.app_id,
             "name": identity.name,
             "_note": "Written once by `nanny init`. app_id is permanent, never edit or \
-                regenerate it, it's the only thing used to address this app (--join, \
+                regenerate it, it's the only thing used to address this app (--app, \
                 --app, cloud linking). name is just for you, edit it freely, it's never \
                 used to look anything up. Commit this file: an app id is not a secret, \
                 and committing it is what lets `nanny init` stay a one-time, local \
