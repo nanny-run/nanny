@@ -88,6 +88,48 @@ pub struct TlsSource {
     pub live: bool,
 }
 
+/// The command this governor runs underneath itself, if any.
+///
+/// Trailing arguments **are** the command. They do not add to `[start].cmd`,
+/// they replace it, which is what `--` means in `env`, `nice`, `timeout` and
+/// `docker run`.
+///
+/// It cannot mean both. The arguments arrive as a `Vec<String>`, so
+/// `nanny run -- --verbose` and `nanny run -- arq worker` are the same shape,
+/// and telling them apart would mean guessing whether the first token looks
+/// like a program. Invariant 1 forbids guessing, so one meaning had to go, and
+/// appending served only the narrow case of adding a flag to a command that
+/// `nanny.toml` already describes. That flag belongs in `[start].cmd`, beside
+/// the command it modifies.
+///
+/// Supplying a command is also how a process `nanny.toml` does not describe
+/// gets a governor of its own, which is what an app with a web tier and a
+/// worker tier needs and what `--join` used to be reached for.
+fn resolve_child_command(
+    start: Option<&nanny_config::StartConfig>,
+    extra_args: Vec<String>,
+) -> Result<Option<Vec<String>>> {
+    if !extra_args.is_empty() {
+        return Ok(Some(extra_args));
+    }
+    let Some(start) = start else {
+        // No command anywhere: a headless governor, for nothing to join and
+        // nothing to launch.
+        return Ok(None);
+    };
+    let command = shlex::split(&start.cmd).ok_or_else(|| {
+        anyhow::anyhow!(
+            "invalid [start].cmd in nanny.toml: unterminated quote or invalid \
+             shell syntax: {:?}",
+            start.cmd
+        )
+    })?;
+    if command.is_empty() {
+        anyhow::bail!("[start].cmd in nanny.toml is empty");
+    }
+    Ok(Some(command))
+}
+
 pub fn cmd_server_start(
     addr: SocketAddr,
     tls: TlsSource,
@@ -323,33 +365,7 @@ pub fn cmd_server_start(
     //
     // Either way the governor is a full network server: launching an app of
     // its own never stops other processes or machines joining it.
-    let child_command: Option<Vec<String>> = match config.start.as_ref() {
-        Some(start) => {
-            let mut command = shlex::split(&start.cmd).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "invalid [start].cmd in nanny.toml: unterminated quote or invalid \
-                     shell syntax: {:?}",
-                    start.cmd
-                )
-            })?;
-            if command.is_empty() {
-                anyhow::bail!("[start].cmd in nanny.toml is empty");
-            }
-            command.extend(extra_args);
-            Some(command)
-        }
-        None => {
-            if !extra_args.is_empty() {
-                anyhow::bail!(
-                    "trailing arguments were given, but nanny.toml has no [start] section \
-                     to append them to.\n\n\
-                     Add [start] cmd = \"...\" to run an app under this governor, or drop \
-                     the arguments to run it headless."
-                );
-            }
-            None
-        }
-    };
+    let child_command = resolve_child_command(config.start.as_ref(), extra_args)?;
 
     // Minted here, before the governor starts, so the run its app will report
     // under is the run the governor opens. Otherwise the app's first request
@@ -833,6 +849,87 @@ pub fn cmd_server_status(app: Option<String>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+
+    // ── trailing args are the command ────────────────────────────────────
+
+    fn start(cmd: &str) -> nanny_config::StartConfig {
+        nanny_config::StartConfig {
+            cmd: cmd.to_string(),
+        }
+    }
+
+    fn args(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn no_trailing_args_runs_the_configured_command() {
+        // `nanny run` is unchanged and stays the main command.
+        let got = resolve_child_command(Some(&start("uvicorn app:main --port 8000")), vec![])
+            .expect("valid");
+        assert_eq!(got, Some(args(&["uvicorn", "app:main", "--port", "8000"])));
+    }
+
+    #[test]
+    fn trailing_args_replace_the_configured_command() {
+        // The case this exists for: a worker tier, in an app whose one
+        // nanny.toml describes the web tier.
+        let got = resolve_child_command(
+            Some(&start("uvicorn app:main")),
+            args(&["arq", "jobs.WorkerSettings"]),
+        )
+        .expect("valid");
+        assert_eq!(got, Some(args(&["arq", "jobs.WorkerSettings"])));
+    }
+
+    #[test]
+    fn a_leading_flag_is_the_command_too_not_an_addition() {
+        // The behaviour this replaces: `nanny run -- --verbose` used to append
+        // to [start].cmd. It cannot mean both, because both arrive as the same
+        // Vec<String>, and choosing between them by whether the first token
+        // looks like a program is the guessing invariant 1 forbids. A flag for
+        // the configured command belongs in [start].cmd beside it.
+        let got = resolve_child_command(Some(&start("uvicorn app:main")), args(&["--verbose"]))
+            .expect("valid");
+        assert_eq!(got, Some(args(&["--verbose"])));
+    }
+
+    #[test]
+    fn a_command_with_no_start_section_is_governed() {
+        // Previously an error: "no [start] section to append them to". With
+        // the arguments being the command there is nothing left to append to,
+        // and a governor plus the command given is exactly what was asked for.
+        let got = resolve_child_command(None, args(&["python", "agent.py"])).expect("valid");
+        assert_eq!(got, Some(args(&["python", "agent.py"])));
+    }
+
+    #[test]
+    fn nothing_anywhere_is_headless() {
+        assert_eq!(resolve_child_command(None, vec![]).expect("valid"), None);
+    }
+
+    #[test]
+    fn an_unparseable_start_command_is_an_error() {
+        let err = resolve_child_command(Some(&start("uvicorn \"unterminated")), vec![])
+            .expect_err("unterminated quote");
+        assert!(format!("{err}").contains("nanny.toml"), "{err}");
+    }
+
+    #[test]
+    fn an_empty_start_command_is_an_error() {
+        let err = resolve_child_command(Some(&start("   ")), vec![]).expect_err("empty");
+        assert!(format!("{err}").contains("empty"), "{err}");
+    }
+
+    #[test]
+    fn a_broken_start_section_does_not_matter_when_a_command_is_given() {
+        // The given command is the answer, so nanny.toml's own is never parsed
+        // and cannot fail the run. A worker tier is not blocked by a typo in
+        // the web tier's line.
+        let got = resolve_child_command(Some(&start("\"unterminated")), args(&["arq", "worker"]))
+            .expect("the configured command is not consulted");
+        assert_eq!(got, Some(args(&["arq", "worker"])));
+    }
     use super::*;
 
     // Regression coverage for the bug this whole per-app keying scheme exists
