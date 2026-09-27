@@ -165,10 +165,21 @@ pub fn sync_status_line(
 ) -> String {
     match target {
         Ok(t) => {
-            let host = t.endpoint.strip_suffix("/v1/ingest").unwrap_or(&t.endpoint);
+            // The environment, not the host. There is one host and it never
+            // varies, so naming it says nothing; which side of the
+            // live/sandbox split these events land on is the fact an operator
+            // can get wrong, and the only place it is visible is the key they
+            // pasted. An unrecognised prefix reads as live, matching where
+            // those events will actually go.
+            let environment = match Environment::from_api_key(&t.api_key) {
+                Environment::Sandbox => "sandbox",
+                Environment::Live => "live",
+            };
             match app_name {
-                Some(name) => format!("nanny: mode managed, syncing to {host} (app: {name})"),
-                None => format!("nanny: mode managed, syncing to {host}"),
+                Some(name) => {
+                    format!("nanny: mode managed, syncing to {environment} (app: {name})")
+                }
+                None => format!("nanny: mode managed, syncing to {environment}"),
             }
         }
         Err(NoSyncReason::Flag) => {
@@ -582,7 +593,7 @@ impl ServerForwarder {
 
             // Deliver anything a previous governor could not, before this one's
             // own traffic. A fleet's history matters more than one app's, since
-            // every joined process reports through here.
+            // every run this governor holds reports through here.
             let recovered = spool.drain(&client, &endpoint, &api_key);
             if recovered > 0 {
                 eprintln!("nanny: sync: delivered {recovered} batch(es) held from an earlier run");
@@ -755,20 +766,52 @@ mod tests {
     // ── the startup line, never silent ───────────────────────────────────
 
     #[test]
-    fn the_status_line_names_the_host_and_app_when_syncing() {
+    fn the_status_line_names_the_environment_and_app_when_syncing() {
         let t = SyncTarget {
             endpoint: CloudEnv::Prod.ingest_url(),
-            api_key: "nny_k".into(),
+            api_key: "nny_sdbx_k".into(),
         };
         let line = sync_status_line(Ok(&t), Some("acme-agent"));
         assert!(line.contains("managed"), "{line}");
-        assert!(line.contains("https://api.nanny.run"), "{line}");
+        assert!(line.contains("sandbox"), "{line}");
         assert!(line.contains("acme-agent"), "{line}");
+        assert!(!line.contains("nny_sdbx_k"), "never print the key: {line}");
         assert!(
-            !line.contains("/v1/ingest"),
-            "show the host, not the route: {line}"
+            !line.contains("api.nanny.run"),
+            "the host never varies, so naming it says nothing: {line}"
         );
-        assert!(!line.contains("nny_k"), "never print the key: {line}");
+    }
+
+    #[test]
+    fn a_live_key_says_live() {
+        let t = SyncTarget {
+            endpoint: CloudEnv::Prod.ingest_url(),
+            api_key: "nny_live_k".into(),
+        };
+        assert!(sync_status_line(Ok(&t), None).contains("live"));
+    }
+
+    #[test]
+    fn an_unrecognised_prefix_reads_as_live() {
+        // Where those events will actually go: `Environment::from_api_key`
+        // defaults to Live, matching the cloud's own default. The line has to
+        // agree with the destination, not hedge.
+        let t = SyncTarget {
+            endpoint: CloudEnv::Prod.ingest_url(),
+            api_key: "something-else".into(),
+        };
+        assert!(sync_status_line(Ok(&t), None).contains("live"));
+    }
+
+    #[test]
+    fn the_two_environments_are_never_confusable_in_the_line() {
+        // Guards the obvious regression: "sandbox" contains no "live", and a
+        // substring assertion that held for both would pin nothing.
+        let sandbox = SyncTarget {
+            endpoint: CloudEnv::Prod.ingest_url(),
+            api_key: "nny_sdbx_k".into(),
+        };
+        assert!(!sync_status_line(Ok(&sandbox), None).contains("live"));
     }
 
     #[test]

@@ -7,6 +7,60 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-27
+
+### Removed
+
+- **`nanny run --join`.** A process that `nanny.toml` does not describe now
+  gets a governor of its own with `nanny run -- <argv>`, which is what `--join`
+  was reached for.
+
+  It never did that job well. Discovery reads `~/.nanny/servers/<app_id>/` on
+  the local filesystem, so it could not find anything across containers, and
+  every real deployment set `NANNY_BRIDGE_ADDR` and `NANNY_SESSION_TOKEN` by
+  hand instead. A joiner also had to carry a `nanny.toml` whose `[tools]` and
+  `[rules]` were then ignored, because only the governor's config seeds
+  policy: editing a worker's allowlist changed nothing and said nothing.
+
+  The startup hint that told a terminal how to join is gone with it.
+
+  The SDK still connects wherever `NANNY_BRIDGE_ADDR` points. What is gone is
+  the CLI convenience for pointing it at another process on the same machine.
+
+### Changed
+
+- **The startup line names the environment, not the host.** It read
+  `syncing to https://api.nanny.run`, which is the one fact that never varies:
+  there is one host, and `--env` is hidden and team-only. What does vary is
+  which side of the live and sandbox split the events land on, and that was
+  visible nowhere except the key an operator had already pasted. It now reads
+  `syncing to sandbox`. A key whose prefix is not recognised reads as `live`,
+  because that is where those events will actually go.
+
+- **Trailing arguments are the command, not an addition to it.**
+  `nanny run -- arq worker` governs `arq worker`. It used to append to
+  `[start].cmd`, so the same line ran the configured command with those words
+  glued on the end.
+
+  It cannot mean both. The arguments arrive as one list, so
+  `nanny run -- --verbose` and `nanny run -- arq worker` are the same shape,
+  and choosing between them would mean guessing whether the first token looks
+  like a program. Appending served one narrow case, adding a flag to a command
+  `nanny.toml` already describes, and that flag belongs in `[start].cmd` beside
+  the command it modifies. Replacing is what `--` means in `env`, `nice`,
+  `timeout` and `docker run`.
+
+  `nanny run` on its own is unchanged and still runs `[start].cmd`.
+
+  This is how a process `nanny.toml` does not describe gets a governor of its
+  own. An app with a web tier and a worker tier needs one governor each, and
+  previously the only way to reach that was `--join`, which discovers over the
+  local filesystem and so never worked between containers.
+
+- **A command given with no `[start]` section now runs.** It was an error
+  saying there was nothing to append to. There is nothing to append to because
+  the argument is the command.
+
 ### Fixed
 
 - **A deployed governor printed instructions for someone at a keyboard.**

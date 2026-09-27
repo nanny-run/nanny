@@ -80,7 +80,8 @@ pub struct BridgeComponents {
     pub runtime_version: String,
 
     /// `[start].cmd`, when this governor launches an app of its own. `None` for
-    /// a headless governor, and for a run that arrived over `--join` the
+    /// a headless governor, and for a run from a process that started on its
+    /// own the
     /// governor genuinely does not know what the joiner is running, so the
     /// field is empty rather than guessed at.
     pub start_command: Option<String>,
