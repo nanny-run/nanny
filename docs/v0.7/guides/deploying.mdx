@@ -54,7 +54,7 @@ which is right on a laptop and wrong in an image: rebuild in three months and
 you silently ship a different runtime.
 
 ```dockerfile
-ARG NANNY_VERSION=0.7.0
+ARG NANNY_VERSION=0.7.1
 RUN curl -fsSL "https://github.com/nanny-run/nanny/releases/download/v${NANNY_VERSION}/nanny-linux-x86_64.tar.gz" | tar -xz -C /usr/local/bin nanny
 ```
 

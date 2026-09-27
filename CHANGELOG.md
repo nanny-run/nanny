@@ -7,6 +7,18 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-09-27
+
+### Changed
+
+- **The startup line names the environment, not the host.** It read
+  `syncing to https://api.nanny.run`, which is the one fact that never varies:
+  there is one host, and `--env` is hidden and team-only. What does vary is
+  which side of the live and sandbox split the events land on, and that was
+  visible nowhere except the key an operator had already pasted. It now reads
+  `syncing to sandbox`. A key whose prefix is not recognised reads as `live`,
+  because that is where those events will actually go.
+
 ### Fixed
 
 - **A deployed governor printed instructions for someone at a keyboard.**
