@@ -9,6 +9,25 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [0.8.0] - 2026-09-27
 
+### Removed
+
+- **`nanny run --join`.** A process that `nanny.toml` does not describe now
+  gets a governor of its own with `nanny run -- <argv>`, which is what `--join`
+  was reached for.
+
+  It never did that job well. Discovery reads `~/.nanny/servers/<app_id>/` on
+  the local filesystem, so it could not find anything across containers, and
+  every real deployment set `NANNY_BRIDGE_ADDR` and `NANNY_SESSION_TOKEN` by
+  hand instead. A joiner also had to carry a `nanny.toml` whose `[tools]` and
+  `[rules]` were then ignored, because only the governor's config seeds
+  policy: editing a worker's allowlist changed nothing and said nothing.
+
+  The startup hint that told a terminal how to join is gone with it.
+
+  The SDK still connects wherever `NANNY_BRIDGE_ADDR` points. What is gone is
+  the CLI convenience for pointing it at another process on the same machine.
+>>>>>>> 24f123c (feat(run)!: delete --join)
+
 ### Changed
 
 - **The startup line names the environment, not the host.** It read

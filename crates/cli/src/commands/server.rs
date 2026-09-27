@@ -47,7 +47,7 @@ fn nanny_home_dir() -> Result<PathBuf> {
 }
 
 /// Path to ~/.nanny/servers/<app_id>, created on demand. Public so `main.rs`
-/// can resolve the same path for `nanny run --join=<appId>`.
+/// can resolve the same path for `nanny status` and `nanny stop`.
 pub fn nanny_server_state_dir(app_id: &str) -> Result<PathBuf> {
     let dir = nanny_home_dir()?
         .join(".nanny")
@@ -104,7 +104,7 @@ pub struct TlsSource {
 ///
 /// Supplying a command is also how a process `nanny.toml` does not describe
 /// gets a governor of its own, which is what an app with a web tier and a
-/// worker tier needs and what `--join` used to be reached for.
+/// worker tier needs, and what a shared governor used to be reached for.
 fn resolve_child_command(
     start: Option<&nanny_config::StartConfig>,
     extra_args: Vec<String>,
@@ -158,7 +158,7 @@ pub fn cmd_server_start(
     // `nanny init` would make a hand-written nanny.toml stop working, and
     // "write a config, run it" is how people try this out. Without an
     // identity the run is governed exactly the same; it just has no permanent
-    // id, so it is not discoverable by `--join`, `status` or `stop`, and its
+    // id, so it is not discoverable by `status` or `stop`, and its
     // events carry no `AppIdentified`. The id below is per-run and never
     // written to disk.
     let app = match AppIdentity::load(&cwd)? {
@@ -232,7 +232,7 @@ pub fn cmd_server_start(
 
     // NOTE: server.addr is written by the server itself, not here. The
     // requested port is not necessarily the one it ends up on. An occupied
-    // default steps forward, and `--join`/`--app` must discover the real one.
+    // default steps forward, and `--app` must discover the real one.
     // Only the code that owns the bound socket knows it.
     let state_dir = nanny_server_state_dir(&app.app_id)?;
 
@@ -361,7 +361,7 @@ pub fn cmd_server_start(
     // `nanny run` requires it, so the governor honouring it is the consistent
     // reading, not a new convention. Present: governor plus that app, one
     // command, no launcher script. Absent: headless governor, the shared-
-    // governor case where the apps live elsewhere and arrive via `--join`.
+    // governor case, where nothing is launched here at all.
     //
     // Either way the governor is a full network server: launching an app of
     // its own never stops other processes or machines joining it.
@@ -384,7 +384,7 @@ pub fn cmd_server_start(
         // ── Headless governor ────────────────────────────────────────────────
         // Blocking: returns only when the server shuts down (CTRL-C/SIGTERM).
         None => {
-            eprintln!("nanny: no [start] in nanny.toml, running headless. Join it with --join");
+            eprintln!("nanny: no [start] in nanny.toml and no command given, running headless");
             NetworkServer::start_blocking_synced(
                 addr,
                 cert_path,
@@ -671,7 +671,7 @@ fn run_governor_with_app(
     };
 
     // The app is done, so the governor has nothing left to govern. Drop the
-    // discovery files first so `nanny status`/`--join` never point at a
+    // discovery files first so `nanny status` never points at a
     // governor that is on its way out.
     remove_discovery_files(&state_dir);
 
@@ -780,7 +780,7 @@ fn wait_for_governor(
     // appears) and only spends time when something is actually wrong.
     for _ in 0..200 {
         if addr_file.exists() {
-            return crate::detect_joined_server(app_id);
+            return crate::read_server_state(app_id);
         }
         if governor_finished.load(Ordering::SeqCst) {
             anyhow::bail!("the governance server exited before it finished starting");
